@@ -65,7 +65,7 @@
 #   misc: git-release
 #   misc: unroot
 # lifecycle — product lifecycle/dev commands (user decision 2026-11-04;
-#        dedicated journeys own them: j01-j03 j05 j08-j10 j12 j19):
+#        dedicated journeys own them: j01-j03 j05 j08-j10 j12 j19 j23-j25):
 #   lifecycle: install-single-node
 #   lifecycle: install-two-node
 #   lifecycle: upgrade-zfsutilities
@@ -137,5 +137,5 @@ cli-setup-iscsi-targets	setup-iscsi-targets	two	storage	deep	setup-iscsi-targets
 cli-sever-vm-clone	sever-vm-clone	two	compute	argcheck	sever-vm-clone	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage
 cli-show-lun-map	show-lun-map	two	compute	deep	show-lun-map	-	-	-	INFO|LUN
 cli-unarchive-vm	unarchive-vm	two	compute	argcheck	unarchive-vm	invalid	invalid=1	invalid=-	FATAL|Usage
-cli-zfsaddisk	zfsaddisk	two	compute	argcheck	zfsaddisk	invalid	invalid=*	invalid=999\n	400|unable to parse|FATAL
+cli-zfsaddisk	zfsaddisk	two	compute	argcheck	zfsaddisk	invalid	invalid=*	invalid=999\n	Usage|400|unable to parse|FATAL
 cli-zfsclone-vm	zfsclone-vm	two	compute	argcheck	zfsclone-vm	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage

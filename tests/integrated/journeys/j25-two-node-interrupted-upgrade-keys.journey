@@ -1,0 +1,1180 @@
+#!/usr/bin/env bash
+# j25-two-node-interrupted-upgrade-keys.journey — the last itf-coverage
+# gap row: j12's interrupt injections against a two-node lab whose
+# storage guest carries encrypted LUNs, keys PENDING.
+#
+# The question the gap names: a two-node site reboots storage with the
+# key device absent (the encrypted LUN locked, its backstore not
+# restored — the boot journal's PENDING verdict), and the operator's
+# upgrade to the next release is killed mid-flight.  Does the upgrade's
+# self-repair still work across BOTH hosts, and does nothing in the
+# upgrade/activation path write iSCSI state while keys are pending — so
+# saveconfig and the pool map survive as the recovery authority for the
+# key ceremony on the UPGRADED tree?
+#
+# Premise: the lab is installed from the tree under test (today's
+# tooling — encrypted-LUN aware), so the stale-template rollback would
+# boot a keys-absent site with pre-encrypted-LUN tooling: unrealistic.
+# Instead the served release is re-labeled one patch newer
+# (itf_journey_stage_upgrade_env --relabel; j23 pass 2's shape — the
+# VERSION/tag mismatch WARN is honest) and every interrupted deploy
+# targets versions/<v> dirs that exist on no host, keeping j12's
+# partial-dir oracles deterministic.  dev-tarball only.
+#
+# Injections (j12's wrappers, two-node state reports — the upgrader is
+# backgrounded under setsid from /root/ZFSutilities and its process
+# group signalled; no product file is touched):
+#   X1  SIGTERM at the scan marker (per-host SSH masters already open;
+#       the local scan starts first, the remote scan follows): the EXIT
+#       trap must clean staging AND close the control masters; nothing
+#       deployed/salvaged/activated on either host.
+#   X2  SIGKILL once the LOCAL versions/<v> dir exists (deploy-version's
+#       first action): partial dir without MANIFEST on storage, salvage
+#       present on BOTH hosts (remote salvage precedes deploy), compute
+#       untouched by the deploy.
+#   X3  SIGKILL aimed at the REMOTE sync (local MANIFEST present,
+#       compute dir appearing): storage complete, compute classified
+#       absent | partial | complete (the sync finished before the kill)
+#       — the two-node-specific leg.
+#
+# Recovery: re-run the same upgrade with keys STILL pending — full
+# per-host scan/salvage/diff, both version dirs repaired and complete,
+# NOT activated; activation on both hosts must leave the keys-pending
+# posture byte-identical (saveconfig + pool map hashes, --check rc 3,
+# plain-LUN marker readable throughout).  One documented exception:
+# activation restarts the fence timer, whose tick fires at once; when
+# the encrypted link is ABSENT that tick is red and its reconcile save
+# drops the pending LUN's saveconfig record (F-042's healed shape) —
+# the pool map must still be byte-identical.  The closing key ceremony
+# on the upgraded tree rebuilds the encrypted LUN (map-recorded index
+# when a keys-pending tick save dropped the saveconfig record), both
+# markers read back, --check green, fence healthy.
+#
+# NEVER read the encrypted LUN's device while keys are pending: the
+# dead backstore stalls the command to the session replacement timeout
+# (hours).  The fence timer is parked for the operator-paced windows
+# (j16/j18 scenario hygiene); activation restarts it (enable --now), so
+# it is re-parked right after — any tick the restart fired is waited
+# out before the posture is judged — and restarted before the final
+# tick.
+#
+# Guest state required: storage + compute templates (j05's — the
+# storage template needs no staleness here; the lab installs the tree
+# under test on both hosts).
+# Site config required: j05's two-node keys, the keystore pair, and
+# ITF_DEV_IP.
+# Snapshots produced: as-cloned (per guest, via j05), pools-created,
+# enc-lab-ready (storage, via the encrypted lab stage).
+
+# shellcheck source=j05-two-node-install.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
+
+# _j25_posture <label> [saveconfig-may-drift]
+#
+# The repeated keys-pending site oracles, asserted after every upgrade
+# stage (and after activation): keystatus unavailable, --check rc 3
+# with every drift line keys-pending, the survival hashes (nothing may
+# write iSCSI state while keys are pending), and the plain-LUN marker
+# still reading through the live session.
+#   saveconfig-may-drift  the caller knows a keys-pending fence tick
+#       may have run in the absent-link shape: the pool map must still
+#       be hash-identical, but a differing saveconfig is that tick's
+#       documented save, not a violation.
+# Reads journey_main's locals through dynamic scope: s_ip (re-read
+# after the storage reboot), c_ip, and J25_ENC_DS.
+_j25_posture() {
+    local label="$1" drift="${2:-}"
+
+    itf_keystatus "$s_ip" "$J25_ENC_DS" unavailable "j25-$label" || return 1
+
+    local chk_log="$ITF_RUN_DIR/iscsi-check-$label.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$chk_log" 2>&1
+    local chk_rc=$?
+    itf_artifact "iscsi-check-$label" "$chk_log"
+    if [[ $chk_rc -eq 3 ]] && grep -q "keys-pending" "$chk_log"; then
+        itf_step pass "keys-pending check verdict [$label]" \
+            "rc 3 — every drift line keys-pending (see $(basename "$chk_log"))"
+    else
+        itf_step fail "keys-pending check verdict [$label]" \
+            "rc=$chk_rc — see $(basename "$chk_log")"
+        return 1
+    fi
+
+    local hash_log="$ITF_RUN_DIR/guest-survive-$label.log"
+    if itf_guest_exec "$s_ip" "sha256sum -c /root/itf-j25-survive.sha256" \
+            > "$hash_log" 2>&1; then
+        itf_step pass "iSCSI records untouched [$label]" \
+            "saveconfig + saveconfig-boot + pool map hash-identical"
+    elif [[ "$drift" == "saveconfig-may-drift" ]] \
+            && grep -qF "iscsi-state.json: OK" "$hash_log"; then
+        itf_step pass "pool map untouched; saveconfig re-saved by the pending tick [$label]" \
+            "the recovery authority (pool map) is hash-identical; saveconfig" \
+            "differs — the keys-pending fence tick's save dropped the pending" \
+            "LUN's record (F-042's healed shape; see $(basename "$hash_log"))"
+    else
+        itf_step fail "iSCSI records untouched [$label]" \
+            "see $(basename "$hash_log") — something wrote iSCSI state" \
+            "while keys were pending"
+        return 1
+    fi
+
+    if itf_lun_marker_verify "$c_ip" 101 scsi0 j25; then
+        itf_step pass "plain LUN still serves data [$label]" \
+            "marker readback matches through the live session"
+        itf_artifact "marker-plain-$label" \
+            "$ITF_RUN_DIR/guest-marker-verify-scsi0.log"
+    else
+        itf_step fail "plain LUN still serves data [$label]" \
+            "see guest-marker-verify-scsi0.log"
+        return 1
+    fi
+    return 0
+}
+
+journey_main() {
+    local vb=/usr/local/lib/zfsutilities
+    local pool=zfstest1
+    # shellcheck disable=SC2034  # consumed by _j25_posture
+    local J25_ENC_DS="$pool/proxmox/vm-101-disk-1"
+
+    if [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — set dev-tarball (the relabel" \
+            "premise serves a fake \"latest release\"; j10/j12/j19 own the" \
+            "real-GitHub path)"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j25 two-node interrupted upgrade with keys pending;" \
+        "composes the j05 encrypted lab; sw-source=$ITF_SW_SOURCE"
+
+    # ------------------------------------------------------------------
+    # Stage L: the full j05 two-node lab + the encrypted-LUN tail (plain
+    # vm-101-disk-0 on scsi0, encrypted vm-101-disk-1 on scsi1, session
+    # up, keystore locked + detached, keys loaded)
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main --encrypted-keys || return 1
+
+    # Records carry a 4th field (the live qm guest name) since the
+    # name-based orphan fence; consume it so it cannot bleed into the IP.
+    local s_base s_vmid s_ip _s_name c_vmid c_ip _c_name
+    # shellcheck disable=SC2034  # name slots unused here
+    read -r s_base s_vmid s_ip _s_name < "$ITF_RUN_DIR/guest-storage.txt"
+    # shellcheck disable=SC2034
+    read -r _ c_vmid c_ip _c_name < "$ITF_RUN_DIR/guest-compute.txt"
+    if [[ -n "$s_ip" && -n "$c_ip" ]]; then
+        itf_step pass "lab coordinates recovered" \
+            "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"
+    else
+        itf_step fail "lab coordinates recovered" "guest record files incomplete"
+        return 1
+    fi
+
+    local s_hostname c_hostname
+    s_hostname="$(itf_guest_exec "$s_ip" 'hostname -s' 2>/dev/null)"
+    c_hostname="$(itf_guest_exec "$c_ip" 'hostname -s' 2>/dev/null)"
+    if [[ -n "$s_hostname" && -n "$c_hostname" ]]; then
+        itf_step pass "host labels resolved" \
+            "storage=$s_hostname compute=$c_hostname (the upgrade's per-host sections)"
+    else
+        itf_step fail "host labels resolved" \
+            "storage=${s_hostname:-?} compute=${c_hostname:-?}"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage P: park the fence timer, prove the healthy baseline, write
+    # the data-continuity markers through BOTH LUNs, baseline the
+    # survival hashes
+    # ------------------------------------------------------------------
+
+    # Ambient 5-min ticks would race the operator-paced interrupts with
+    # reconcile+save writes (j16/j18's fence-timer race); ticks are
+    # driven manually from here.  Activation restarts the timer
+    # (enable --now) — re-parked right after — and it restarts for good
+    # before the final tick.
+    local park_log="$ITF_RUN_DIR/fence-parked.log"
+    if itf_guest_exec "$c_ip" "systemctl stop zfsutilities-iscsi-fence.timer" \
+            > "$park_log" 2>&1 \
+        && ! itf_guest_exec "$c_ip" \
+            "systemctl is-active --quiet zfsutilities-iscsi-fence.timer"; then
+        itf_step info "fence timer parked" \
+            "restarted before the final tick (activation restarts it first)"
+    else
+        itf_step fail "fence timer parked" "see $(basename "$park_log")"
+        return 1
+    fi
+
+    itf_keystatus "$s_ip" "$J25_ENC_DS" available j25-pre || return 1
+    itf_iscsi_check_gate "$s_ip" j25-pre || return 1
+
+    itf_lun_marker_write "$c_ip" 101 scsi0 j25 || return 1
+    itf_lun_marker_write "$c_ip" 101 scsi1 j25 || return 1
+
+    local surv_script="$ITF_RUN_DIR/guest-survive-baseline.sh"
+    cat > "$surv_script" <<'EOF'
+#!/bin/bash
+# itf j25 (generated): the untouched-iSCSI-state baseline — both
+# saveconfig files plus the pool-resident state map (the declared
+# recovery authority).  Every stage until the key ceremony must leave
+# these hash-identical.
+set -e
+mnt=$(zfs list -H -o mountpoint zfstest1/zfsutilities)
+test -s "$mnt/iscsi-state.json"
+sha256sum /etc/rtslib-fb-target/saveconfig.json \
+    /etc/rtslib-fb-target/saveconfig-boot.json \
+    "$mnt/iscsi-state.json" > /root/itf-j25-survive.sha256
+cat /root/itf-j25-survive.sha256
+echo survive-baseline-ok
+EOF
+    itf_guest_put "$s_ip" "$surv_script" /root/itf-j25-survive.sh > /dev/null 2>&1
+    local surv_log="$ITF_RUN_DIR/guest-survive-baseline.log"
+    if itf_guest_exec "$s_ip" "bash /root/itf-j25-survive.sh" \
+            > "$surv_log" 2>&1 && grep -q survive-baseline-ok "$surv_log"; then
+        itf_step pass "iSCSI records baselined" \
+            "saveconfig + saveconfig-boot + pool map hashes captured" \
+            "(see guest-survive-baseline.log)"
+        itf_artifact "survive-baseline" "$surv_log"
+    else
+        itf_step fail "iSCSI records baselined" "see guest-survive-baseline.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage S: the relabel upgrade staging — the served release one
+    # patch newer than the deployed tree, plus its pristine (captured
+    # BEFORE the modifications land below)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_upgrade_env j25-storage --guest-ip "$s_ip" --relabel \
+        || return 1
+    local active_version="$J_ACTIVE_VERSION"   # deployed == tree under test
+    local target_version="$J_TARGET_VERSION"   # the re-labeled tag
+    local upgrade_cmd="$J_UPGRADE_CMD"
+    local env_exports="$J_UPGRADE_ENV_EXPORTS"
+
+    # The answer feed every upgrade run shares (download offer;
+    # prerequisite remediation, if the staged tree's checker finds
+    # anything; the archive-changes offer).  Unconsumed lines are
+    # harmless; the download and archive offers default to N, so their
+    # y's must be explicit.  It lives IN the guest: the kill wrappers
+    # background the upgrader and pipe from it.
+    local up_feed="$ITF_RUN_DIR/upgrade-answers.txt"
+    printf 'y\ny\ny\ny\ny\ny\n' > "$up_feed"
+    itf_guest_put "$s_ip" "$up_feed" /root/itf-j25-answers.txt > /dev/null 2>&1
+
+    # The peer-state reporter the wrappers ssh into (and the journey
+    # runs directly): the compute host's product + deploy state, one
+    # labeled snapshot per call.
+    local peer_script="$ITF_RUN_DIR/guest-peer-state.sh"
+    cat > "$peer_script" <<'EOF'
+#!/bin/bash
+# itf j25 (generated): compute-host product + deploy state (arg 1 =
+# the upgrade's target version).
+set -u
+target="$1"
+vb=/usr/local/lib/zfsutilities
+echo "compute-current: $(basename "$(readlink "$vb/current")")"
+if [[ -d "$vb/versions/$target" ]]; then
+    echo "compute-new-dir: present"
+    if [[ -s "$vb/versions/$target/MANIFEST.sha256" ]]; then
+        echo "compute-manifest: present"
+    else
+        echo "compute-manifest: absent"
+    fi
+    echo "compute-new-files: $(find "$vb/versions/$target" | wc -l)"
+    for d in bin lib python share docs; do
+        [[ -d "$vb/versions/$target/$d" ]] || echo "compute-missing-dir: $d"
+    done
+else
+    echo "compute-new-dir: absent"
+fi
+if [[ -d "$vb/salvaged-changes" ]]; then
+    echo "compute-salvage: present"
+    echo "compute-salvage-runs: $(ls -1d "$vb"/salvaged-changes/*/*/ 2>/dev/null | wc -l)"
+else
+    echo "compute-salvage: absent"
+    echo "compute-salvage-runs: 0"
+fi
+echo peer-state-done
+EOF
+    itf_guest_put "$c_ip" "$peer_script" /root/itf-j25-peer-state.sh \
+        > /dev/null 2>&1
+
+    # ------------------------------------------------------------------
+    # Stage M: distinct local modifications per host (the shared set —
+    # storage MOD+ADD, compute MOD+ADD+DEL)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_two_node_mods j25 "$s_ip" "$c_ip" "$active_version" \
+        || return 1
+
+    # ------------------------------------------------------------------
+    # Stage B: the keys-absent storage boot — the site goes keys-pending
+    # (encrypted LUN not restored; plain LUN back with the boot config)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_reboot_guest j25-b storage || return 1
+    # Coordinates can change across the reboot (DHCP re-lease).
+    read -r s_base s_vmid s_ip _s_name < "$ITF_RUN_DIR/guest-storage.txt"
+
+    itf_storage_reboot_assert b-keys-absent "$s_ip" pending vm-101-disk-1 \
+        || return 1
+    itf_keystatus "$s_ip" "$J25_ENC_DS" unavailable j25-b || return 1
+    itf_compute_fallout_sample "$c_ip" b-postboot 101
+
+    local sess_log="$ITF_RUN_DIR/guest-sessions-b.log"
+    # shellcheck disable=SC2016  # expansions run in the compute guest
+    if itf_guest_exec "$c_ip" \
+            'test "$(iscsiadm -m session 2>/dev/null | grep -c .)" -ge 1' \
+            > "$sess_log" 2>&1; then
+        itf_step pass "sessions re-logged-in unaided [b]" \
+            "iscsid recovered the session by itself (see guest-sessions-b.log)"
+    else
+        itf_step fail "sessions re-logged-in unaided [b]" \
+            "no session after the storage return — see guest-sessions-b.log"
+        return 1
+    fi
+
+    local link_script="$ITF_RUN_DIR/guest-links-b.sh"
+    cat > "$link_script" <<'EOF'
+#!/bin/bash
+# itf j25 (generated): per-slot by-path presence after the keys-absent
+# storage boot (VM 101: scsi0 plain, scsi1 encrypted).
+set -e
+plain=$(grep -m1 '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf \
+    | awk '{print $2}' | cut -d, -f1)
+enc=$(grep -m1 '^scsi1: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf \
+    | awk '{print $2}' | cut -d, -f1)
+test -n "$plain"
+test -e "$plain" && echo "plain-link: present" || echo "plain-link: absent"
+if [[ -n "$enc" && -e "$enc" ]]; then
+    echo "enc-link: stale-present"
+else
+    echo "enc-link: absent"
+fi
+echo links-b-done
+EOF
+    itf_guest_put "$c_ip" "$link_script" /root/itf-j25-links-b.sh > /dev/null 2>&1
+    local link_log="$ITF_RUN_DIR/guest-links-b.log"
+    if itf_guest_exec "$c_ip" "bash /root/itf-j25-links-b.sh" \
+            > "$link_log" 2>&1 && grep -q links-b-done "$link_log"; then
+        itf_artifact "links-b" "$link_log"
+    else
+        itf_step fail "post-boot links classified [b]" "see guest-links-b.log"
+        return 1
+    fi
+    if grep -q "plain-link: present" "$link_log"; then
+        itf_step pass "plain LUN link present [b]" \
+            "scsi0's by-path device returned with the re-login"
+    else
+        itf_step fail "plain LUN link present [b]" "see guest-links-b.log"
+        return 1
+    fi
+    # The shape decides what a keys-pending fence tick does later (stage
+    # A): a stale node satisfies the link check (tick rc 0, no writes);
+    # an absent link turns the tick red and its reconcile re-saves.
+    local enc_link_shape
+    if grep -q "enc-link: stale-present" "$link_log"; then
+        enc_link_shape="stale-present"
+        itf_step pass "encrypted link classified [b]" \
+            "stale device node persists (the R-02/R-03 shape: link existence" \
+            "looks healthy while the backstore is gone) — never read while" \
+            "keys are pending; it goes live again at the ceremony"
+    elif grep -q "enc-link: absent" "$link_log"; then
+        enc_link_shape="absent"
+        itf_step pass "encrypted link classified [b]" \
+            "link absent (j18 S16's shape) — returns with the ceremony"
+    else
+        itf_step fail "encrypted link classified [b]" "see guest-links-b.log"
+        return 1
+    fi
+
+    _j25_posture b || return 1
+
+    # ------------------------------------------------------------------
+    # Stage X1: SIGTERM during the scan phase — graceful kill with the
+    # SSH masters open
+    # ------------------------------------------------------------------
+
+    local w1="$ITF_RUN_DIR/guest-kill1.sh"
+    cat > "$w1" <<EOF
+#!/bin/bash
+# itf j25 X1 (generated): SIGTERM the two-node upgrade at the start of
+# its scan phase (per-host SSH masters already open), then report both
+# hosts' state.
+set -u
+${env_exports}log=/root/itf-j25-kill1-upgrade.log
+feed=/root/itf-j25-answers.txt
+tmp_before=\$(ls -d /tmp/tmp.* 2>/dev/null | wc -l)
+cd /root/ZFSutilities
+setsid ./bin/upgrade-zfsutilities < "\$feed" > "\$log" 2>&1 &
+pid=\$!
+# Kill at the scan marker: the masters are open and the local scan has
+# begun (the remote scan follows it) — everything before salvage is
+# equally "early" for this stage's assertions.
+for _ in \$(seq 1 900); do
+    grep -q 'Scanning deployment targets' "\$log" 2>/dev/null && break
+    kill -0 "\$pid" 2>/dev/null || break
+    sleep 0.2
+done
+kill -TERM -- "-\$pid" 2>/dev/null
+wait "\$pid"
+echo "upgrade-rc: \$?"
+echo "tmp-before: \$tmp_before"
+echo "tmp-after: \$(ls -d /tmp/tmp.* 2>/dev/null | wc -l)"
+mux_after=\$(pgrep -c -f '\\[mux\\]' 2>/dev/null || true)
+echo "mux-after: \${mux_after:-0}"
+echo "current: \$(basename "\$(readlink $vb/current)")"
+test ! -e "$vb/versions/$target_version" && echo "new-version-dir: absent"
+test ! -e "$vb/salvaged-changes" && echo "salvage: absent"
+grep -q 'upgrade-zfsutilities complete' "\$log" || echo "no-complete-marker: yes"
+ssh -o ConnectTimeout=10 root@$c_hostname \
+    "bash /root/itf-j25-peer-state.sh $target_version" 2>/dev/null
+echo kill1-done
+EOF
+    itf_guest_put "$s_ip" "$w1" /root/itf-j25-kill1.sh > /dev/null 2>&1
+    local k1_log="$ITF_RUN_DIR/guest-kill1.log"
+    itf_guest_exec "$s_ip" "bash /root/itf-j25-kill1.sh" > "$k1_log" 2>&1
+    itf_artifact "kill1-transcript" "$k1_log"
+    itf_guest_get "$s_ip" /root/itf-j25-kill1-upgrade.log \
+        "$ITF_RUN_DIR/guest-kill1-upgrade.log" > /dev/null 2>&1
+    itf_artifact "kill1-upgrade-transcript" "$ITF_RUN_DIR/guest-kill1-upgrade.log"
+
+    local k1_rc
+    k1_rc="$(awk -F': ' '/^upgrade-rc:/{print $2; exit}' "$k1_log")"
+    if grep -q kill1-done "$k1_log" && [[ -n "$k1_rc" && "$k1_rc" -ne 0 ]] \
+            && grep -q "no-complete-marker: yes" "$k1_log"; then
+        itf_step pass "SIGTERM lands mid-scan" \
+            "killed with rc=$k1_rc before any completion marker"
+    else
+        itf_step fail "SIGTERM lands mid-scan" \
+            "rc=${k1_rc:-?} — see guest-kill1.log / guest-kill1-upgrade.log"
+        return 1
+    fi
+
+    local k1_cur k1_tmp_before k1_tmp_after k1_mux
+    k1_cur="$(awk -F': ' '/^current:/{print $2; exit}' "$k1_log")"
+    k1_tmp_before="$(awk -F': ' '/^tmp-before:/{print $2; exit}' "$k1_log")"
+    k1_tmp_after="$(awk -F': ' '/^tmp-after:/{print $2; exit}' "$k1_log")"
+    k1_mux="$(awk -F': ' '/^mux-after:/{print $2; exit}' "$k1_log")"
+    local k1_peer_missing
+    k1_peer_missing="$(itf_missing_markers "$k1_log" \
+        "compute-current: $active_version" \
+        "compute-new-dir: absent" \
+        "compute-salvage: absent" \
+        || true)"
+    if [[ "$k1_cur" == "$active_version" ]] \
+            && grep -q "new-version-dir: absent" "$k1_log" \
+            && grep -q "salvage: absent" "$k1_log" \
+            && [[ -z "$k1_peer_missing" ]] \
+            && grep -q peer-state-done "$k1_log"; then
+        itf_step pass "early kill left BOTH hosts untouched" \
+            "active still $active_version; no new version dir, no salvage —" \
+            "on storage and $c_hostname alike"
+    else
+        itf_step fail "early kill left BOTH hosts untouched" \
+            "missing:$k1_peer_missing — see guest-kill1.log"
+        return 1
+    fi
+    # The graceful kill must run the upgrader's EXIT trap: the staging
+    # dir AND the SSH control masters it opened have to be gone.  A
+    # leftover master here is a cleanliness defect (FINDINGS material).
+    if [[ "$k1_tmp_before" == "$k1_tmp_after" && "$k1_mux" == "0" ]]; then
+        itf_step pass "early kill cleaned staging + masters" \
+            "EXIT trap ran — /tmp staging count unchanged ($k1_tmp_after)," \
+            "no control master left (mux count $k1_mux)"
+    else
+        itf_step fail "early kill cleaned staging + masters" \
+            "/tmp: $k1_tmp_before -> $k1_tmp_after, mux masters: $k1_mux —" \
+            "see guest-kill1.log"
+        return 1
+    fi
+
+    _j25_posture x1 || return 1
+
+    # ------------------------------------------------------------------
+    # Stage X2: SIGKILL of the process group mid-DEPLOY (the local leg)
+    # ------------------------------------------------------------------
+
+    local w2="$ITF_RUN_DIR/guest-kill2.sh"
+    cat > "$w2" <<EOF
+#!/bin/bash
+# itf j25 X2 (generated): SIGKILL the upgrade process group mid-deploy.
+# deploy-version's FIRST deploy action is the version-dir mkdir; the
+# rsyncs + mkdocs build after it give the kill a multi-second window
+# (MANIFEST.sha256 is written last).  Waiting for the DIR makes the
+# partial dir deterministic.
+set -u
+${env_exports}log=/root/itf-j25-kill2-upgrade.log
+feed=/root/itf-j25-answers.txt
+vd="$vb/versions/$target_version"
+cd /root/ZFSutilities
+setsid ./bin/upgrade-zfsutilities < "\$feed" > "\$log" 2>&1 &
+pid=\$!
+for _ in \$(seq 1 1800); do
+    [[ -d "\$vd" ]] && break
+    kill -0 "\$pid" 2>/dev/null || break
+    sleep 0.2
+done
+kill -9 -- "-\$pid" 2>/dev/null
+pkill -9 -f 'bin/deploy-version' 2>/dev/null
+wait "\$pid"
+echo "upgrade-rc: \$?"
+echo "current: \$(basename "\$(readlink $vb/current)")"
+if [[ -d "\$vd" ]]; then
+    echo "new-version-dir: present"
+    if [[ -s "\$vd/MANIFEST.sha256" ]]; then
+        echo "manifest: present"
+    else
+        echo "manifest: absent"
+    fi
+fi
+test -d "$vb/salvaged-changes" && echo "salvage: present"
+n=\$(ls -1d $vb/salvaged-changes/*/*/ 2>/dev/null | wc -l)
+echo "salvage-runs: \$n"
+bash -lc 'command -v zfsdailybackup' > /dev/null 2>&1 && echo "path-wiring: intact"
+grep -q 'upgrade-zfsutilities complete' "\$log" || echo "no-complete-marker: yes"
+echo "tmp-after: \$(ls -d /tmp/tmp.* 2>/dev/null | wc -l)"
+mux_after=\$(pgrep -c -f '\\[mux\\]' 2>/dev/null || true)
+echo "mux-after: \${mux_after:-0}"
+ssh -o ConnectTimeout=10 root@$c_hostname \
+    "bash /root/itf-j25-peer-state.sh $target_version" 2>/dev/null
+echo kill2-done
+EOF
+    itf_guest_put "$s_ip" "$w2" /root/itf-j25-kill2.sh > /dev/null 2>&1
+    local k2_log="$ITF_RUN_DIR/guest-kill2.log"
+    itf_guest_exec "$s_ip" "bash /root/itf-j25-kill2.sh" > "$k2_log" 2>&1
+    itf_artifact "kill2-transcript" "$k2_log"
+    itf_guest_get "$s_ip" /root/itf-j25-kill2-upgrade.log \
+        "$ITF_RUN_DIR/guest-kill2-upgrade.log" > /dev/null 2>&1
+    itf_artifact "kill2-upgrade-transcript" "$ITF_RUN_DIR/guest-kill2-upgrade.log"
+
+    local k2_rc k2_cur k2_salvage_runs
+    k2_rc="$(awk -F': ' '/^upgrade-rc:/{print $2; exit}' "$k2_log")"
+    if grep -q kill2-done "$k2_log" && [[ -n "$k2_rc" && "$k2_rc" -ne 0 ]] \
+            && grep -q "no-complete-marker: yes" "$k2_log"; then
+        itf_step pass "SIGKILL lands mid-deploy" \
+            "process group killed with rc=$k2_rc before completion"
+    else
+        itf_step fail "SIGKILL lands mid-deploy" \
+            "rc=${k2_rc:-?} — see guest-kill2.log / guest-kill2-upgrade.log" \
+            "(a lost race would show rc=0: the deploy finished before the" \
+            "version dir was seen — re-run the journey)"
+        return 1
+    fi
+    k2_cur="$(awk -F': ' '/^current:/{print $2; exit}' "$k2_log")"
+    k2_salvage_runs="$(awk -F': ' '/^salvage-runs:/{print $2; exit}' "$k2_log")"
+    if grep -q "new-version-dir: present" "$k2_log" \
+            && grep -q "manifest: absent" "$k2_log"; then
+        itf_step pass "partial deployment remains [storage]" \
+            "versions/$target_version exists without MANIFEST.sha256 —" \
+            "killed inside deploy-version's copy phase"
+    else
+        itf_step fail "partial deployment remains [storage]" \
+            "see guest-kill2.log (kill landed too early or too late)"
+        return 1
+    fi
+    local k2_peer_missing
+    k2_peer_missing="$(itf_missing_markers "$k2_log" \
+        "compute-current: $active_version" \
+        "compute-new-dir: absent" \
+        "compute-salvage: present" \
+        || true)"
+    if [[ "$k2_cur" == "$active_version" ]] \
+            && grep -q "path-wiring: intact" "$k2_log" \
+            && grep -q "salvage: present" "$k2_log" \
+            && [[ -n "$k2_salvage_runs" && "$k2_salvage_runs" -ge 1 ]] \
+            && [[ -z "$k2_peer_missing" ]] \
+            && grep -q peer-state-done "$k2_log"; then
+        itf_step pass "killed deploy left both hosts functional" \
+            "active still $active_version, PATH wiring intact; salvage" \
+            "already archived on BOTH hosts (remote salvage precedes deploy)"
+    else
+        itf_step fail "killed deploy left both hosts functional" \
+            "missing:$k2_peer_missing — see guest-kill2.log"
+        return 1
+    fi
+    local k2_tmp k2_mux
+    k2_tmp="$(awk -F': ' '/^tmp-after:/{print $2; exit}' "$k2_log")"
+    k2_mux="$(awk -F': ' '/^mux-after:/{print $2; exit}' "$k2_log")"
+    # SIGKILL cannot run the EXIT trap: the staging dir and the opened
+    # control master stay.  Inherent to the kill mode and inert (the
+    # master ages out at ControlPersist=1800; tmpfiles takes the staging
+    # dir; nothing references either) — information, not a failure.
+    itf_step info "SIGKILL staging orphan expected" \
+        "/tmp staging dirs: $k2_tmp, surviving control masters: $k2_mux"
+
+    _j25_posture x2 || return 1
+
+    # ------------------------------------------------------------------
+    # Stage X3: SIGKILL during the REMOTE sync — the two-node-specific
+    # leg (local deploy complete; compute dir appearing over the P2P
+    # rsync)
+    # ------------------------------------------------------------------
+
+    local w3="$ITF_RUN_DIR/guest-kill3.sh"
+    cat > "$w3" <<EOF
+#!/bin/bash
+# itf j25 X3 (generated): SIGKILL the upgrade during the REMOTE sync.
+# The local deploy finishes first (MANIFEST.sha256 is its last action),
+# then deploy-version opens the compute sync (ssh mkdir + rsync -az
+# --delete).  Kill once the compute dir exists; the remote leg is
+# classified afterwards (absent | partial | complete).
+set -u
+${env_exports}log=/root/itf-j25-kill3-upgrade.log
+feed=/root/itf-j25-answers.txt
+vd="$vb/versions/$target_version"
+cd /root/ZFSutilities
+setsid ./bin/upgrade-zfsutilities < "\$feed" > "\$log" 2>&1 &
+pid=\$!
+for _ in \$(seq 1 1800); do
+    [[ -s "\$vd/MANIFEST.sha256" ]] && break
+    kill -0 "\$pid" 2>/dev/null || break
+    sleep 0.2
+done
+seen=no
+for _ in \$(seq 1 150); do
+    if ssh -o ConnectTimeout=5 root@$c_hostname "test -d '\$vd'" 2>/dev/null; then
+        seen=yes
+        break
+    fi
+    kill -0 "\$pid" 2>/dev/null || break
+    sleep 0.1
+done
+kill -9 -- "-\$pid" 2>/dev/null
+pkill -9 -f 'bin/deploy-version' 2>/dev/null
+pkill -9 -f 'rsync -az --delete' 2>/dev/null
+wait "\$pid"
+echo "upgrade-rc: \$?"
+echo "compute-dir-seen: \$seen"
+echo "storage-manifest: \$([[ -s "\$vd/MANIFEST.sha256" ]] && echo present || echo absent)"
+echo "storage-new-files: \$(find "\$vd" 2>/dev/null | wc -l)"
+echo "current: \$(basename "\$(readlink $vb/current)")"
+n=\$(ls -1d $vb/salvaged-changes/*/*/ 2>/dev/null | wc -l)
+echo "salvage-runs: \$n"
+grep -q 'upgrade-zfsutilities complete' "\$log" || echo "no-complete-marker: yes"
+echo "tmp-after: \$(ls -d /tmp/tmp.* 2>/dev/null | wc -l)"
+mux_after=\$(pgrep -c -f '\\[mux\\]' 2>/dev/null || true)
+echo "mux-after: \${mux_after:-0}"
+ssh -o ConnectTimeout=10 root@$c_hostname \
+    "bash /root/itf-j25-peer-state.sh $target_version" 2>/dev/null
+echo kill3-done
+EOF
+    itf_guest_put "$s_ip" "$w3" /root/itf-j25-kill3.sh > /dev/null 2>&1
+    local k3_log="$ITF_RUN_DIR/guest-kill3.log"
+    itf_guest_exec "$s_ip" "bash /root/itf-j25-kill3.sh" > "$k3_log" 2>&1
+    itf_artifact "kill3-transcript" "$k3_log"
+    itf_guest_get "$s_ip" /root/itf-j25-kill3-upgrade.log \
+        "$ITF_RUN_DIR/guest-kill3-upgrade.log" > /dev/null 2>&1
+    itf_artifact "kill3-upgrade-transcript" "$ITF_RUN_DIR/guest-kill3-upgrade.log"
+
+    # This step proves only that the kill beat the completion report; the
+    # two steps below place it (local deploy complete; remote leg
+    # classified).
+    local k3_rc k3_cur k3_salvage_runs
+    k3_rc="$(awk -F': ' '/^upgrade-rc:/{print $2; exit}' "$k3_log")"
+    if grep -q kill3-done "$k3_log" && [[ -n "$k3_rc" && "$k3_rc" -ne 0 ]] \
+            && grep -q "no-complete-marker: yes" "$k3_log"; then
+        itf_step pass "SIGKILL lands before the upgrade completes [x3]" \
+            "killed with rc=$k3_rc before the completion report (aimed at the" \
+            "remote sync — the leg is classified below)"
+    else
+        itf_step fail "SIGKILL lands before the upgrade completes [x3]" \
+            "rc=${k3_rc:-?} — see guest-kill3.log (a lost race would show" \
+            "rc=0: the upgrade finished before the kill — re-run the journey)"
+        return 1
+    fi
+    k3_cur="$(awk -F': ' '/^current:/{print $2; exit}' "$k3_log")"
+    k3_salvage_runs="$(awk -F': ' '/^salvage-runs:/{print $2; exit}' "$k3_log")"
+    if grep -q "storage-manifest: present" "$k3_log" \
+            && [[ "$k3_cur" == "$active_version" ]] \
+            && [[ -n "$k3_salvage_runs" && "$k3_salvage_runs" -ge 2 ]]; then
+        itf_step pass "local deploy completed before the kill" \
+            "versions/$target_version complete on storage (MANIFEST present);" \
+            "active still $active_version; $k3_salvage_runs salvage runs banked"
+    else
+        itf_step fail "local deploy completed before the kill" \
+            "see guest-kill3.log"
+        return 1
+    fi
+    # The compute leg, classified from live truth (j15's classified-step
+    # pattern): the kill may land before the remote mkdir, inside the
+    # rsync, or after the sync but before the report — every shape is a
+    # valid interrupted upgrade; the recovery must repair whichever it was.
+    local k3_compute_files k3_st_files k3_shape k3_partial=0
+    k3_compute_files="$(awk -F': ' '/^compute-new-files:/{print $2; exit}' "$k3_log")"
+    k3_st_files="$(awk -F': ' '/^storage-new-files:/{print $2; exit}' "$k3_log")"
+    if [[ -n "$k3_compute_files" && -n "$k3_st_files" ]] \
+            && [[ "$k3_compute_files" -lt "$k3_st_files" ]]; then
+        k3_partial=1
+    fi
+    if grep -q "compute-missing-dir:" "$k3_log"; then
+        k3_partial=1
+    fi
+    if grep -q "compute-new-dir: absent" "$k3_log"; then
+        k3_shape="kill preceded the remote mkdir — compute untouched"
+    elif (( k3_partial )); then
+        k3_shape="partial remote sync — compute dir holds ${k3_compute_files:-?}"
+        k3_shape+=" of ${k3_st_files:-?} paths"
+        k3_shape+=" $(grep 'compute-missing-dir:' "$k3_log" | tr '\n' ' ')"
+    elif grep -q "compute-new-dir: present" "$k3_log"; then
+        k3_shape="kill followed the remote sync, preceded the report —"
+        k3_shape+=" compute dir complete"
+    else
+        k3_shape=""
+    fi
+    # The wrapper's own observation rides along: whether it saw the
+    # compute dir appear before it fired the kill.
+    local k3_seen
+    k3_seen="$(awk -F': ' '/^compute-dir-seen:/{print $2; exit}' "$k3_log")"
+    [[ -n "$k3_shape" ]] && k3_shape+=" (wrapper saw the compute dir: ${k3_seen:-?})"
+    if [[ -n "$k3_shape" ]] \
+            && grep -q "compute-current: $active_version" "$k3_log" \
+            && grep -q "compute-salvage: present" "$k3_log" \
+            && grep -q peer-state-done "$k3_log"; then
+        itf_step pass "remote leg classified [x3]" "$k3_shape"
+    else
+        itf_step fail "remote leg classified [x3]" "see guest-kill3.log"
+        return 1
+    fi
+    local k3_tmp k3_mux
+    k3_tmp="$(awk -F': ' '/^tmp-after:/{print $2; exit}' "$k3_log")"
+    k3_mux="$(awk -F': ' '/^mux-after:/{print $2; exit}' "$k3_log")"
+    itf_step info "SIGKILL orphans accumulate" \
+        "/tmp staging dirs: $k3_tmp, surviving control masters: $k3_mux —" \
+        "inherent to the kill mode (the recovery opens its own masters)"
+
+    _j25_posture x3 || return 1
+
+    # ------------------------------------------------------------------
+    # Stage R: the recovery — re-run the SAME upgrade with keys still
+    # pending; both hosts' interrupted state must be repaired in place
+    # ------------------------------------------------------------------
+
+    local rec_log="$ITF_RUN_DIR/guest-upgrade-recovery.log"
+    itf_guest_exec_feed "$s_ip" "$up_feed" "$upgrade_cmd" \
+        > "$rec_log" 2>&1
+    local rec_rc=$?
+    itf_artifact "upgrade-recovery-transcript" "$rec_log"
+    local rec_missing
+    rec_missing="$(itf_missing_markers "$rec_log" \
+        "WARN: release tag v$target_version" \
+        "does not match" \
+        "INFO: --- $s_hostname (this host) ---" \
+        "INFO:     modified:   docs/docs/index.md" \
+        "INFO:     added:      bin/itf-local-tweak-s" \
+        "INFO: --- $c_hostname ---" \
+        "INFO:     modified:   docs/docs/commands-and-modules/two-node.md" \
+        "INFO:     added:      bin/itf-local-tweak-c" \
+        "INFO:     removed:    docs/docs/user-guide/gtk-gui.md" \
+        "===== $s_hostname (this host) — modified files (vs release $active_version) =====" \
+        "===== $c_hostname — modified files (vs release $active_version) =====" \
+        "<!-- itf local tweak (j25 storage) -->" \
+        "<!-- itf local tweak (j25 compute) -->" \
+        "INFO:   Salvaged on $s_hostname (this host):" \
+        "INFO:   Salvaged on $c_hostname:" \
+        "Deployed version:  $target_version — NOT activated" \
+        "Active version:    $active_version (unchanged on this host)" \
+        "this host:  sudo switch-version $target_version" \
+        "$c_hostname:  ssh root@$c_hostname switch-version $target_version" \
+        || true)"
+    if [[ $rec_rc -ne 0 || -n "$rec_missing" ]]; then
+        itf_step fail "recovery upgrade completes" \
+            "rc=$rec_rc missing:$rec_missing — see guest-upgrade-recovery.log"
+        return 1
+    fi
+    itf_step pass "recovery upgrade completes" \
+        "full per-host scan (both sections, MOD/ADD + the remote DEL)," \
+        "diffs rendered from both trees, salvage on both hosts," \
+        "$target_version deployed to every target, NOT activated;" \
+        "per-host activation printed"
+
+    # Deployed state per host: NOT activated, complete version dirs (the
+    # interrupted deploys repaired in place — the manifest verifies),
+    # salvage archives carrying LOCAL content.
+    local recs_script="$ITF_RUN_DIR/guest-recovery-storage.sh"
+    cat > "$recs_script" <<EOF
+#!/bin/bash
+# itf j25 (generated): the recovery's deployed state on the STORAGE
+# host — the interrupted deploys repaired in place.
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$active_version"
+test -s "$vb/versions/$target_version/MANIFEST.sha256"
+(cd "$vb/versions/$target_version" && sha256sum -c --quiet MANIFEST.sha256)
+ts_dir=\$(ls -1d $vb/salvaged-changes/$active_version/*/ | tail -1)
+test -n "\$ts_dir"
+test -f "\$ts_dir/docs/docs/index.md"
+test -f "\$ts_dir/bin/itf-local-tweak-s"
+test -f "\$ts_dir/README.txt"
+ls "$vb"/salvaged-changes/changes-*.diff > /dev/null
+n=\$(ls -1d $vb/salvaged-changes/$active_version/*/ | wc -l)
+echo "salvage-runs: \$n"
+test "\$n" -ge 2
+echo "salvage-hash: \$(sha256sum "\$ts_dir/docs/docs/index.md" | awk '{print \$1}')"
+echo recovery-storage-ok
+EOF
+    local recc_script="$ITF_RUN_DIR/guest-recovery-compute.sh"
+    cat > "$recc_script" <<EOF
+#!/bin/bash
+# itf j25 (generated): the recovery's deployed state on the COMPUTE
+# host — the interrupted remote sync repaired in place.
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$active_version"
+test -s "$vb/versions/$target_version/MANIFEST.sha256"
+(cd "$vb/versions/$target_version" && sha256sum -c --quiet MANIFEST.sha256)
+ts_dir=\$(ls -1d $vb/salvaged-changes/$active_version/*/ | tail -1)
+test -n "\$ts_dir"
+test -f "\$ts_dir/docs/docs/commands-and-modules/two-node.md"
+test -f "\$ts_dir/bin/itf-local-tweak-c"
+test -f "\$ts_dir/README.txt"
+test ! -e "\$ts_dir/docs/docs/user-guide/gtk-gui.md"
+n=\$(ls -1d $vb/salvaged-changes/$active_version/*/ | wc -l)
+echo "salvage-runs: \$n"
+test "\$n" -ge 2
+mod_file="\$ts_dir/docs/docs/commands-and-modules/two-node.md"
+echo "salvage-hash: \$(sha256sum "\$mod_file" | awk '{print \$1}')"
+echo recovery-compute-ok
+EOF
+    local salvaged_storage_hash="" salvaged_compute_hash=""
+    itf_guest_put "$s_ip" "$recs_script" /root/itf-j25-recovery-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-j25-recovery-s.sh" \
+            > "$ITF_RUN_DIR/guest-recovery-storage.log" 2>&1 \
+            && grep -q recovery-storage-ok "$ITF_RUN_DIR/guest-recovery-storage.log"; then
+        salvaged_storage_hash="$(awk -F': ' '/^salvage-hash:/{print $2; exit}' \
+            "$ITF_RUN_DIR/guest-recovery-storage.log")"
+        itf_artifact "recovery-verify-storage" "$ITF_RUN_DIR/guest-recovery-storage.log"
+    else
+        itf_step fail "recovery deployed state [storage]" \
+            "see guest-recovery-storage.log"
+        return 1
+    fi
+    itf_guest_put "$c_ip" "$recc_script" /root/itf-j25-recovery-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-j25-recovery-c.sh" \
+            > "$ITF_RUN_DIR/guest-recovery-compute.log" 2>&1 \
+            && grep -q recovery-compute-ok "$ITF_RUN_DIR/guest-recovery-compute.log"; then
+        salvaged_compute_hash="$(awk -F': ' '/^salvage-hash:/{print $2; exit}' \
+            "$ITF_RUN_DIR/guest-recovery-compute.log")"
+        itf_artifact "recovery-verify-compute" "$ITF_RUN_DIR/guest-recovery-compute.log"
+    else
+        itf_step fail "recovery deployed state [compute]" \
+            "see guest-recovery-compute.log"
+        return 1
+    fi
+    if [[ -n "$salvaged_storage_hash" && -n "$salvaged_compute_hash" \
+            && "$salvaged_storage_hash" == "$J_MOD_STORAGE_HASH" \
+            && "$salvaged_compute_hash" == "$J_MOD_COMPUTE_HASH" ]]; then
+        itf_step pass "recovery deployed state verified on both hosts" \
+            "current still $active_version; both versions/$target_version" \
+            "dirs complete (manifest verifies); salvage archives carry LOCAL" \
+            "content (hash match); the removed file absent from the archive"
+    else
+        itf_step fail "recovery deployed state verified on both hosts" \
+            "salvage hash mismatch: storage ${salvaged_storage_hash:-none}," \
+            "compute ${salvaged_compute_hash:-none}"
+        return 1
+    fi
+
+    _j25_posture r || return 1
+
+    # ------------------------------------------------------------------
+    # Stage A: activate BOTH hosts with the printed commands — keys
+    # still pending; the posture must survive activation byte-identical
+    # ------------------------------------------------------------------
+
+    # The compute clock just before activation: the fence journal slice
+    # taken after it starts here, so a tick the activation fires is on
+    # record.
+    local act_since
+    act_since="$(itf_guest_exec "$c_ip" 'date "+%F %T"' 2>/dev/null)" || act_since=""
+
+    # The commands the upgrade printed, run through a login shell: the
+    # product PATH is profile.d wiring, which a plain non-login ssh
+    # command never loads (j12's note).
+    local act_log="$ITF_RUN_DIR/guest-activate.log"
+    # shellcheck disable=SC2029  # hostnames expand on the client side
+    if itf_guest_exec "$s_ip" "
+            set -e
+            bash -lc 'switch-version $target_version'
+            ssh root@$c_hostname \"bash -lc 'switch-version $target_version'\"
+        " > "$act_log" 2>&1; then
+        itf_step pass "activation on both hosts" \
+            "the printed commands, run through a login shell (see guest-activate.log)"
+        itf_artifact "activate-transcript" "$act_log"
+    else
+        itf_step fail "activation on both hosts" "see guest-activate.log"
+        itf_artifact "activate-transcript" "$act_log"
+        return 1
+    fi
+
+    # switch-version's enable --now restarted the fence timer on the
+    # compute host, and a timer whose OnBootSec has already elapsed
+    # fires at once.  Park it again right away and wait out any tick it
+    # started (a oneshot service reads "activating" while it runs): the
+    # posture below is then judged on a quiet site instead of racing a
+    # tick's reconcile + save.
+    local repark_script="$ITF_RUN_DIR/guest-fence-repark.sh"
+    cat > "$repark_script" <<'EOF'
+#!/bin/bash
+# itf j25 (generated): park the fence timer after activation and wait
+# out a tick its restart may have started (arg 1 = journal start time).
+systemctl stop zfsutilities-iscsi-fence.timer
+for _ in $(seq 1 120); do
+    case "$(systemctl is-active zfsutilities-iscsi-fence.service)" in
+        active|activating|deactivating|reloading) sleep 1 ;;
+        *) break ;;
+    esac
+done
+echo "timer-state: $(systemctl is-active zfsutilities-iscsi-fence.timer)"
+echo "service-state: $(systemctl is-active zfsutilities-iscsi-fence.service)"
+journalctl -u zfsutilities-iscsi-fence.service --since "${1:--10min}" --no-pager
+echo repark-done
+EOF
+    itf_guest_put "$c_ip" "$repark_script" /root/itf-j25-fence-repark.sh \
+        > /dev/null 2>&1
+    local repark_log="$ITF_RUN_DIR/fence-reparked.log"
+    itf_guest_exec "$c_ip" "bash /root/itf-j25-fence-repark.sh '$act_since'" \
+        > "$repark_log" 2>&1
+    itf_artifact "fence-reparked" "$repark_log"
+    if grep -q repark-done "$repark_log" \
+            && grep -q "timer-state: inactive" "$repark_log" \
+            && ! grep -q "service-state: activating" "$repark_log"; then
+        local act_tick="no tick fired at activation"
+        if grep -q "Starting zfsutilities-iscsi-fence.service" "$repark_log"; then
+            act_tick="the activation's timer restart fired one tick (finished)"
+        fi
+        itf_step info "fence timer re-parked [a]" \
+            "$act_tick; manual ticks only until the final gate" \
+            "(see fence-reparked.log)"
+    else
+        itf_step fail "fence timer re-parked [a]" "see fence-reparked.log"
+        return 1
+    fi
+
+    local wire_s_script="$ITF_RUN_DIR/guest-wire-storage.sh"
+    cat > "$wire_s_script" <<EOF
+#!/bin/bash
+# itf j25 (generated): post-activation wiring on the STORAGE host —
+# with keys still pending.
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$target_version"
+test -d "$vb/versions/$active_version"
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+test -s /var/lib/zfsutilities/config.json
+test -x "$vb/current/bin/zfsdailybackup"
+echo wire-storage-ok
+EOF
+    local wire_c_script="$ITF_RUN_DIR/guest-wire-compute.sh"
+    cat > "$wire_c_script" <<EOF
+#!/bin/bash
+# itf j25 (generated): post-activation wiring on the COMPUTE host.
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$target_version"
+test -d "$vb/versions/$active_version"
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+test -x "$vb/current/bin/new-vm-disk"
+echo wire-compute-ok
+EOF
+    local wire_ok=1
+    itf_guest_put "$s_ip" "$wire_s_script" /root/itf-j25-wire-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-j25-wire-s.sh" \
+            > "$ITF_RUN_DIR/guest-wire-storage.log" 2>&1 \
+            && grep -q wire-storage-ok "$ITF_RUN_DIR/guest-wire-storage.log"; then
+        :
+    else
+        wire_ok=0
+        itf_step fail "post-activation wiring [storage]" \
+            "see guest-wire-storage.log"
+    fi
+    itf_guest_put "$c_ip" "$wire_c_script" /root/itf-j25-wire-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-j25-wire-c.sh" \
+            > "$ITF_RUN_DIR/guest-wire-compute.log" 2>&1 \
+            && grep -q wire-compute-ok "$ITF_RUN_DIR/guest-wire-compute.log"; then
+        :
+    else
+        wire_ok=0
+        itf_step fail "post-activation wiring [compute]" \
+            "see guest-wire-compute.log"
+    fi
+    if (( wire_ok )); then
+        itf_step pass "post-activation wiring verified on both hosts" \
+            "current -> $target_version; $active_version retained for" \
+            "rollback; node.conf two-node; per-role wiring intact"
+    else
+        return 1
+    fi
+
+    # The gap's core assertion: activation on a keys-pending site leaves
+    # the recovery authority byte-identical (saveconfig + pool map) and
+    # the pending posture unchanged (rc 3) while the plain LUN keeps
+    # serving.  The one tolerated difference is the fence's own: with
+    # the encrypted link ABSENT, the tick the timer restart fired is red
+    # and its reconcile re-saves saveconfig without the pending LUN (the
+    # ceremony then uses the map-recorded index) — the pool map must be
+    # byte-identical either way.
+    if [[ "$enc_link_shape" == "absent" ]]; then
+        _j25_posture a saveconfig-may-drift || return 1
+    else
+        _j25_posture a || return 1
+    fi
+
+    # One manual tick of the UPGRADED fence under keys pending — the
+    # truth classified from live state (j15's two-shapes pattern): the
+    # stale encrypted node can still satisfy the link-existence check
+    # (the documented R-02/R-03 blindness), or the tick goes red exactly
+    # for the keys-pending LUN with reconcile skipping it.
+    itf_fence_tick "$c_ip" a-keys-pending
+    local tick_rc=$?
+    local tick_log="$ITF_RUN_DIR/fence-tick-a-keys-pending.log"
+    if (( tick_rc == 0 )); then
+        itf_step pass "upgraded fence runs under keys pending [a]" \
+            "tick rc 0 — the stale encrypted node still satisfies the" \
+            "link-existence check (the documented R-02/R-03 blindness);" \
+            "no traceback on the upgraded tree"
+    elif grep -q "scsi1.*by-path link missing" "$tick_log" \
+            && ! grep -q "scsi0.*by-path link missing" "$tick_log" \
+            && grep -q "keys not loaded" "$tick_log" \
+            && grep -q "Pool LUN map left unchanged" "$tick_log"; then
+        itf_step pass "upgraded fence runs under keys pending [a]" \
+            "rc=1 red exactly for the keys-pending LUN — reconcile skips it" \
+            "(\"keys not loaded?\"), keeps the pool map as the authority"
+    else
+        itf_step fail "upgraded fence runs under keys pending [a]" \
+            "rc=$tick_rc — see $(basename "$tick_log")"
+        return 1
+    fi
+
+    # An up-to-date system must be told so — keys pending changes nothing
+    # about the up-to-date gate.
+    local uptodate_feed="$ITF_RUN_DIR/upgrade-uptodate-answers.txt"
+    printf '\n' > "$uptodate_feed"
+    local upd_log="$ITF_RUN_DIR/guest-upgrade-uptodate.log"
+    itf_guest_exec_feed "$s_ip" "$uptodate_feed" "$upgrade_cmd" \
+        > "$upd_log" 2>&1
+    local upd_rc=$?
+    itf_artifact "upgrade-uptodate-transcript" "$upd_log"
+    local upd_active
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    upd_active="$(itf_guest_exec "$s_ip" \
+        'basename "$(readlink /usr/local/lib/zfsutilities/current)"')" || upd_active=""
+    if [[ $upd_rc -eq 0 ]] && grep -q "Nothing to upgrade" "$upd_log" \
+            && [[ "$upd_active" == "$target_version" ]]; then
+        itf_step pass "up-to-date rerun is a no-op [a]" \
+            "\"Nothing to upgrade\"; current $target_version"
+    else
+        itf_step fail "up-to-date rerun is a no-op [a]" \
+            "rc=$upd_rc active=${upd_active:-?} — see guest-upgrade-uptodate.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage K: the key ceremony on the UPGRADED tree — the encrypted
+    # LUN must still be recoverable exactly as documented
+    # ------------------------------------------------------------------
+
+    itf_key_ceremony j25 "$s_base" "$s_vmid" "$s_ip" recover || return 1
+    local rec_enc_log="$ITF_RUN_DIR/recover-encrypted-j25.log"
+    local idx_note="saveconfig index used directly"
+    if grep -q "no LUN index in .*saveconfig.json; using map-recorded LUN" \
+            "$rec_enc_log"; then
+        idx_note="map-recorded index (the keys-pending tick save had dropped"
+        idx_note+=" the saveconfig record — F-042's healed shape, repair-plan 023)"
+    fi
+    if grep -q "vm-101-disk-1 mapped at LUN" "$rec_enc_log" \
+            && grep -q "Recovery complete" "$rec_enc_log" \
+            && ! grep -q "FATAL" "$rec_enc_log"; then
+        itf_step pass "encrypted LUN recovered on the upgraded tree [k]" \
+            "re-mapped at its recorded LUN, recovery complete; $idx_note"
+    else
+        itf_step fail "encrypted LUN recovered on the upgraded tree [k]" \
+            "see recover-encrypted-j25.log"
+        return 1
+    fi
+
+    local elapsed_k
+    if elapsed_k="$(itf_wait_vm_disk_links "$c_ip" 300 101)"; then
+        itf_step pass "both disk links return [k]" \
+            "VM 101's scsi0 + scsi1 present again ${elapsed_k}s after the ceremony"
+    else
+        local scan_log="$ITF_RUN_DIR/rescan-k.log"
+        if itf_guest_exec "$c_ip" "bash -lc 'rescan-storage'" \
+                > "$scan_log" 2>&1 \
+            && elapsed_k="$(itf_wait_vm_disk_links "$c_ip" 120 101)"; then
+            itf_step pass "both disk links return [k]" \
+                "REQUIRED manual rescan-storage — UX gap (→ REQUIREMENTS)"
+            itf_artifact "rescan-k" "$scan_log"
+        else
+            itf_step fail "both disk links return [k]" \
+                "still missing after rescan-storage — see rescan-k.log"
+            return 1
+        fi
+    fi
+
+    if itf_lun_marker_verify "$c_ip" 101 scsi0 j25; then
+        itf_step pass "plain marker readback [k]" \
+            "LUN 0's bytes identical across the whole interrupted-upgrade arc"
+        itf_artifact "marker-plain-k" "$ITF_RUN_DIR/guest-marker-verify-scsi0.log"
+    else
+        itf_step fail "plain marker readback [k]" \
+            "see guest-marker-verify-scsi0.log"
+        return 1
+    fi
+    if itf_lun_marker_verify "$c_ip" 101 scsi1 j25; then
+        itf_step pass "encrypted marker readback [k]" \
+            "the whole chain converged on the upgraded tree: keys -> zvol ->" \
+            "backstore -> recorded LUN index -> session -> device — exact bytes"
+        itf_artifact "marker-enc-k" "$ITF_RUN_DIR/guest-marker-verify-scsi1.log"
+    else
+        itf_step fail "encrypted marker readback [k]" \
+            "see guest-marker-verify-scsi1.log"
+        return 1
+    fi
+
+    itf_iscsi_check_gate "$s_ip" j25-final || return 1
+
+    local timer_log="$ITF_RUN_DIR/fence-timer-restarted.log"
+    if itf_guest_exec "$c_ip" "systemctl start zfsutilities-iscsi-fence.timer" \
+            > "$timer_log" 2>&1 \
+        && itf_guest_exec "$c_ip" \
+            "systemctl is-active --quiet zfsutilities-iscsi-fence.timer"; then
+        itf_step pass "fence timer restarted [k]" "ambient ticks resume"
+    else
+        itf_step fail "fence timer restarted [k]" "see fence-timer-restarted.log"
+        return 1
+    fi
+
+    if itf_fence_tick "$c_ip" j25-final; then
+        itf_step pass "fence tick healthy [k]" \
+            "all VM disk paths present on the upgraded tree"
+    else
+        itf_step fail "fence tick healthy [k]" "see fence-tick-j25-final.log"
+        return 1
+    fi
+
+    itf_safe_save_gate "$s_ip" j25-final || return 1
+
+    # The server's job is done; the EXIT-trap guard then skips.
+    if [[ -n "${J_PIDFILE2:-}" ]]; then
+        itf_http_stop "$J_PIDFILE2"
+        J_PIDFILE2=""
+    fi
+
+    itf_step info "journey stage reached" \
+        "two-node interrupted upgrade with keys pending validated:" \
+        "keys-absent boot (PENDING oracle), three interrupt injections" \
+        "(early SIGTERM w/ masters closed, mid-local-deploy SIGKILL," \
+        "a SIGKILL aimed at the remote sync), recovery rerun repairing both" \
+        "hosts, activation leaving the pending posture byte-identical, and" \
+        "the key ceremony rebuilding the encrypted LUN on the upgraded tree"
+    return 0
+}

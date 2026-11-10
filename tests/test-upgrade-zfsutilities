@@ -224,7 +224,19 @@ done
 [[ ${#args[@]} -gt 0 ]] || exit 0
 host="${args[0]#root@}"
 case "${args[1]:-}" in
-    true|exit)
+    true)
+        base=$(base_for "$host") || exit 255
+        [[ "$base" == "FAIL" ]] && exit 255
+        # Real OpenSSH drains the invoking shell's stdin while the
+        # remote command runs (F-048: the control-master establishment
+        # ate every piped answer line, so the archive prompt read EOF
+        # and declined).  The product keeps its stdin away from that
+        # mouth (establishment runs with </dev/null); draining here
+        # makes the multi-host tests model the real behavior.
+        cat > /dev/null
+        exit 0
+        ;;
+    exit)
         base=$(base_for "$host") || exit 255
         [[ "$base" == "FAIL" ]] && exit 255
         exit 0

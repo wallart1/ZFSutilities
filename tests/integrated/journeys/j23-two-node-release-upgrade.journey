@@ -1,0 +1,728 @@
+#!/usr/bin/env bash
+# j23-two-node-release-upgrade.journey — the REMOTE half of the release
+# upgrade, on a real two-product-node lab.
+#
+# j10/j12/j19 cover upgrade-zfsutilities on one host.  In two-node mode
+# the upgrade is a different beast: deploy.conf groups enumerate the
+# compute host, every scan/salvage/baseline runs there over one SSH
+# control master per host (upgrade-lib.sh piped through `bash -s`),
+# modified files are pulled back over rsync for diff rendering, and the
+# closing report prints a switch-version command PER HOST.  None of that
+# had journey coverage (the itf-coverage.md gap row this journey fills).
+#
+# The lab: the full j05 two-node sequence (template clones, P2P link,
+# root SSH both ways, three pools, install-two-node — which writes
+# /etc/zfsutilities/deploy.conf, so target enumeration exercises the
+# deploy.conf groups path).  Storage retains the stale template's old
+# version dir; stage O stages the operator who installed two-node at the
+# old release and never upgraded: the old tree is pushed to the compute
+# host and switch-version'd on BOTH hosts (the documented rollback
+# shape), making old-active the premise on every deployment target.
+#
+# A declined download offer comes first (stage D): nothing may change on
+# EITHER deployment target.  Two upgrade passes then walk the remote
+# surface end to end:
+#   pass 1  trust-on-first-upgrade (j19's premise, both hosts): no
+#           pristine source, no MANIFEST — the upgrade must capture a
+#           baseline on the LOCAL tree and over SSH on the compute
+#           host, deploy to both, and stop before activation; both
+#           printed switch-version commands are then run (through a
+#           login shell — the product PATH is profile.d wiring).
+#   pass 2  full remote scan/salvage: distinct modifications per host
+#           (storage MOD+ADD, compute MOD+ADD+DEL), the served release
+#           re-labeled one patch newer (the VERSION/tag mismatch WARN
+#           asserted as honest), a pristine tarball served for diff
+#           rendering (exercising the rsync pull from the compute
+#           host), per-host salvage archives carrying LOCAL content,
+#           deploy-not-activate on both, activation, retention, and
+#           the up-to-date rerun.
+#
+# dev-tarball source only: both passes point ZFSUTILITIES_RELEASE_API at
+# an itf-served "latest release", and pass 2 rewrites it — impossible
+# against real GitHub.  j10/j12/j19 own the real-GitHub first-user path.
+#
+# Guest state required: storage template (STALE — the old-version
+# carrier, j10's premise; pass 1 additionally needs j19's: the old
+# version predates MANIFEST.sha256 AND is untagged on GitHub, so no
+# pristine source is obtainable) + compute template (j05's).
+# Site config required: j05's two-node keys (ITF_COMPUTE_BASE,
+# ITF_COMPUTE_TEMPLATE_NAME, ITF_ISCSI_*_IP) and ITF_DEV_IP.
+# Snapshots produced: as-cloned (per guest, via j05), pools-created.
+
+# shellcheck source=j05-two-node-install.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
+
+journey_main() {
+    local vb=/usr/local/lib/zfsutilities
+
+    if [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — set dev-tarball (both passes need the" \
+            "itf-served fake latest release; j10/j12/j19 own the real-GitHub path)"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j23 two-node release upgrade; composes the j05 two-node lab"
+
+    # ------------------------------------------------------------------
+    # Stage L: the full j05 two-node lab (clones -> install -> first LUN)
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main || return 1
+
+    # Records carry a 4th field (the live qm guest name) since the
+    # name-based orphan fence; consume it so it cannot bleed into the IP.
+    local s_vmid s_ip _s_name c_vmid c_ip _c_name
+    # shellcheck disable=SC2034  # name slots unused here
+    read -r _ s_vmid s_ip _s_name < "$ITF_RUN_DIR/guest-storage.txt"
+    # shellcheck disable=SC2034
+    read -r _ c_vmid c_ip _c_name < "$ITF_RUN_DIR/guest-compute.txt"
+    if [[ -n "$s_ip" && -n "$c_ip" ]]; then
+        itf_step pass "lab coordinates recovered" \
+            "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"
+    else
+        itf_step fail "lab coordinates recovered" "guest record files incomplete"
+        return 1
+    fi
+
+    local s_hostname c_hostname
+    s_hostname="$(itf_guest_exec "$s_ip" 'hostname -s' 2>/dev/null)"
+    c_hostname="$(itf_guest_exec "$c_ip" 'hostname -s' 2>/dev/null)"
+    if [[ -n "$s_hostname" && -n "$c_hostname" ]]; then
+        itf_step pass "host labels resolved" \
+            "storage=$s_hostname compute=$c_hostname (the upgrade's per-host sections)"
+    else
+        itf_step fail "host labels resolved" \
+            "storage=${s_hostname:-?} compute=${c_hostname:-?}"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage O: the two-node upgrade premise — old version ACTIVE on
+    # every deployment target (the operator who installed two-node at
+    # the old release and never upgraded)
+    # ------------------------------------------------------------------
+
+    local today old n_versions
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    today="$(itf_guest_exec "$s_ip" \
+        'basename "$(readlink /usr/local/lib/zfsutilities/current)"')" || today=""
+    n_versions="$(itf_guest_exec "$s_ip" 'ls /usr/local/lib/zfsutilities/versions/ | wc -l')" \
+        || n_versions=""
+    # The one version dir that is not the active one (guest-side $cur).
+    # shellcheck disable=SC2016
+    local old_cmd='cur=$(basename "$(readlink /usr/local/lib/zfsutilities/current)")'
+    # shellcheck disable=SC2016
+    old_cmd+='; ls /usr/local/lib/zfsutilities/versions/ | grep -vx "$cur"'
+    old="$(itf_guest_exec "$s_ip" "$old_cmd")" || old=""
+    if [[ -n "$today" && -n "$old" && "$old" != *$'\n'* && "$n_versions" == "2" ]]; then
+        itf_step pass "old version identified" \
+            "template carried $old (retained beside the installed $today)"
+    else
+        itf_step fail "old version identified" \
+            "expected exactly the template's old version beside the j05 install" \
+            "(active=${today:-?} versions=${n_versions:-?} old=${old:-?}) — PREP: the" \
+            "storage template must be a plain single-version j01-style build"
+        return 1
+    fi
+
+    # Push the old tree to the compute host (the same shape the
+    # installer's deploy push leaves), then roll BOTH hosts back onto it
+    # — the documented switch-version rollback path, per host.  The
+    # config-downgrade escape is the staging truth: the storage guest
+    # carries the template's archived generation-26 config (restored),
+    # but the compute host has no pre-0.125.0 config history — it went
+    # straight to today's version — so its rollback archives the newer
+    # config aside and starts the old version from defaults (the fence
+    # itself is correct; without the escape it FATALs, as designed).
+    local rollback_log="$ITF_RUN_DIR/stage-o-rollback.log"
+    # shellcheck disable=SC2029  # hostnames/IPs expand on the client side
+    if itf_guest_exec "$s_ip" "
+            set -e
+            rsync -a '$vb/versions/$old/' 'root@$c_hostname:$vb/versions/$old/'
+            ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 bash -lc 'switch-version $old'
+            ssh root@$c_hostname \
+                \"ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 bash -lc 'switch-version $old'\"
+        " > "$rollback_log" 2>&1; then
+        itf_step pass "old version activated on both hosts" \
+            "$old pushed to $c_hostname and switch-version'd on both (see stage-o-rollback.log)"
+        itf_artifact "stage-o-rollback" "$rollback_log"
+    else
+        itf_step fail "old version activated on both hosts" "see stage-o-rollback.log"
+        itf_artifact "stage-o-rollback" "$rollback_log"
+        return 1
+    fi
+
+    # Premise verified per host directly (the journey reaches both
+    # guests by IP): current -> old, two-node config, and NO MANIFEST in
+    # the old tree — pass 1's trust-on-first-upgrade capture needs the
+    # pre-0.125.0 shape (the shared stale-template contract; a rebuilt
+    # manifest-era template fails here with the PREP hint instead of
+    # half-running the capture pass).
+    local premise_script="$ITF_RUN_DIR/stage-o-premise.sh"
+    cat > "$premise_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$old"
+test ! -e "$vb/versions/$old/MANIFEST.sha256"
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+echo premise-ok
+EOF
+    local loop_host gip premise_ok=1
+    for loop_host in "$s_hostname (storage)" "$c_hostname (compute)"; do
+        [[ "$loop_host" == *" (storage)" ]] && gip="$s_ip" || gip="$c_ip"
+        itf_guest_put "$gip" "$premise_script" /root/itf-j23-premise.sh > /dev/null 2>&1
+        if itf_guest_exec "$gip" "bash /root/itf-j23-premise.sh" \
+                > "$ITF_RUN_DIR/stage-o-premise-${gip}.log" 2>&1 \
+                && grep -q premise-ok "$ITF_RUN_DIR/stage-o-premise-${gip}.log"; then
+            :
+        else
+            premise_ok=0
+            itf_step fail "upgrade premise [$loop_host]" \
+                "see stage-o-premise-${gip}.log — PREP: the storage template must" \
+                "be the stale pre-MANIFEST single-version build (j10/j19's carrier)"
+        fi
+    done
+    if (( premise_ok )); then
+        itf_step pass "upgrade premise holds on both hosts" \
+            "current -> $old, node.conf two-node, old tree manifest-free" \
+            "on $s_hostname and $c_hostname"
+    else
+        return 1
+    fi
+
+    # The upgrade's remote-target enumeration input: install-two-node's
+    # deploy.conf groups naming the compute host (the legacy node.conf
+    # fallback is not what this lab must exercise).
+    local deploy_conf_log="$ITF_RUN_DIR/stage-o-deploy-conf.log"
+    if itf_guest_exec "$s_ip" \
+            "test -f /etc/zfsutilities/deploy.conf \
+                && grep -q '$c_hostname' /etc/zfsutilities/deploy.conf" \
+            > "$deploy_conf_log" 2>&1; then
+        itf_step pass "deploy.conf groups present" \
+            "/etc/zfsutilities/deploy.conf names $c_hostname — the target-enumeration input"
+    else
+        itf_step fail "deploy.conf groups present" "see stage-o-deploy-conf.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage E: the shared upgrade staging targeting the STORAGE guest
+    # (--guest-ip: the second clone left J_GUEST_IP at the compute
+    # guest), with NO pristine baseline — pass 1 is the remote
+    # trust-on-first-upgrade walk
+    # ------------------------------------------------------------------
+
+    # No pristine scan source may be provisioned: both hosts must fall
+    # through to baseline capture.  Read by itf_journey_stage_upgrade_env
+    # (j19's knob); pass 2 provisions its own pristine for the NEW
+    # active version instead.
+    export ITF_UPGRADE_BASELINE=none
+    itf_journey_stage_upgrade_env j23-storage --guest-ip "$s_ip" || return 1
+    local active_version="$J_ACTIVE_VERSION"      # the old version
+    local target_version="$J_TARGET_VERSION"      # today's tree
+    local upgrade_cmd="$J_UPGRADE_CMD"
+
+    # ------------------------------------------------------------------
+    # Stage D: decline the download offer — nothing must change on
+    # EITHER deployment target
+    # ------------------------------------------------------------------
+
+    # The lab already carries versions/$target (the j05 install), so
+    # mere existence proves nothing about a deploy.  Record the deployed
+    # MANIFEST.sha256 mtime on each host BEFORE any upgrade runs: every
+    # deploy rewrites that manifest (deploy-version's last action; the
+    # remote rsync carries the new mtime), so "unchanged" is the
+    # declined run's nothing-deployed oracle and "changed" is pass 1's
+    # really-deployed oracle.
+    local s_manifest_mtime c_manifest_mtime
+    local mtime_cmd="stat -c %Y $vb/versions/$target_version/MANIFEST.sha256"
+    s_manifest_mtime="$(itf_guest_exec "$s_ip" "$mtime_cmd" 2>/dev/null)" \
+        || s_manifest_mtime=""
+    c_manifest_mtime="$(itf_guest_exec "$c_ip" "$mtime_cmd" 2>/dev/null)" \
+        || c_manifest_mtime=""
+    if [[ "$s_manifest_mtime" =~ ^[0-9]+$ && "$c_manifest_mtime" =~ ^[0-9]+$ ]]; then
+        itf_step pass "installed manifest stamps recorded" \
+            "versions/$target_version MANIFEST.sha256 mtime — storage" \
+            "$s_manifest_mtime, compute $c_manifest_mtime (the deploy oracle)"
+    else
+        itf_step fail "installed manifest stamps recorded" \
+            "storage=${s_manifest_mtime:-?} compute=${c_manifest_mtime:-?} — the j05" \
+            "install must have left versions/$target_version with its MANIFEST"
+        return 1
+    fi
+
+    local decline_feed="$ITF_RUN_DIR/upgrade-decline-answers.txt"
+    printf 'n\n' > "$decline_feed"
+    local dec_log="$ITF_RUN_DIR/guest-upgrade-decline.log"
+    itf_guest_exec_feed "$s_ip" "$decline_feed" "$upgrade_cmd" \
+        > "$dec_log" 2>&1
+    local dec_rc=$?
+    itf_artifact "upgrade-decline-transcript" "$dec_log"
+    local dec_missing
+    dec_missing="$(itf_missing_markers "$dec_log" \
+        "Aborted. Nothing was changed." || true)"
+    if [[ $dec_rc -eq 0 && -z "$dec_missing" ]]; then
+        itf_step pass "declined upgrade aborts cleanly" \
+            "rc=0, \"Aborted. Nothing was changed.\" (see guest-upgrade-decline.log)"
+    else
+        itf_step fail "declined upgrade aborts cleanly" \
+            "rc=$dec_rc missing:$dec_missing — see guest-upgrade-decline.log"
+        return 1
+    fi
+
+    # Nothing may have changed on either host — each oracle names one
+    # thing a wrongly-continuing upgrade would do: a re-deploy rewrites
+    # MANIFEST.sha256 inside the existing version dir (the mtime recorded
+    # above), a salvage creates salvaged-changes/, and an activation
+    # re-points the current symlink.
+    local decline_script="$ITF_RUN_DIR/guest-decline-verify.sh"
+    cat > "$decline_script" <<EOF
+set -e
+# arg 1 = the deployed MANIFEST mtime recorded before the declined run
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$old"
+test ! -e "$vb/salvaged-changes"
+now_mtime=\$(stat -c %Y "$vb/versions/$target_version/MANIFEST.sha256")
+echo "manifest-mtime: before=\$1 now=\$now_mtime"
+test "\$now_mtime" = "\$1"
+echo decline-untouched-ok
+EOF
+    local decl_ok=1 mtime_before
+    for loop_host in "$s_hostname (storage)" "$c_hostname (compute)"; do
+        if [[ "$loop_host" == *" (storage)" ]]; then
+            gip="$s_ip"
+            mtime_before="$s_manifest_mtime"
+        else
+            gip="$c_ip"
+            mtime_before="$c_manifest_mtime"
+        fi
+        itf_guest_put "$gip" "$decline_script" /root/itf-j23-decline.sh > /dev/null 2>&1
+        if itf_guest_exec "$gip" "bash /root/itf-j23-decline.sh $mtime_before" \
+                > "$ITF_RUN_DIR/guest-decline-verify-${gip}.log" 2>&1 \
+                && grep -q decline-untouched-ok "$ITF_RUN_DIR/guest-decline-verify-${gip}.log"; then
+            :
+        else
+            decl_ok=0
+            itf_step fail "declined upgrade left $loop_host untouched" \
+                "see guest-decline-verify-${gip}.log"
+        fi
+    done
+    if (( decl_ok )); then
+        itf_step pass "declined upgrade left both hosts untouched" \
+            "active still $old, deployed manifest not rewritten, no salvage —" \
+            "on $s_hostname and $c_hostname"
+    else
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage P1: pass 1 — trust-on-first-upgrade on BOTH hosts (no
+    # pristine source provisioned): local AND remote baseline capture,
+    # deploy to every target, stop before activation
+    # ------------------------------------------------------------------
+
+    # Prompts on this path: the download offer, and prerequisite
+    # remediation if the staged tree's checker finds anything (the lab
+    # installs everything, so usually none).  No modifications are
+    # injected yet, so no archive offer fires.  The download offer
+    # defaults to N — its y must be explicit; unconsumed y's are harmless
+    # (a remediation offer defaults to Y anyway).
+    local up1_feed="$ITF_RUN_DIR/upgrade1-answers.txt"
+    printf 'y\ny\ny\ny\ny\ny\n' > "$up1_feed"
+    local up1_log="$ITF_RUN_DIR/guest-upgrade1.log"
+    itf_guest_exec_feed "$s_ip" "$up1_feed" "$upgrade_cmd" \
+        > "$up1_log" 2>&1
+    local up1_rc=$?
+    itf_artifact "upgrade1-transcript" "$up1_log"
+    local up1_missing
+    up1_missing="$(itf_missing_markers "$up1_log" \
+        "INFO: --- $s_hostname (this host) ---" \
+        "INFO: --- $c_hostname ---" \
+        "A baseline manifest was captured" \
+        "Deployed version:  $target_version — NOT activated" \
+        "Active version:    $active_version (unchanged on this host)" \
+        "this host:  sudo switch-version $target_version" \
+        "$c_hostname:  ssh root@$c_hostname switch-version $target_version" \
+        || true)"
+    # The capture message must appear under BOTH host sections — the
+    # remote __baseline pipe is the point of this pass.
+    local up1_captures
+    up1_captures="$(grep -c "A baseline manifest was captured" "$up1_log" || true)"
+    if [[ $up1_rc -eq 0 && -z "$up1_missing" && "$up1_captures" -ge 2 ]]; then
+        itf_step pass "pass 1 upgrades both hosts" \
+            "baseline captured on $s_hostname (local) AND $c_hostname (over ssh);" \
+            "deployed $target_version to every target, NOT activated;" \
+            "per-host switch-version commands printed (see guest-upgrade1.log)"
+    else
+        itf_step fail "pass 1 upgrades both hosts" \
+            "rc=$up1_rc captures=$up1_captures missing:$up1_missing — see guest-upgrade1.log"
+        return 1
+    fi
+
+    # Deployed-not-activated + captured baselines, verified on BOTH
+    # hosts (the remote capture writes the manifest on the compute
+    # host's old tree).  versions/$target existed before this pass, so
+    # "deployed" is proven by its MANIFEST having been REWRITTEN (the
+    # mtime recorded before stage D), not by its presence.
+    local p1_script="$ITF_RUN_DIR/guest-pass1-verify.sh"
+    cat > "$p1_script" <<EOF
+set -e
+# arg 1 = the deployed MANIFEST mtime recorded before any upgrade ran
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$old"
+test -s "$vb/versions/$target_version/MANIFEST.sha256"
+now_mtime=\$(stat -c %Y "$vb/versions/$target_version/MANIFEST.sha256")
+echo "manifest-mtime: before=\$1 now=\$now_mtime"
+test "\$now_mtime" != "\$1"
+test -s "$vb/versions/$old/MANIFEST.sha256"
+echo pass1-deployed-ok
+EOF
+    local p1_ok=1
+    for loop_host in "$s_hostname (storage)" "$c_hostname (compute)"; do
+        if [[ "$loop_host" == *" (storage)" ]]; then
+            gip="$s_ip"
+            mtime_before="$s_manifest_mtime"
+        else
+            gip="$c_ip"
+            mtime_before="$c_manifest_mtime"
+        fi
+        itf_guest_put "$gip" "$p1_script" /root/itf-j23-pass1.sh > /dev/null 2>&1
+        if itf_guest_exec "$gip" "bash /root/itf-j23-pass1.sh $mtime_before" \
+                > "$ITF_RUN_DIR/guest-pass1-verify-${gip}.log" 2>&1 \
+                && grep -q pass1-deployed-ok "$ITF_RUN_DIR/guest-pass1-verify-${gip}.log"; then
+            :
+        else
+            p1_ok=0
+            itf_step fail "pass 1 deployed state on $loop_host" \
+                "see guest-pass1-verify-${gip}.log"
+        fi
+    done
+    if (( p1_ok )); then
+        itf_step pass "pass 1 deployed, not activated; baselines captured" \
+            "current still $old on both hosts; $target_version re-deployed (its" \
+            "MANIFEST rewritten on both); captured MANIFEST landed in the old" \
+            "tree on both hosts"
+    else
+        return 1
+    fi
+
+    # Activate BOTH hosts with the commands the upgrade printed, run
+    # through a login shell: the product PATH is profile.d wiring, which
+    # a plain non-login ssh command never loads (j12's note).
+    local act1_log="$ITF_RUN_DIR/guest-activate1.log"
+    # shellcheck disable=SC2029  # hostnames expand on the client side
+    if itf_guest_exec "$s_ip" "
+            set -e
+            bash -lc 'switch-version $target_version'
+            ssh root@$c_hostname \"bash -lc 'switch-version $target_version'\"
+        " > "$act1_log" 2>&1; then
+        itf_step pass "pass 1 activates on both hosts" \
+            "the printed commands, run through a login shell (see guest-activate1.log)"
+        itf_artifact "activate1-transcript" "$act1_log"
+    else
+        itf_step fail "pass 1 activates on both hosts" "see guest-activate1.log"
+        itf_artifact "activate1-transcript" "$act1_log"
+        return 1
+    fi
+
+    local wire1_script="$ITF_RUN_DIR/guest-wire1-verify.sh"
+    cat > "$wire1_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$target_version"
+test -d "$vb/versions/$old"
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+echo wiring-ok
+EOF
+    local wire1_ok=1
+    for loop_host in "$s_hostname (storage)" "$c_hostname (compute)"; do
+        [[ "$loop_host" == *" (storage)" ]] && gip="$s_ip" || gip="$c_ip"
+        itf_guest_put "$gip" "$wire1_script" /root/itf-j23-wire1.sh > /dev/null 2>&1
+        if itf_guest_exec "$gip" "bash /root/itf-j23-wire1.sh" \
+                > "$ITF_RUN_DIR/guest-wire1-verify-${gip}.log" 2>&1 \
+                && grep -q wiring-ok "$ITF_RUN_DIR/guest-wire1-verify-${gip}.log"; then
+            :
+        else
+            wire1_ok=0
+            itf_step fail "pass 1 wiring on $loop_host" \
+                "see guest-wire1-verify-${gip}.log"
+        fi
+    done
+    if (( wire1_ok )); then
+        itf_step pass "pass 1 wiring verified on both hosts" \
+            "current -> $target_version, $old retained, node.conf still two-node"
+    else
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage P2s: pass-2 staging — the shared relabel stage: the served
+    # "latest release" re-labeled one patch newer (so the up-to-date gate
+    # lets a second upgrade through) plus the pristine tarball of the
+    # just-deployed tree for diff rendering (the remote rsync pull's
+    # data source)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_upgrade_relabel "$s_ip" || return 1
+    local new2="$J_TARGET_VERSION"
+    local upgrade2_cmd="$J_UPGRADE_CMD"
+
+    # ------------------------------------------------------------------
+    # Stage M: distinct local modifications per host — a site carrying
+    # tweaks on BOTH nodes (storage MOD+ADD, compute MOD+ADD+DEL; the
+    # removed classification is j19's, exercised here on the remote host)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_two_node_mods j23 "$s_ip" "$c_ip" "$target_version" \
+        || return 1
+    # The salvaged copies must carry the LOCAL content — the injected
+    # hashes from the shared mods stage.
+    local injected_docs_hash="$J_MOD_STORAGE_HASH"
+    local injected_twonode_hash="$J_MOD_COMPUTE_HASH"
+
+    # ------------------------------------------------------------------
+    # Stage P2: pass 2 — the full remote scan/salvage/diff walk
+    # ------------------------------------------------------------------
+
+    # Prompts: the download offer and the archive-changes offer (both
+    # default to N — the y's must be explicit), plus any prereq
+    # remediation offer.
+    local up2_feed="$ITF_RUN_DIR/upgrade2-answers.txt"
+    printf 'y\ny\ny\ny\ny\ny\n' > "$up2_feed"
+    local up2_log="$ITF_RUN_DIR/guest-upgrade2.log"
+    itf_guest_exec_feed "$s_ip" "$up2_feed" "$upgrade2_cmd" \
+        > "$up2_log" 2>&1
+    local up2_rc=$?
+    itf_artifact "upgrade2-transcript" "$up2_log"
+    local up2_missing
+    up2_missing="$(itf_missing_markers "$up2_log" \
+        "does not match" \
+        "WARN: release tag v$new2" \
+        "INFO: --- $s_hostname (this host) ---" \
+        "INFO:     modified:   docs/docs/index.md" \
+        "INFO:     added:      bin/itf-local-tweak-s" \
+        "INFO: --- $c_hostname ---" \
+        "INFO:     modified:   docs/docs/commands-and-modules/two-node.md" \
+        "INFO:     added:      bin/itf-local-tweak-c" \
+        "INFO:     removed:    docs/docs/user-guide/gtk-gui.md" \
+        "===== $s_hostname (this host) — modified files (vs release $target_version) =====" \
+        "===== $c_hostname — modified files (vs release $target_version) =====" \
+        "<!-- itf local tweak (j23 storage) -->" \
+        "<!-- itf local tweak (j23 compute) -->" \
+        "INFO:   Salvaged on $s_hostname (this host):" \
+        "INFO:   Salvaged on $c_hostname:" \
+        "Deployed version:  $new2 — NOT activated" \
+        "Active version:    $target_version (unchanged on this host)" \
+        "this host:  sudo switch-version $new2" \
+        "$c_hostname:  ssh root@$c_hostname switch-version $new2" \
+        || true)"
+    if [[ $up2_rc -eq 0 && -z "$up2_missing" ]]; then
+        itf_step pass "pass 2 scans, salvages, and deploys per host" \
+            "both host sections listed MOD/ADD (+DEL on $c_hostname); unified diffs" \
+            "rendered per host (the compute files pulled over rsync); salvage on" \
+            "both hosts; $new2 deployed NOT activated; per-host activation printed" \
+            "(see guest-upgrade2.log)"
+    else
+        itf_step fail "pass 2 scans, salvages, and deploys per host" \
+            "rc=$up2_rc missing:$up2_missing — see guest-upgrade2.log"
+        return 1
+    fi
+
+    # Deployed-not-activated + salvage archives with LOCAL content,
+    # verified on BOTH hosts.
+    local dep2s_script="$ITF_RUN_DIR/guest-deployed2-storage.sh"
+    cat > "$dep2s_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$target_version"
+test -s "$vb/versions/$new2/MANIFEST.sha256"
+ts_dir="\$(ls -1d $vb/salvaged-changes/$target_version/*/ | head -1)"
+test -n "\$ts_dir"
+test -f "\$ts_dir/docs/docs/index.md"
+test -f "\$ts_dir/bin/itf-local-tweak-s"
+test -f "\$ts_dir/README.txt"
+ls "$vb"/salvaged-changes/changes-*.diff > /dev/null
+echo "salvaged-dir: \$ts_dir"
+sha256sum "\$ts_dir/docs/docs/index.md"
+echo deployed2-storage-ok
+EOF
+    local dep2c_script="$ITF_RUN_DIR/guest-deployed2-compute.sh"
+    cat > "$dep2c_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$target_version"
+test -s "$vb/versions/$new2/MANIFEST.sha256"
+ts_dir="\$(ls -1d $vb/salvaged-changes/$target_version/*/ | head -1)"
+test -n "\$ts_dir"
+test -f "\$ts_dir/docs/docs/commands-and-modules/two-node.md"
+test -f "\$ts_dir/bin/itf-local-tweak-c"
+test -f "\$ts_dir/README.txt"
+test ! -e "\$ts_dir/docs/docs/user-guide/gtk-gui.md"
+echo "salvaged-dir: \$ts_dir"
+sha256sum "\$ts_dir/docs/docs/commands-and-modules/two-node.md"
+echo deployed2-compute-ok
+EOF
+    local salvaged_storage_hash="" salvaged_twonode_hash="" dep2_ok=1
+    itf_guest_put "$s_ip" "$dep2s_script" /root/itf-j23-deployed-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-j23-deployed-s.sh" \
+            > "$ITF_RUN_DIR/guest-deployed2-storage.log" 2>&1 \
+            && grep -q deployed2-storage-ok "$ITF_RUN_DIR/guest-deployed2-storage.log"; then
+        salvaged_storage_hash="$(awk '/salvaged-changes.*index.md/{print $1}' \
+            "$ITF_RUN_DIR/guest-deployed2-storage.log")"
+        itf_artifact "pass2-deployed-storage" "$ITF_RUN_DIR/guest-deployed2-storage.log"
+    else
+        dep2_ok=0
+        itf_step fail "pass 2 deployed state [storage]" \
+            "see guest-deployed2-storage.log"
+    fi
+    itf_guest_put "$c_ip" "$dep2c_script" /root/itf-j23-deployed-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-j23-deployed-c.sh" \
+            > "$ITF_RUN_DIR/guest-deployed2-compute.log" 2>&1 \
+            && grep -q deployed2-compute-ok "$ITF_RUN_DIR/guest-deployed2-compute.log"; then
+        salvaged_twonode_hash="$(awk '/salvaged-changes.*two-node.md/{print $1}' \
+            "$ITF_RUN_DIR/guest-deployed2-compute.log")"
+        # (the sha256sum line in that log names the full
+        # commands-and-modules/two-node.md path; the awk pattern above
+        # matches its tail uniquely)
+        itf_artifact "pass2-deployed-compute" "$ITF_RUN_DIR/guest-deployed2-compute.log"
+    else
+        dep2_ok=0
+        itf_step fail "pass 2 deployed state [compute]" \
+            "see guest-deployed2-compute.log"
+    fi
+    if (( ! dep2_ok )); then return 1; fi
+    # Non-empty on both sides: two empty strings must not compare equal
+    # (the shared mods stage already refuses empty injected hashes).
+    if [[ -n "$salvaged_storage_hash" && -n "$salvaged_twonode_hash" \
+        && "$injected_docs_hash" == "$salvaged_storage_hash" \
+        && "$injected_twonode_hash" == "$salvaged_twonode_hash" ]]; then
+        itf_step pass "pass 2 salvage archives carry LOCAL content" \
+            "hash match on both hosts (index.md on $s_hostname, two-node.md on" \
+            "$c_hostname); the removed file is not in the archive; combined diff" \
+            "saved on $s_hostname"
+    else
+        itf_step fail "pass 2 salvage archives carry LOCAL content" \
+            "storage ${salvaged_storage_hash:-none} != $injected_docs_hash;" \
+            "compute ${salvaged_twonode_hash:-none} != $injected_twonode_hash"
+        return 1
+    fi
+
+    # Activate BOTH hosts with the commands the upgrade printed, run
+    # through a login shell (as after pass 1).
+    local act2_log="$ITF_RUN_DIR/guest-activate2.log"
+    # shellcheck disable=SC2029  # hostnames expand on the client side
+    if itf_guest_exec "$s_ip" "
+            set -e
+            bash -lc 'switch-version $new2'
+            ssh root@$c_hostname \"bash -lc 'switch-version $new2'\"
+        " > "$act2_log" 2>&1; then
+        itf_step pass "pass 2 activates on both hosts" \
+            "the printed commands, run through a login shell (see guest-activate2.log)"
+        itf_artifact "activate2-transcript" "$act2_log"
+    else
+        itf_step fail "pass 2 activates on both hosts" "see guest-activate2.log"
+        itf_artifact "activate2-transcript" "$act2_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage W: post-upgrade wiring on BOTH hosts — new version active,
+    # both predecessors retained, config preserved
+    # ------------------------------------------------------------------
+
+    local post_s_script="$ITF_RUN_DIR/guest-post-storage.sh"
+    cat > "$post_s_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$new2"
+test -d "$vb/versions/$old"
+test -d "$vb/versions/$target_version"
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+test -s /var/lib/zfsutilities/config.json
+test -x "$vb/current/bin/zfsdailybackup"
+echo post-storage-ok
+EOF
+    local post_c_script="$ITF_RUN_DIR/guest-post-compute.sh"
+    cat > "$post_c_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$new2"
+test -d "$vb/versions/$old"
+test -d "$vb/versions/$target_version"
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+test -x "$vb/current/bin/new-vm-disk"
+echo post-compute-ok
+EOF
+    local wire_ok=1
+    itf_guest_put "$s_ip" "$post_s_script" /root/itf-j23-post-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-j23-post-s.sh" \
+            > "$ITF_RUN_DIR/guest-post-storage.log" 2>&1 \
+            && grep -q post-storage-ok "$ITF_RUN_DIR/guest-post-storage.log"; then
+        :
+    else
+        wire_ok=0
+        itf_step fail "post-upgrade state [storage]" "see guest-post-storage.log"
+    fi
+    itf_guest_put "$c_ip" "$post_c_script" /root/itf-j23-post-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-j23-post-c.sh" \
+            > "$ITF_RUN_DIR/guest-post-compute.log" 2>&1 \
+            && grep -q post-compute-ok "$ITF_RUN_DIR/guest-post-compute.log"; then
+        :
+    else
+        wire_ok=0
+        itf_step fail "post-upgrade state [compute]" "see guest-post-compute.log"
+    fi
+    if (( wire_ok )); then
+        itf_step pass "post-upgrade state verified on both hosts" \
+            "current -> $new2; $old and $target_version retained for rollback;" \
+            "node.conf two-node and per-role wiring preserved"
+    else
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage R: an up-to-date two-node system must be told so
+    # ------------------------------------------------------------------
+
+    local uptodate_feed="$ITF_RUN_DIR/upgrade-uptodate-answers.txt"
+    printf '\n' > "$uptodate_feed"
+    local upd_log="$ITF_RUN_DIR/guest-upgrade-uptodate.log"
+    itf_guest_exec_feed "$s_ip" "$uptodate_feed" "$upgrade2_cmd" \
+        > "$upd_log" 2>&1
+    local upd_rc=$?
+    itf_artifact "upgrade-uptodate-transcript" "$upd_log"
+    local upd_active
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    upd_active="$(itf_guest_exec "$s_ip" \
+        'basename "$(readlink /usr/local/lib/zfsutilities/current)"')" || upd_active=""
+    if [[ $upd_rc -eq 0 ]] && grep -q "Nothing to upgrade" "$upd_log" \
+            && [[ "$upd_active" == "$new2" ]]; then
+        itf_step pass "up-to-date rerun is a no-op" \
+            "\"Nothing to upgrade\"; current still $new2"
+    else
+        itf_step fail "up-to-date rerun is a no-op" \
+            "rc=$upd_rc active=${upd_active:-?} — see guest-upgrade-uptodate.log"
+        return 1
+    fi
+
+    # The server's job is done; the EXIT-trap guard then skips.
+    if [[ -n "${J_PIDFILE2:-}" ]]; then
+        itf_http_stop "$J_PIDFILE2"
+        J_PIDFILE2=""
+    fi
+
+    itf_step info "journey stage reached" \
+        "two-node release upgrade validated: premise staged on both hosts," \
+        "decline leaves both untouched, remote baseline capture, per-host" \
+        "scan/salvage/diff, per-host activation, retention, up-to-date rerun"
+    return 0
+}

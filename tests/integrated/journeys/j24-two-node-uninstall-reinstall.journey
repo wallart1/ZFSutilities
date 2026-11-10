@@ -1,0 +1,689 @@
+#!/usr/bin/env bash
+# j24-two-node-uninstall-reinstall.journey — j02's uninstall/reinstall
+# cycle on a real two-node lab that carries LIVE exported LUNs and a VM
+# referencing them (the itf-coverage.md gap row this journey fills).
+#
+# j02 proves the cycle single-node.  Never exercised before:
+#   - uninstall-zfsutilities in two-node mode: --all-nodes pushes the
+#     same purge to the peer host over ssh (the peer's own deployed
+#     copy), the fence units vanish from the compute host (the only
+#     host that carries them), and the purge takes
+#     node.conf/deploy.conf with it.
+#   - the live-LUN contract under a real purge: pools, LIO targets, the
+#     saveconfig bytes, the logged-in session, the compute-side device,
+#     and the PVE VM config referencing the LUN must all survive
+#     unchanged ("iSCSI targets will NOT be touched").
+#   - the reinstall over a live LIO tree: the recurrence fence must
+#     default the IQN prefix to the LIVE targets' prefix (the 2026-10
+#     forked-namespace incident guard), setup-iscsi-targets must find
+#     every target already there, and the pool-resident iscsi-state.json
+#     (the bare-metal recovery authority, written by the j05 lab's
+#     closing safe-iscsi-save) must ride through the purge byte-for-byte
+#     — the reinstalled export-iscsi-state --check then finds the live
+#     tree matching it, and show-lun-map still names the surviving LUN.
+#
+# The lab: the bare j05 two-node sequence (clones, P2P link, root SSH,
+# three pools, install-two-node, VM 101 + its first LUN, safe-iscsi-save).
+# A 1-KiB marker written through the LUN's by-path device on the compute
+# host is the data-continuity oracle: its sha256 must still match after
+# the uninstall, after the reinstall, and after a SECOND disk is created
+# through the reinstalled product.
+#
+# Stage D is the operator's uninstall-intent report: an interactive
+# --dry-run on EACH host (menu, peer question, final confirm) must list
+# what would go, promise the targets stay, name the peer — and change
+# nothing.  On the compute host it must also print the PVE-patch
+# never-reversed note (the patch file only exists there).
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys (ITF_COMPUTE_BASE,
+# ITF_COMPUTE_TEMPLATE_NAME, ITF_ISCSI_*_IP).
+# Snapshots produced: as-cloned (per guest, via j05), pools-created.
+# Both software sources work (release or dev-tarball): the purge removes
+# whatever is deployed and the reinstall runs from the checkout the
+# uninstaller never touches (/root/ZFSutilities).  The release source
+# needs a release that carries the interactive-menu fix (F-049, 0.140.0
+# and later): stage D answers the deployed uninstaller's menu, which no
+# older release can read.
+
+# shellcheck source=j05-two-node-install.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
+
+journey_main() {
+    local vb=/usr/local/lib/zfsutilities
+
+    itf_step info "journey start" \
+        "j24 two-node uninstall/reinstall with live LUNs; composes the j05 lab;" \
+        "sw-source=$ITF_SW_SOURCE"
+
+    # ------------------------------------------------------------------
+    # Stage L: the bare j05 two-node lab (clones -> install -> first LUN)
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main || return 1
+
+    # Records carry a 4th field (the live qm guest name) since the
+    # name-based orphan fence; consume it so it cannot bleed into the IP.
+    local s_vmid s_ip _s_name c_vmid c_ip _c_name
+    # shellcheck disable=SC2034  # name slots unused here
+    read -r _ s_vmid s_ip _s_name < "$ITF_RUN_DIR/guest-storage.txt"
+    # shellcheck disable=SC2034
+    read -r _ c_vmid c_ip _c_name < "$ITF_RUN_DIR/guest-compute.txt"
+    if [[ -n "$s_ip" && -n "$c_ip" ]]; then
+        itf_step pass "lab coordinates recovered" \
+            "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"
+    else
+        itf_step fail "lab coordinates recovered" "guest record files incomplete"
+        return 1
+    fi
+
+    local s_hostname c_hostname
+    s_hostname="$(itf_guest_exec "$s_ip" 'hostname -s' 2>/dev/null)"
+    c_hostname="$(itf_guest_exec "$c_ip" 'hostname -s' 2>/dev/null)"
+    if [[ -n "$s_hostname" && -n "$c_hostname" ]]; then
+        itf_step pass "host labels resolved" \
+            "storage=$s_hostname compute=$c_hostname"
+    else
+        itf_step fail "host labels resolved" \
+            "storage=${s_hostname:-?} compute=${c_hostname:-?}"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage B: baseline evidence — live LIO, records, session, and the
+    # data-continuity marker on the LUN the VM references
+    # ------------------------------------------------------------------
+
+    # Storage: the live target count (the no-new-targets oracle for the
+    # reinstall) and byte-identity baselines for both saveconfig files
+    # (the untouched-LIO oracle) and for the pool-resident state map
+    # (the recovery authority the purge must not touch).
+    local base_s_script="$ITF_RUN_DIR/guest-baseline-storage.sh"
+    cat > "$base_s_script" <<EOF
+set -e
+n=\$(targetcli /iscsi ls 2>/dev/null | grep -c 'iqn\.')
+echo "target-count: \$n"
+test "\$n" -ge 1
+targetcli /backstores/block ls | grep -q vm-101-disk-0
+sha256sum /etc/rtslib-fb-target/saveconfig.json \
+    /etc/rtslib-fb-target/saveconfig-boot.json > /root/itf-j24-saveconfig.sha256
+cat /root/itf-j24-saveconfig.sha256
+zpool list -Ho name
+mnt=\$(zfs list -H -o mountpoint zfstest1/zfsutilities)
+test -s "\$mnt/iscsi-state.json"
+sha256sum "\$mnt/iscsi-state.json" > /root/itf-j24-statemap.sha256
+cat /root/itf-j24-statemap.sha256
+echo baseline-storage-ok
+EOF
+    local base_s_log="$ITF_RUN_DIR/guest-baseline-storage.log"
+    itf_guest_put "$s_ip" "$base_s_script" /root/itf-j24-baseline-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-j24-baseline-s.sh" \
+            > "$base_s_log" 2>&1 \
+            && grep -q baseline-storage-ok "$base_s_log"; then
+        itf_step pass "live-LUN baseline captured [storage]" \
+            "targets + vm-101-disk-0 backstore live; saveconfig + pool-resident" \
+            "iscsi-state.json hashes baselined (see guest-baseline-storage.log)"
+        itf_artifact "baseline-storage" "$base_s_log"
+    else
+        itf_step fail "live-LUN baseline captured [storage]" \
+            "see guest-baseline-storage.log"
+        return 1
+    fi
+    local base_targets
+    base_targets="$(grep -m1 'target-count:' "$base_s_log" | awk '{print $2}')"
+    if [[ "$base_targets" =~ ^[0-9]+$ ]]; then
+        itf_step info "baseline target count" "$base_targets"
+    else
+        itf_step fail "baseline target count" "unparseable: ${base_targets:-?}"
+        return 1
+    fi
+
+    # Compute: the session, the by-path device VM 101 boots its LUN
+    # through, the PVE patch — then the 1-KiB marker written THROUGH the
+    # live session (data continuity is measured end to end).
+    local base_c_script="$ITF_RUN_DIR/guest-baseline-compute.sh"
+    cat > "$base_c_script" <<'EOF'
+set -e
+iscsiadm -m session | grep -q ':3260,'
+byp=$(grep -m1 '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf \
+    | awk '{print $2}' | cut -d, -f1)
+echo "bypath: $byp"
+[[ -n "$byp" && -e "$byp" ]]
+grep -q 'tdiff > 86400' /usr/share/perl5/PVE/Storage/ISCSIPlugin.pm
+head -c 1024 /dev/urandom > /root/itf-j24-marker.bin
+dd if=/root/itf-j24-marker.bin of="$byp" bs=1024 count=1 conv=fsync
+echo baseline-compute-ok
+EOF
+    local base_c_log="$ITF_RUN_DIR/guest-baseline-compute.log"
+    itf_guest_put "$c_ip" "$base_c_script" /root/itf-j24-baseline-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-j24-baseline-c.sh" \
+            > "$base_c_log" 2>&1 \
+            && grep -q baseline-compute-ok "$base_c_log"; then
+        itf_step pass "live-LUN baseline captured [compute]" \
+            "session up, by-path device live, PVE patch present; marker written" \
+            "(see guest-baseline-compute.log)"
+    else
+        itf_step fail "live-LUN baseline captured [compute]" \
+            "see guest-baseline-compute.log"
+        return 1
+    fi
+
+    # The reusable marker oracle: re-derives the device from the VM
+    # config, reads 1 KiB back through the live session, and compares
+    # against the marker file the uninstaller never touches.  Kept as
+    # one guest-side script (not the per-slot itf_lun_marker_* helpers):
+    # it also asserts the session and the scsi0 line, and the survival
+    # script below calls it from inside the guest.
+    local marker_script="$ITF_RUN_DIR/guest-marker.sh"
+    cat > "$marker_script" <<'EOF'
+set -e
+iscsiadm -m session | grep -q ':3260,'
+byp=$(grep -m1 '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf \
+    | awk '{print $2}' | cut -d, -f1)
+echo "bypath: $byp"
+[[ -n "$byp" && -e "$byp" ]]
+got=$(dd if="$byp" bs=1024 count=1 status=none | sha256sum | awk '{print $1}')
+want=$(sha256sum /root/itf-j24-marker.bin | awk '{print $1}')
+echo "marker-want: $want"
+echo "marker-got:  $got"
+[[ "$got" == "$want" ]]
+grep -q '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf
+echo marker-ok
+EOF
+    itf_guest_put "$c_ip" "$marker_script" /root/itf-j24-marker.sh > /dev/null 2>&1
+    local mk_log="$ITF_RUN_DIR/guest-marker-baseline.log"
+    if itf_guest_exec "$c_ip" "bash /root/itf-j24-marker.sh" \
+            > "$mk_log" 2>&1 && grep -q marker-ok "$mk_log"; then
+        itf_step pass "marker readback verifies" \
+            "1 KiB through the live session matches the written bytes"
+    else
+        itf_step fail "marker readback verifies" "see guest-marker-baseline.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage D: the uninstall-intent report — interactive dry runs on BOTH
+    # hosts (menu, peer question, final confirm), zero mutation
+    # ------------------------------------------------------------------
+
+    # Feed: 2 = "clean up everything" (purge), y = also the peer node,
+    # y = proceed.  The dry run must print the intent, not act on it.
+    # The summary's "Peer node:" line names the peer ONLY when the peer
+    # question was accepted (it reads "(local only)" otherwise), so the
+    # marker is that whole line — fixed spacing included.
+    local d_feed="$ITF_RUN_DIR/dryrun-answers.txt"
+    printf '2\ny\ny\n' > "$d_feed"
+
+    local d1_log="$ITF_RUN_DIR/guest-dryrun-storage.log"
+    itf_guest_exec_feed "$s_ip" "$d_feed" \
+        "bash -lc 'uninstall-zfsutilities --dry-run'" > "$d1_log" 2>&1
+    local d1_rc=$?
+    itf_artifact "dryrun-storage-transcript" "$d1_log"
+    local d1_missing
+    d1_missing="$(itf_missing_markers "$d1_log" \
+        "DRY RUN — no changes will be made" \
+        "[DRY-RUN] rm -rf $vb" \
+        "iSCSI targets will NOT be touched" \
+        "Peer node:       $c_hostname" \
+        || true)"
+    if [[ $d1_rc -eq 0 && -z "$d1_missing" ]]; then
+        itf_step pass "dry run reports intent [storage]" \
+            "menu + peer question + confirm walked; purge actions echoed as" \
+            "[DRY-RUN]; targets promised untouched; peer $c_hostname named"
+    else
+        itf_step fail "dry run reports intent [storage]" \
+            "rc=$d1_rc missing:$d1_missing — see guest-dryrun-storage.log"
+        return 1
+    fi
+
+    # The compute-side dry run is where the PVE-patch note lives (the
+    # patch file only exists on the compute host); absolute path — the
+    # PATH wiring's shape on compute is not this step's subject.
+    local d2_log="$ITF_RUN_DIR/guest-dryrun-compute.log"
+    itf_guest_exec_feed "$c_ip" "$d_feed" \
+        "$vb/current/bin/uninstall-zfsutilities --dry-run" > "$d2_log" 2>&1
+    local d2_rc=$?
+    itf_artifact "dryrun-compute-transcript" "$d2_log"
+    local d2_missing
+    d2_missing="$(itf_missing_markers "$d2_log" \
+        "DRY RUN — no changes will be made" \
+        "[DRY-RUN] rm -rf $vb" \
+        "iSCSI targets will NOT be touched" \
+        "will NOT be reversed automatically" \
+        "Peer node:       $s_hostname" \
+        || true)"
+    if [[ $d2_rc -eq 0 && -z "$d2_missing" ]]; then
+        itf_step pass "dry run reports intent [compute]" \
+            "same walk on the peer; the PVE rescan-rate patch is named as" \
+            "NOT reversed automatically (see guest-dryrun-compute.log)"
+    else
+        itf_step fail "dry run reports intent [compute]" \
+            "rc=$d2_rc missing:$d2_missing — see guest-dryrun-compute.log"
+        return 1
+    fi
+
+    # Nothing changed: both deployments still active, targets still live,
+    # session still up, marker still readable.
+    local d_unchanged=1
+    if ! itf_guest_exec "$s_ip" "test -L $vb/current" \
+            > "$ITF_RUN_DIR/guest-dryrun-verify-s.log" 2>&1 \
+            || ! itf_guest_exec "$s_ip" \
+                'targetcli /backstores/block ls | grep -q vm-101-disk-0' \
+                >> "$ITF_RUN_DIR/guest-dryrun-verify-s.log" 2>&1; then
+        d_unchanged=0
+        itf_step fail "dry run left storage untouched" \
+            "see guest-dryrun-verify-s.log"
+    fi
+    local dm_log="$ITF_RUN_DIR/guest-marker-dryrun.log"
+    if itf_guest_exec "$c_ip" "test -L $vb/current" \
+            > "$ITF_RUN_DIR/guest-dryrun-verify-c.log" 2>&1 \
+            && itf_guest_exec "$c_ip" "bash /root/itf-j24-marker.sh" \
+                > "$dm_log" 2>&1 && grep -q marker-ok "$dm_log"; then
+        :
+    else
+        d_unchanged=0
+        itf_step fail "dry run left compute untouched" \
+            "see guest-dryrun-verify-c.log (deployment) and" \
+            "guest-marker-dryrun.log (session/device/marker)"
+    fi
+    if (( d_unchanged )); then
+        itf_step pass "dry runs left both hosts untouched" \
+            "deployments active, targets live, session + marker intact"
+    else
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage U: the real purge — both hosts, live LUNs watching
+    # ------------------------------------------------------------------
+
+    local un_log="$ITF_RUN_DIR/guest-uninstall.log"
+    itf_guest_exec "$s_ip" \
+        "bash -lc 'uninstall-zfsutilities --purge --all-nodes --yes'" \
+        > "$un_log" 2>&1
+    local un_rc=$?
+    itf_artifact "uninstall-transcript" "$un_log"
+    local un_missing
+    # The not-touched promise is printed by the interactive confirmation
+    # only — a --yes run skips that screen by design (Stage D asserts the
+    # sentence where the product states it; the survival asserts below
+    # prove it where it matters).
+    un_missing="$(itf_missing_markers "$un_log" \
+        "Running uninstall on peer node: $c_hostname" \
+        || true)"
+    if [[ $un_rc -eq 0 && -z "$un_missing" ]]; then
+        itf_step pass "purge uninstall completes on both hosts" \
+            "rc=0; the peer leg ran on $c_hostname (see guest-uninstall.log)"
+    else
+        itf_step fail "purge uninstall completes on both hosts" \
+            "rc=$un_rc missing:$un_missing — see guest-uninstall.log"
+        return 1
+    fi
+
+    # Product wiring must be gone on BOTH hosts (j02's scan extended
+    # with the two-node pieces: node.conf, deploy.conf, the node/two-node
+    # /iscsi lib symlinks, cron, logrotate, the rtslib drop-in, the fence
+    # units, and the cache-warm helper).
+    local clean_script="$ITF_RUN_DIR/guest-clean-scan.sh"
+    cat > "$clean_script" <<'EOF'
+set -e
+for p in \
+    /usr/local/lib/zfsutilities \
+    /root/bashinit \
+    /usr/local/lib/node-lib.sh \
+    /usr/local/lib/two-node-lib.sh \
+    /usr/local/lib/iscsi-lib.sh \
+    /usr/local/lib/rootcheck \
+    /etc/profile.d/zfsutilities.sh \
+    /etc/sudoers.d/zfsutilities \
+    /etc/cron.d/zfsutilities \
+    /etc/logrotate.d/zfsutilities \
+    /etc/systemd/system/rtslib-fb-targetctl.service.d \
+    /etc/systemd/system/zfs-cache-warm.service \
+    /etc/systemd/system/zfsutilities-iscsi-fence.service \
+    /etc/systemd/system/zfsutilities-iscsi-fence.timer \
+    /etc/zfsutilities \
+    /var/lib/zfsutilities \
+    /usr/local/bin/warm-cache.sh; do
+    if [[ -e "$p" || -L "$p" ]]; then
+        echo "LEFTOVER: $p"
+        ls -ld "$p" || true
+    else
+        echo "gone: $p"
+    fi
+done
+if bash -lc "command -v zfsdailybackup" >/dev/null 2>&1; then
+    echo "LEFTOVER: zfsdailybackup still on login PATH"
+else
+    echo "gone: zfsdailybackup off login PATH"
+fi
+echo scan-complete
+EOF
+    local clean_ok=1 loop_host gip
+    for loop_host in "$s_hostname (storage)" "$c_hostname (compute)"; do
+        [[ "$loop_host" == *" (storage)" ]] && gip="$s_ip" || gip="$c_ip"
+        itf_guest_put "$gip" "$clean_script" /root/itf-j24-clean.sh > /dev/null 2>&1
+        if itf_guest_exec "$gip" "bash /root/itf-j24-clean.sh" \
+                > "$ITF_RUN_DIR/guest-clean-${gip}.log" 2>&1 \
+                && grep -q scan-complete "$ITF_RUN_DIR/guest-clean-${gip}.log" \
+                && ! grep -q LEFTOVER "$ITF_RUN_DIR/guest-clean-${gip}.log"; then
+            :
+        else
+            clean_ok=0
+            # Positive completion marker: a syntax error or early abort
+            # inside the guest script must fail the step even when no
+            # LEFTOVER line was printed before the abort.
+            if ! grep -q scan-complete "$ITF_RUN_DIR/guest-clean-${gip}.log" 2>/dev/null; then
+                itf_step fail "uninstall left clean state [$loop_host]" \
+                    "scan aborted early — see guest-clean-${gip}.log"
+            else
+                itf_step fail "uninstall left clean state [$loop_host]" \
+                    "see guest-clean-${gip}.log"
+            fi
+        fi
+    done
+    if (( clean_ok )); then
+        itf_step pass "uninstall left clean state on both hosts" \
+            "wiring, versions, configs, state, fence units, drop-ins all gone"
+    else
+        return 1
+    fi
+
+    # The site must have survived the purge: pools online, LIO targets
+    # and the LUN-0 backstore still live, saveconfig bytes IDENTICAL,
+    # pool-resident state map byte-identical too.
+    local surv_s_script="$ITF_RUN_DIR/guest-survive-storage.sh"
+    cat > "$surv_s_script" <<'EOF'
+set -e
+zpool list -Ho name | grep -qx zfstest1
+zpool list -Ho name | grep -qx zfstest2
+zpool list -Ho name | grep -qx zfstest3
+targetcli /iscsi ls 2>/dev/null | grep -q 'iqn\.'
+targetcli /backstores/block ls | grep -q vm-101-disk-0
+sha256sum -c /root/itf-j24-saveconfig.sha256
+sha256sum -c /root/itf-j24-statemap.sha256
+echo survive-storage-ok
+EOF
+    local surv_s_log="$ITF_RUN_DIR/guest-survive-storage.log"
+    itf_guest_put "$s_ip" "$surv_s_script" /root/itf-j24-survive-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-j24-survive-s.sh" \
+            > "$surv_s_log" 2>&1 \
+            && grep -q survive-storage-ok "$surv_s_log"; then
+        itf_step pass "site survived the purge [storage]" \
+            "3 pools online; targets + vm-101-disk-0 backstore live;" \
+            "saveconfig.json + saveconfig-boot.json + the pool-resident" \
+            "iscsi-state.json byte-identical (see guest-survive-storage.log)"
+        itf_artifact "survive-storage" "$surv_s_log"
+    else
+        itf_step fail "site survived the purge [storage]" \
+            "see guest-survive-storage.log"
+        return 1
+    fi
+
+    # Compute side of the survival contract: session still logged in,
+    # device still present, VM config still references the LUN, the PVE
+    # patch was NOT reversed — and the marker bytes came through.
+    local surv_c_script="$ITF_RUN_DIR/guest-survive-compute.sh"
+    cat > "$surv_c_script" <<'EOF'
+set -e
+iscsiadm -m session | grep -q ':3260,'
+grep -q 'tdiff > 86400' /usr/share/perl5/PVE/Storage/ISCSIPlugin.pm
+bash /root/itf-j24-marker.sh
+echo survive-compute-ok
+EOF
+    local surv_c_log="$ITF_RUN_DIR/guest-survive-compute.log"
+    itf_guest_put "$c_ip" "$surv_c_script" /root/itf-j24-survive-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-j24-survive-c.sh" \
+            > "$surv_c_log" 2>&1 \
+            && grep -q survive-compute-ok "$surv_c_log"; then
+        itf_step pass "site survived the purge [compute]" \
+            "session up, by-path device live, VM 101 scsi0 intact, PVE patch" \
+            "kept, marker bytes identical (see guest-survive-compute.log)"
+    else
+        itf_step fail "site survived the purge [compute]" \
+            "see guest-survive-compute.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage R: reinstall on the live site — from the checkout the
+    # uninstaller never touches
+    # ------------------------------------------------------------------
+
+    # Feed, line by line (bin/install-two-node, fresh-config branch —
+    # the purge took node.conf, and the prereq packages SURVIVED the
+    # purge, so run_interactive_prerequisites asks nothing and NO
+    # leading y/y may be fed: an unconsumed y would land in the
+    # storage-hostname prompt and slide every later answer):
+    #   (empty)              storage host short name [default: hostname -s]
+    #   <compute hostname>   compute host short name (required)
+    #   <P2P storage IP>     storage network IP [default 192.168.100.1]
+    #   (empty)              IQN prefix — KEEPS the live targets' prefix
+    #                        (the recurrence fence's default)
+    #   zfstest1/(empty)     pool -> target short name [default]
+    #   zfstest2/(empty)     " "
+    #   zfstest3/(empty)     " "
+    #   (empty)              pool loop: finish
+    #   (empty)              expected LUN count: skip
+    #   (empty)              edit node.conf? (y/N): no
+    #   y/y                  trailing safety for any unexpected ensure_*
+    #                        ask_yn (defaults N; unread input is harmless)
+    local r_feed="$ITF_RUN_DIR/reinstall-answers.txt"
+    local rfeed
+    rfeed="\n${c_hostname}\n${ITF_ISCSI_STORAGE_IP}\n"
+    rfeed+="\n"
+    rfeed+="zfstest1\n\nzfstest2\n\nzfstest3\n\n"
+    rfeed+="\n\n\n"
+    rfeed+="y\ny\n"
+    printf '%b' "$rfeed" > "$r_feed"
+    local r_log="$ITF_RUN_DIR/guest-reinstall.log"
+    itf_guest_exec_feed "$s_ip" "$r_feed" \
+        "cd /root/ZFSutilities && ./bin/install-two-node" > "$r_log" 2>&1
+    local r_rc=$?
+    itf_artifact "reinstall-transcript" "$r_log"
+    local r_missing
+    r_missing="$(itf_missing_markers "$r_log" \
+        "Existing iSCSI targets on this host all use the prefix below" \
+        "Target already exists" \
+        "Compute host: $c_hostname" \
+        "Installation Complete" \
+        || true)"
+    # The summary row "Targets existing:   3" — the label, the product's
+    # column padding ([[:space:]]+), then the count: all three pool
+    # targets were found already present, none created.
+    if [[ $r_rc -eq 0 && -z "$r_missing" ]] \
+            && grep -Eq 'Targets existing:[[:space:]]+3' "$r_log"; then
+        itf_step pass "reinstall completes over the live tree" \
+            "recurrence fence kept the live IQN prefix; all 3 targets found" \
+            "already existing; deployed + activated on both hosts" \
+            "(see guest-reinstall.log)"
+    else
+        itf_step fail "reinstall completes over the live tree" \
+            "rc=$r_rc missing:$r_missing — see guest-reinstall.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage W: wiring restored on BOTH hosts
+    # ------------------------------------------------------------------
+
+    local wire_s_script="$ITF_RUN_DIR/guest-wire-storage.sh"
+    cat > "$wire_s_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test -n "\$cur"
+bash -lc 'command -v zfsdailybackup' >/dev/null
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+grep -q 'STORAGE_HOST="$s_hostname"' /etc/zfsutilities/node.conf
+grep -q 'COMPUTE_HOST="$c_hostname"' /etc/zfsutilities/node.conf
+test -f /etc/systemd/system/rtslib-fb-targetctl.service.d/boot-config.conf
+echo wiring-storage-ok
+EOF
+    local wire_c_script="$ITF_RUN_DIR/guest-wire-compute.sh"
+    cat > "$wire_c_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test -n "\$cur"
+bash -lc 'command -v new-vm-disk' >/dev/null
+grep -q 'NODE_MODE="two-node"' /etc/zfsutilities/node.conf
+test -f /etc/systemd/system/zfsutilities-iscsi-fence.service
+test -f /etc/systemd/system/zfsutilities-iscsi-fence.timer
+test "\$(systemctl is-enabled zfsutilities-iscsi-fence.timer)" = enabled
+systemctl is-active --quiet iscsid.socket
+grep -q 'tdiff > 86400' /usr/share/perl5/PVE/Storage/ISCSIPlugin.pm
+echo wiring-compute-ok
+EOF
+    local wire_ok=1
+    itf_guest_put "$s_ip" "$wire_s_script" /root/itf-j24-wire-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-j24-wire-s.sh" \
+            > "$ITF_RUN_DIR/guest-wire-storage.log" 2>&1 \
+            && grep -q wiring-storage-ok "$ITF_RUN_DIR/guest-wire-storage.log"; then
+        :
+    else
+        wire_ok=0
+        itf_step fail "reinstalled wiring [storage]" "see guest-wire-storage.log"
+    fi
+    itf_guest_put "$c_ip" "$wire_c_script" /root/itf-j24-wire-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-j24-wire-c.sh" \
+            > "$ITF_RUN_DIR/guest-wire-compute.log" 2>&1 \
+            && grep -q wiring-compute-ok "$ITF_RUN_DIR/guest-wire-compute.log"; then
+        :
+    else
+        wire_ok=0
+        itf_step fail "reinstalled wiring [compute]" "see guest-wire-compute.log"
+    fi
+    if (( wire_ok )); then
+        itf_step pass "wiring restored on both hosts" \
+            "versions active, fresh two-node node.conf per host, rtslib drop-in" \
+            "back on storage, fence units re-enabled on compute"
+    else
+        return 1
+    fi
+
+    # One healthy fence tick on the reinstalled unit (check-vm-disk-paths
+    # over the still-live session: rc 0 is the site-whole verdict).
+    if itf_fence_tick "$c_ip" post-reinstall; then
+        itf_step pass "fence tick healthy after reinstall" \
+            "check-vm-disk-paths rc 0 over the surviving session"
+    else
+        itf_step fail "fence tick healthy after reinstall" \
+            "see fence-tick-post-reinstall.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage V: LIO identity + records + real work through the
+    # reinstalled product
+    # ------------------------------------------------------------------
+
+    # No new targets: the count the reinstall left equals the baseline.
+    local now_targets
+    now_targets="$(itf_guest_exec "$s_ip" \
+        'targetcli /iscsi ls 2>/dev/null | grep -c "iqn\."')" || now_targets=""
+    if [[ "$now_targets" == "$base_targets" ]]; then
+        itf_step pass "no IQN fork after reinstall" \
+            "still exactly $base_targets target(s) — the recurrence fence held"
+    else
+        itf_step fail "no IQN fork after reinstall" \
+            "baseline=$base_targets now=${now_targets:-?}"
+        return 1
+    fi
+
+    # The records the purge could not touch, read by the reinstalled
+    # tooling: export-iscsi-state --check compares the live LIO tree
+    # against the pool-resident map (whose byte-survival Stage U
+    # asserted) — no drift means the reinstalled product recovered the
+    # site's records as they were.
+    itf_iscsi_check_gate "$s_ip" j24-post-reinstall || return 1
+
+    # The operator's view from the compute host: show-lun-map (by-path
+    # links filtered by node.conf's pool targets; target/LUN/device rows
+    # — no zvol-name column) still lists the surviving LUN.  Row shape:
+    # the target short name, column padding ([[:space:]]+), the LUN.
+    local map_log="$ITF_RUN_DIR/guest-lunmap.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'show-lun-map'" \
+            > "$map_log" 2>&1 \
+            && grep -Eq 'zfstest1[[:space:]]+lun0' "$map_log" \
+            && grep -q 'Total iSCSI LUNs visible: 1' "$map_log"; then
+        itf_step pass "surviving LUN visible after reinstall" \
+            "show-lun-map lists zfstest1 lun0, total 1 (see guest-lunmap.log)"
+        itf_artifact "lunmap" "$map_log"
+    else
+        itf_step fail "surviving LUN visible after reinstall" "see guest-lunmap.log"
+        return 1
+    fi
+
+    # The documented first post-install step, again: a clean save (the
+    # shared gate requires the product's own clean-pass line, not just
+    # rc 0).
+    itf_safe_save_gate "$s_ip" j24-post-reinstall || return 1
+
+    # Real work through the reinstalled product: a SECOND disk for the
+    # same VM — live LUN 0 must dictate the next slot, nothing existing
+    # may be disturbed, and the marker must still read back after it.
+    local disk_log="$ITF_RUN_DIR/guest-new-disk-1.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk zfstest1 101 1 1G'" \
+            > "$disk_log" 2>&1 \
+            && grep -q "✓ Configuration saved" "$disk_log" \
+            && itf_guest_exec "$c_ip" \
+                "grep -q '^scsi1: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf" \
+            && itf_guest_exec "$s_ip" \
+                'targetcli /backstores/block ls | grep -q vm-101-disk-1'; then
+        itf_step pass "second disk created through the reinstalled product" \
+            "vm-101-disk-1 backstore live, VM 101 scsi1 wired beside the" \
+            "surviving LUN 0 (see guest-new-disk-1.log)"
+        itf_artifact "new-disk-1" "$disk_log"
+    else
+        itf_step fail "second disk created through the reinstalled product" \
+            "see guest-new-disk-1.log"
+        return 1
+    fi
+
+    local rescan_log="$ITF_RUN_DIR/guest-rescan.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'rescan-storage'" \
+            > "$rescan_log" 2>&1; then
+        itf_step pass "rescan-storage after the new LUN" \
+            "rc=0 (see guest-rescan.log)"
+    else
+        itf_step fail "rescan-storage after the new LUN" "see guest-rescan.log"
+        return 1
+    fi
+
+    # The slot the live LUN 0 dictated: the new disk sits at LUN 1 and
+    # the map now shows exactly two LUNs (same row shape as above).
+    local map2_log="$ITF_RUN_DIR/guest-lunmap-2.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'show-lun-map'" \
+            > "$map2_log" 2>&1 \
+            && grep -Eq 'zfstest1[[:space:]]+lun0' "$map2_log" \
+            && grep -Eq 'zfstest1[[:space:]]+lun1' "$map2_log" \
+            && grep -q 'Total iSCSI LUNs visible: 2' "$map2_log"; then
+        itf_step pass "second disk took LUN 1" \
+            "show-lun-map lists zfstest1 lun0 + lun1, total 2" \
+            "(see guest-lunmap-2.log)"
+        itf_artifact "lunmap-2" "$map2_log"
+    else
+        itf_step fail "second disk took LUN 1" "see guest-lunmap-2.log"
+        return 1
+    fi
+
+    # The closing continuity proof: LUN 0's bytes are still the marker's.
+    local fm_log="$ITF_RUN_DIR/guest-marker-final.log"
+    if itf_guest_exec "$c_ip" "bash /root/itf-j24-marker.sh" \
+            > "$fm_log" 2>&1 && grep -q marker-ok "$fm_log"; then
+        itf_step pass "LUN 0 data intact through the whole cycle" \
+            "marker readback matches after uninstall, reinstall, and a" \
+            "second disk creation (see guest-marker-final.log)"
+    else
+        itf_step fail "LUN 0 data intact through the whole cycle" \
+            "see guest-marker-final.log"
+        return 1
+    fi
+
+    itf_step info "journey stage reached" \
+        "two-node uninstall/reinstall with live LUNs validated: intent dry" \
+        "runs on both hosts, purge with peer push, site byte-survival," \
+        "recurrence-fence reinstall, records recovery, fence tick, second disk"
+    return 0
+}

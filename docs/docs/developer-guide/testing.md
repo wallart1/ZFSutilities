@@ -868,8 +868,25 @@ array in bash 5.2.
 exit code 1 when the snapshot is not present in `_mock_zfs_snaps`, so scripts
 that test existence with `! zfs list ...` work correctly.
 * **Combined short options** — The mock parses `-Hp` as combined flags, so
-`zfs get -Hp -o value available pool` resolves the property and dataset
-correctly.
+  `zfs get -Hp -o value available pool` resolves the property and dataset
+  correctly.
+* **Status after assignment, never `|| rc=$?`** — a subshell on the left of
+  `||` runs with errexit ignored, so `out="$(set -e; …)" || rc=$?` cannot
+  observe an abort inside it — and a failing `read` in a loop then spins
+  forever.  Assign first, read `$?` after:
+  `out="$(set -e; …)"; rc=$?` (test-uninstall-zfsutilities carries the
+  pattern).
+* **Interactive prompts need the real `read` at least once** — mocking
+  `read` as a function hides malformed prompt lines: F-049's prompt, split
+  across two quoted arguments, aborted only under the real builtin
+  ("not a valid identifier"), which the mocked tests never saw.  Cover
+  each interactive prompt once through the real builtin over here-string
+  stdin (`present_interactive_dialog <<< "2"` under `set -e`).
+* **Transport mocks must model stdin behavior** — real ssh drains the
+  invoking shell's stdin while the remote command runs, so the upgrade
+  suite's ssh shim does `cat > /dev/null` on the connection establishment
+  leg; without it the multi-host tests cannot see a regression of the
+  `</dev/null` fence around that call (F-048).
 
 ### Python
 

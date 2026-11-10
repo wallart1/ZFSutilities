@@ -372,6 +372,45 @@ release commit.)
   helpers awaits the user's cue. Behavior of both commands is unchanged
   until then.
 
+## 2026-11-09 (later) — j23 two-node release-upgrade journey (user-cued ITF gap)
+
+- The user named the itf-coverage.md gap row "two-node release upgrade
+  (remote-target surface)" — naming is the map's build trigger. Built
+  j23-two-node-release-upgrade.journey: composes the j05 lab, stages
+  old-active on BOTH hosts (template's old tree rsynced to compute +
+  switch-version both sides), then two upgrade passes — (1)
+  trust-on-first-upgrade with local AND remote baseline capture,
+  (2) re-labeled release + per-host MOD/ADD/DEL injections with remote
+  rsync diff pull and per-host salvage. Decline leg asserts BOTH hosts
+  untouched (find -newer marker — the lab already carries the target
+  version dir, so existence proves nothing). dev-tarball only.
+- GREEN 2026-11-10 (run-20261110-003751, 56 pass / 0 fail, guests
+  destroyed at verdict) after three fix iterations:
+  1. Stage O rollback needs ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 on
+     the compute side (no archived pre-0.125.0 config there — the
+     fence is correct; storage restores its archived generation).
+  2. F-048 (see FINDINGS.md): the per-host SSH control-master
+     establishment drains stdin — the archive prompt read EOF under
+     the piped feed and declined; fixed with `</dev/null` in
+     bin/upgrade-zfsutilities open_ssh_master. This is the defect the
+     journey existed to find.
+  3. compute MOD target must be a real tree file
+     (docs/docs/commands-and-modules/two-node.md — the top-level
+     docs/docs/two-node.md path does not exist; >> onto it made an
+     ADD, correctly).
+- common.sh: `itf_journey_stage_upgrade_env` gained `--guest-ip`
+  (two-guest journeys; J_GUEST_IP holds the last clone otherwise);
+  served-release detail text no longer claims a pristine under
+  ITF_UPGRADE_BASELINE=none. j10/j12/j19 call sites unchanged.
+- itf_journey_verify_installed asserts single-node node.conf — unusable
+  on two-node guests; j23 carries its own per-role wiring verifies.
+- test-itf-driver's committed-journey loop had drifted (no j22) — j22
+  and j23 both added.
+- Coverage map: Two-node release-upgrade cell filled, gap bullet
+  retired. The other two gap rows stay (not named).
+- pkill -f self-match gotcha (again): a pkill whose pattern appears in
+  the wrapping bash -c line kills the compound command mid-flight.
+
 ## 2026-11-10 — Development-cycle wrap-up and 0.140.0 release
 
 - Wrap-up sequence on the working tree (0.139.0 + wrap-up-step fixes;
@@ -3731,3 +3770,162 @@ at the next release prune)*
 - End-user headline: encrypted-VM archives/restores under a rate cap
   work again; archive progress shows on the terminal; Rewrite Data file
   lists live in their own log; cancelled runs stay in Tasks.
+
+*(lane history block, unioned at the 0.140.0 pub3-lane merge — pruned
+at the next release prune)*
+
+## 2026-11-10 (pub3): j24 — two-node uninstall/reinstall with live LUNs
+
+- The itf-coverage gap row "Uninstall/reinstall with live LUNs" was
+  named by the user (the uninstall-intent report it waited for); built
+  j24-two-node-uninstall-reinstall (composes the bare j05 lab): intent
+  dry-runs on EACH host (interactive menu + peer question + confirm,
+  zero mutation), real `--purge --all-nodes --yes` with per-host clean
+  scans while the site survives byte-for-byte (pools, targets, both
+  saveconfig hashes, pool-resident iscsi-state.json, session, by-path
+  device, VM 101 scsi line, PVE patch, 1-KiB marker through the LUN),
+  reinstall over the live tree (recurrence fence keeps the live IQN
+  prefix; targets found existing; wiring + fence units back), then
+  healthy fence tick, show-lun-map resolves the surviving LUN, clean
+  safe-iscsi-save, and a second disk through the reinstalled product
+  with the marker still matching. GREEN: run-20261110-023946
+  (54 pass/0 fail/8 info after 2 red iterations + 1 lab-clone run).
+- F-049 (verified): the interactive uninstall menu was UNANSWERABLE
+  everywhere — the 1/2/c read was split across two quoted args, bash
+  parsed the second as a variable name and aborted rc 1 before any
+  choice; --yes paths (j02, unit suites) never reach the menu. Fixed
+  (menu_prompt string ahead of the read); test-uninstall-zfsutilities
+  green; the green j24 run walked the menu on both hosts.
+- Journey gotchas fixed en route: PVE VM-config disk lines carry
+  `,format=raw,...` options after the device (strip with cut -d, -f1);
+  show-lun-map prints target/LUN/device rows with NO zvol-name column;
+  the "targets will NOT be touched" sentence prints only in the
+  interactive confirmation — a --yes transcript legitimately omits it.
+- Docs: itf-coverage row filled + gap row removed; journeys README
+  Current-set row; integrated-testing two-node bullet; GLOSSARY gained
+  "recurrence fence". Driver test lists j24 (test-itf-driver 60/60).
+
+## 2026-11-10 (pub3): j25 — two-node interrupted upgrade with keys pending
+
+- The LAST itf-coverage gap row (named by the user). Built
+  j25-two-node-interrupted-upgrade-keys: composes the j05 lab with
+  --encrypted-keys, baselines the healthy site (1-KiB markers through
+  BOTH LUNs, keystatus available, --check green, sha256 baselines over
+  both saveconfigs + the pool-resident map), injects the shared per-host
+  mods, reboots storage keys-absent (journal PENDING oracle; session
+  re-login unaided; plain LUN serving; encrypted link classified), then
+  j12's injections at two-node scale with the fence timer parked:
+  X1 SIGTERM at the scan marker, X2 SIGKILL at the local version-dir
+  mkdir, X3 SIGKILL during the REMOTE sync (the two-node-specific leg,
+  classified absent/partial/complete). Recovery re-run with keys still
+  pending repairs both hosts (manifest verifies via sha256sum -c);
+  activation on both hosts leaves the posture byte-identical (--check
+  rc 3, survival hashes, plain marker); one manual tick of the upgraded
+  fence under keys pending (classified); up-to-date rerun; key ceremony
+  rebuilds the encrypted LUN on the upgraded tree, both markers read
+  back, --check green, healthy tick, clean save. GREEN:
+  run-20261110-115506 (121 pass/0 fail/14 info; 2 red iterations
+  first — see the gotchas). Guests destroyed at verdict.
+- Premise design: NO stale-template rollback — the lab runs the tree
+  under test, so the rollback would boot a keys-absent site with
+  pre-encrypted-LUN tooling. New staging mode instead:
+  itf_journey_stage_upgrade_env --relabel → serves the same tree
+  re-labeled one patch newer (j23 pass 2's shape; the tag/VERSION
+  mismatch WARN asserted honest), so interrupted deploys target
+  versions/<v> dirs that exist on no host — j12's partial-dir oracles
+  stay deterministic. Shared stages extracted (j23 converted + fresh
+  re-proof run): itf_journey_stage_upgrade_relabel (also j23 pass 2's
+  stage now), itf_journey_stage_two_node_mods (j23's per-host set),
+  itf_lun_marker_write/verify (j24's marker, per-disk, rc-only verify).
+  j23 re-proof GREEN: run-20261110-121228 (57 pass/0 fail/7 info,
+  fresh clones — the shared relabel + mods stages ran inside its pass
+  2, salvage hashes matched through the J_MOD_* exports; guests
+  destroyed at verdict).
+- Live truths from the green run: the SIGTERM EXIT trap closes the SSH
+  control masters too (mux count 0 — pgrep '\[mux\]' is the detector;
+  daemonized masters retitle their argv so ControlPersist does NOT
+  match); X3 landed a genuine partial remote sync (compute held 235 of
+  436 paths; rsync ships root-level files FIRST — compute-manifest was
+  present while subtrees were missing, so file-count/missing-dir is the
+  classification, never manifest-presence); the encrypted by-path link
+  survives the keys-absent reboot as a STALE node and the fence tick
+  reads rc 0 through it (R-02/R-03 blindness, classified not a finding);
+  with the tick rc 0 no reconcile ran, so saveconfig kept the encrypted
+  records and recover used the saveconfig index DIRECTLY (the
+  map-fallback branch is j18 S16's coverage); activation's enable --now
+  RESTARTS the parked fence timer — re-park after activation.
+- Journey gotchas fixed en route: bash line-continuation after a
+  variable assignment is VAR=val COMMAND, not concatenation — use +=
+  (shellcheck misses it unless the string ends with ')' — hit TWICE,
+  first in J_UPGRADE_ENV_EXPORTS lacking the trailing newline that
+  j12's wrapper-concatenation contract needs); pgrep -f self-matches
+  the probing shell (use [j] pattern); the driver suite invokes each
+  test explicitly (new tests need invocation lines before test_summary
+  — a missing line silently skips them).
+- Docs: itf-coverage Release-upgrade two-node cell += j25, gap section
+  now empty; integrated-testing j25 paragraph + j23 shared-stage note;
+  journeys README Current-set row + the j25-needs-no-staleness note in
+  the stale-template section; universe.tsv lifecycle comment j23-j25.
+  test-itf-lab-stages grew 5 tests (relabel stage, relabel gates, mods
+  stage, LUN markers); test-itf-driver lists j25 + 4 pre-existing
+  shellcheck infos fixed with reasoned disables (SC2086 env-words,
+  SC2016 child script, SC2012 fixture ls ×2).
+
+## 2026-11-10 — 0.140.0 wrap-up (pub3)
+
+- Wrap-up review of the j23/j24/j25 drop (three parallel deep reads +
+  mechanical passes) found journeys asserting less than their step
+  text claimed. Fixed and re-verified live, fresh runs of all three
+  journeys green:
+  - j23: the decline stage stamped its marker AFTER the declined run
+    (vacuous find -newer) and pass 1 proved "deployed" with a
+    MANIFEST the j05 install had already written — both oracles now
+    ride the deployed MANIFEST's recorded mtime (equal = nothing
+    re-deployed, changed = really deployed; the remote rsync carries
+    the storage-side mtime, verified live).
+  - j24: `is-enabled | grep -q enabled` also matched "disabled" (now
+    an exact string test); the peer proof was two loose strings (now
+    the binding summary line "Peer node:       <peer>" — it reads
+    "(local only)" when the peer is declined); the dry-run untouched
+    check never looked at the compute deployment; the state map's
+    "intact" was a non-empty test (now sha256-baselined and
+    byte-checked across the purge); show-lun-map was credited for
+    reading the pool map it never reads (export-iscsi-state --check
+    added post-reinstall; the second disk's LUN-1 slot now proven
+    through the map).
+  - j25: the post-activation posture was judged while the fence timer
+    that activation had just restarted could still be ticking — the
+    journal slice proves the tick fires the same second as activation
+    (enable --now + elapsed OnBootSec fires immediately). Activation
+    now re-parks and drains the tick before the wiring/posture
+    checks, and the absent-link shape tolerates the tick's documented
+    saveconfig re-save (F-042's healed shape; the pool map must stay
+    byte-identical — _j25_posture takes saveconfig-may-drift).
+- All three journeys select the loop role by the " (storage)" suffix
+  (a compute hostname containing "storage" used to send every loop to
+  the storage guest); _j2N_missing_markers hoisted into common.sh as
+  itf_missing_markers; the mods stage refuses empty injection hashes
+  and its pass text names the real file it modifies.
+- Unit coverage for both product fixes (each was mock-blind):
+  test-uninstall-zfsutilities drives the interactive menu through the
+  REAL read builtin over here-string stdin (a mocked read cannot see
+  a malformed prompt line — F-049's shape); the upgrade suite's ssh
+  shim now models OpenSSH's stdin drain on the connection
+  establishment leg, making the multi-host flow the F-048 regression
+  test. Both red-proofed by temporarily reverting each product fix —
+  exactly the new test fails — with the product files restored
+  byte-identical afterwards. Red-run gotcha: take a subshell's status
+  AFTER the assignment, never with `|| rc=$?` (errexit-ignored
+  context; the failing read otherwise spins the menu loop forever —
+  documented in testing.md's Tips).
+- Suite audit: two never-invoked tests found and registered
+  (zfsscruball's default STATEFILE; send-receive-holds'
+  user-hold-blocks-destructive — the holds-before-destroy safety
+  holds); a product-wide grep found no other malformed-read shapes.
+- PREEXISTING += 5 entries: the printed remote activation command
+  needs a login shell (product); upgrade's no-baseline state is never
+  assigned, so a failed baseline capture dies "unbound variable"
+  (product); j13 reads the 4-field guest record into three variables
+  (harness); j05's lease re-acquire rewrites guest-j05-storage.txt
+  instead of the role-named record (harness); over-100-column lines
+  remain in common.sh and the older journeys (j15/j16/j17/j20).

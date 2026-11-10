@@ -149,6 +149,7 @@ test_pause_scrubs_in_progress() {
 # Run
 # ---------------------------------------------------------------------------
 old_mydir="$mydir"
+test_default_statefile_path
 test_scrub_runs_selected_pool
 test_resume_skips_completed_pools
 test_pause_scrubs_in_progress

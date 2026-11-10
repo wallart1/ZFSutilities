@@ -385,10 +385,14 @@ present_interactive_dialog() {
         log_msg "INFO:"
     fi
 
-    local choice
+    local choice menu_prompt
+    # One prompt string built ahead of the read: a read line split across
+    # two quoted arguments makes bash parse the second as a variable name
+    # ("not a valid identifier") and the menu can never be answered.
+    menu_prompt="Choose 1 (software only) or 2 (clean up everything), "
+    menu_prompt+="or c to cancel [1/2/c]: "
     while true; do
-        read -rp "Choose 1 (software only) or 2 (clean up everything)," \
-            " or c to cancel [1/2/c]: " choice
+        read -rp "$menu_prompt" choice
         case "${choice,,}" in
             1|software)
                 do_purge="false"

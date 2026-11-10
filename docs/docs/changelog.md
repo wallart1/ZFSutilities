@@ -61,7 +61,17 @@
   appears in the Logs tab under Miscellaneous (type `rewrite`) and is
   rotated weekly by logrotate with `copytruncate`, because a rewrite
   holds the log open for hours.
-
+- **ITF journeys j23/j24/j25 — the last coverage-map gap rows.** j23
+  walks the two-node release upgrade end to end (remote scan, salvage,
+  baseline capture over per-host SSH masters, per-host activation);
+  j24 uninstalls both hosts with live LUNs — the site (pools, targets,
+  session, VM disk, a data marker) survives byte-for-byte, then the
+  reinstall over the live tree holds the IQN recurrence fence; j25
+  kills a two-node upgrade three ways while encryption keys are
+  pending and proves the recovery, the activation, and the key
+  ceremony on the upgraded tree. New shared stages in
+  `common.sh`: the relabel upgrade mode, the per-host modification
+  set, and the through-the-LUN data markers.
 ### Fixed
 
 - **`remove-vm` no longer treats replicated backup copies as VM disks.**
@@ -117,7 +127,18 @@
   Pools tab now size to their rows up to 20 and scroll inside beyond
   that. The Pools, Datasets, and Restore pages scroll as a whole when
   the window is shorter than the page instead of squeezing their tables.
-
+- **The interactive uninstall menu could never be answered.** Without
+  `--yes`, `uninstall-zfsutilities` printed its 1/2/c menu and then
+  aborted with "not a valid identifier": the prompt was split across
+  two quoted arguments, so bash parsed the second half as a variable
+  name. Every `--yes` path skipped the menu, which is why only a
+  two-node journey caught it (F-049).
+- **A two-node upgrade under piped input aborted with "Nothing was
+  changed."** Opening the per-host SSH control connection drained the
+  script's standard input, so the "Archive the changes?" question read
+  end-of-file and declined by default (F-048). Terminal use was never
+  affected; the connection is now established with its stdin on
+  /dev/null.
 ### Changed
 
 - **`archive-vm` narrates its own run; child scripts speak only when
@@ -198,7 +219,6 @@
 - **`zfsretain` dry-run banner.** The 40-word preview caveat is now
   `INFO: Dry run: shows what a real run would delete.` The detail moved
   to the messages manual.
-
 ### Tests
 
 - `remove-vm` gains replica-coverage tests in all three match shapes:
@@ -236,7 +256,26 @@
   log, the logrotate stanza, the version 32 migration, and the page
   scrolling. A shared fixture points run history at a per-test file, so
   no test writes the host's history.
-
+- Journey assertions hardened after a code-review pass, re-verified
+  live: j23's declined-upgrade and pass-1 "deployed" checks ride the
+  deployed MANIFEST's recorded timestamps; j24's timer check is an
+  exact string test, its peer proof is the binding summary line, the
+  dry-run untouched check includes the compute deployment, the
+  pool-resident state map is hash-compared across the purge, the
+  reinstall is checked with `export-iscsi-state --check`, and the LUN
+  map proves the second disk took LUN 1; j25 waits out the fence tick
+  that activation's timer restart fires before judging the posture
+  (the tick really fires the same second — journal-verified), with the
+  absent-link shape tolerating the tick's documented saveconfig
+  re-save.
+- Unit regression tests for both fixes above, each red-proofed: the
+  uninstall menu is driven through the real read builtin (a mocked
+  read hid the malformed prompt), and the upgrade suite's ssh shim now
+  models OpenSSH's stdin drain so the multi-host flow catches a
+  regression of the `</dev/null` fence.
+- Two never-invoked tests were registered and pass: zfsscruball's
+  default STATEFILE, and the user-hold-blocks-destructive-copy safety
+  in the send-receive-holds suite.
 ### Documentation
 
 - New **Terminal message-level gate** section in the architecture guide;
