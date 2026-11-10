@@ -415,6 +415,7 @@ test_full_copy_keeps_dest_precreate_for_plain_filesystem() {
 # ---------------------------------------------------------------------------
 
 test_full_copy_preserves_destination_holds
+test_user_hold_blocks_destructive_full_copy
 test_incremental_run_skips_hold_preservation
 test_dry_run_skips_hold_preservation
 test_capture_failure_aborts_before_any_transfer

@@ -399,6 +399,86 @@ that support profile selection take it at run time
   degrades honestly (no pristine source exists for an untagged
   version). Then `switch-version` and wiring verification, as in j10.
 
+  **j23-two-node-release-upgrade** covers the remote half none of the
+  above touches: the upgrade driven from a storage host whose
+  `deploy.conf` groups name a compute host. The journey composes the
+  j05 lab, then stages the never-upgraded site — the stale template's
+  old tree is pushed to the compute host and `switch-version`'d on
+  both hosts, so every deployment target runs old-active. A declined
+  download offer must change nothing on either target — the deployed
+  `MANIFEST.sha256` timestamps recorded beforehand prove no re-deploy
+  (the j05 install already left the target version dir in place, so
+  its mere existence proves nothing). Pass 1 walks
+  trust-on-first-upgrade with no pristine source: baseline manifests
+  are captured on the local tree *and* over ssh on the compute host,
+  the new version deploys to every target without activation — proven
+  by that manifest being rewritten on both hosts — and both printed
+  switch-version commands are then run through a login shell (the
+  product PATH is profile.d wiring). Pass 2
+  re-labels the served release one patch newer (the VERSION/tag
+  mismatch WARN asserted as honest) and injects per-host modifications
+  — storage modified+added, compute modified+added+removed. The scan
+  must list each host under its own section, pull the compute host's
+  changed files back over rsync to render unified diffs, and archive
+  salvage copies carrying local content on each host. The journey
+  finishes with per-host activation, version retention, and the
+  up-to-date rerun. It runs under `ITF_SW_SOURCE=dev-tarball` only:
+  both passes point at an itf-served "latest release", and pass 2
+  rewrites it — impossible against real GitHub. Its pass-2 re-label
+  and per-host modification staging live as shared stages in
+  `common.sh` (`itf_journey_stage_upgrade_relabel`,
+  `itf_journey_stage_two_node_mods`) — j25 composes them for its own
+  premise.
+
+  **j25-two-node-interrupted-upgrade-keys** closes the coverage map's
+  last gap row: j12's injections against the encrypted two-node lab
+  with keys *pending*. The lab is installed from the tree under test,
+  so a stale-template rollback would boot a keys-absent site with
+  pre-encrypted-LUN tooling; instead the staging runs in relabel mode
+  (`itf_journey_stage_upgrade_env --relabel`) and serves the same tree
+  one patch newer — every interrupted deploy targets a
+  `versions/<v>` that exists on no host, so the partial-dir oracles
+  stay deterministic. After the healthy baseline is proven (markers
+  written through BOTH LUNs, keystatus available, `--check` green,
+  sha256 baselines over both saveconfig files plus the pool-resident
+  state map), storage reboots with the key device absent: the boot
+  journal must read PENDING, the session re-logs in unaided, the plain
+  LUN keeps serving its marker, and the encrypted link is classified
+  (a stale device node — the R-02/R-03 shape, never read while
+  pending — or absent). Three injections then fire with the compute
+  fence timer parked (j16/j18 scenario hygiene): a SIGTERM at the scan
+  marker must run the EXIT trap — staging gone AND both SSH control
+  masters closed — with nothing deployed, salvaged, or activated on
+  either host; a SIGKILL at the local version-dir mkdir leaves the
+  partial dir without `MANIFEST.sha256` on storage beside salvage
+  archives on BOTH hosts (remote salvage precedes deploy); and a
+  SIGKILL aimed at the remote sync (local MANIFEST present, compute
+  dir appearing) leaves storage complete and the compute dir
+  classified absent, partial, or complete (the sync finished before
+  the kill). The recovery re-run, still
+  keys-pending, must do the full per-host scan/salvage/diff walk,
+  repair both version dirs in place (`sha256sum -c MANIFEST.sha256`
+  clean on both hosts), and stop before activation. Per-stage oracles
+  hold throughout: `--check` exits 3 with every drift line
+  keys-pending, the survival hashes stay byte-identical, and the
+  plain-LUN marker still reads. Activating both hosts with the printed
+  commands (login-shell wrapped) must leave that posture untouched —
+  the gap's core: nothing in the upgrade path may write iSCSI state
+  while keys are pending. Activation restarts the fence timer and its
+  tick fires at once, so the journey parks the timer again and waits
+  the tick out before judging; in the absent-link shape that tick's
+  documented saveconfig re-save is tolerated (F-042's healed shape —
+  the pool map must stay byte-identical).
+  One manual fence tick then runs the upgraded fence under keys
+  pending (classified: rc 0 through the stale node, or rc 1 naming
+  only the encrypted LUN with the pool map preserved), and the
+  up-to-date rerun is a no-op. The closing key ceremony rebuilds the
+  encrypted LUN on the upgraded tree — the saveconfig index directly,
+  or the map-recorded fallback when a keys-pending tick save dropped
+  the record — and both markers read back byte-exact before the
+  `--check` gate, a healthy tick, and a clean `safe-iscsi-save` close
+  the run. Like j23 it is dev-tarball only.
+
 ## Fast re-verification: `journey run --rerun`
 
 Fix-verify loops are the daily reality of the repair workflow, and the
@@ -590,6 +670,38 @@ The cycle-2 journeys model the production two-node layout (storage node
   failure reason printed — the fence against the vacuous
   `LIVE PASS`-against-nothing incident (2026-10-22). Requires
   `ITF_SW_SOURCE=dev-tarball` because it verifies working-tree repairs.
+- **j24-two-node-uninstall-reinstall** composes the same lab and walks
+  j02's cycle at two-node scale with the LUNs live and VM 101
+  referencing one. Interactive `--dry-run`s on *each* host are the
+  uninstall-intent report: the menu, peer question, and confirm walk
+  through, the purge actions echo as `[DRY-RUN]`, the targets are
+  promised untouched, and the compute leg prints the PVE-patch
+  never-reversed note (the patch file only exists there) — with zero
+  mutation, proven afterwards. The real `--purge --all-nodes --yes`
+  pushes the peer leg over ssh, and the journey then asserts both
+  halves of the contract at once: every product wire is gone on both
+  hosts (j02's scan plus node.conf, deploy.conf, the lib symlinks, the
+  fence units, the rtslib drop-in), while the *site* survives
+  byte-for-byte — pools online, LIO targets and the LUN-0 backstore
+  live, both saveconfig files and the pool-resident
+  `iscsi-state.json` (the bare-metal recovery authority)
+  hash-identical, the
+  session still logged in, the by-path device present, VM 101's scsi
+  line unchanged, and a 1-KiB marker written through the LUN still
+  reading back. The reinstall runs from the checkout the uninstaller
+  never touches, over the live LIO tree: the recurrence fence must
+  default the IQN prefix to the live targets' (no namespace fork —
+  target count is compared against the baseline), `setup-iscsi-targets`
+  must find every target already existing, and the wiring, fence units,
+  and a healthy fence tick return. `export-iscsi-state --check`
+  finds the live tree matching the pool-resident records, a clean
+  `safe-iscsi-save` refreshes them, `show-lun-map` still lists the
+  surviving LUN, and a second disk created through the reinstalled
+  product takes LUN 1 beside the untouched LUN 0 (the map then lists
+  exactly two LUNs) — marker readback still matching. Both software
+  sources work once the deployed release carries the interactive-menu
+  fix (F-049, 0.140.0 and later); an older release's uninstaller
+  cannot answer its own menu.
 
 ## Recovery-scenario lab layer
 

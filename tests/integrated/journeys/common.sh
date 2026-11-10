@@ -72,6 +72,16 @@
 #       itf_wait_vm_disk_links, itf_compute_fallout_sample,
 #       itf_fence_tick, itf_vm_evidence, itf_new_vm_disk_encrypted,
 #       itf_safe_save_gate, itf_iscsi_check_gate, itf_keystatus.
+#   Release-upgrade stages (j10/j12/j19/j23/j25):
+#       itf_journey_stage_upgrade_env (premise, the user's download,
+#       change-scan baseline, served release; --guest-ip for two-guest
+#       labs, --relabel for a lab installed from the tree under test),
+#       itf_journey_stage_upgrade_relabel (the same tree served one
+#       patch newer + the pristine of the active tree),
+#       itf_journey_stage_two_node_mods (the per-host modification set).
+#   Assertion helpers: itf_missing_markers (fixed-string transcript
+#       markers), itf_lun_marker_write / itf_lun_marker_verify (the
+#       through-the-LUN data-continuity oracle).
 #
 # Stages remember their guest in $ITF_RUN_DIR/guest.txt (base + vmid,
 # + IP once discovered); a --role R labels it per-guest instead
@@ -978,15 +988,37 @@ EOF
     return 0
 }
 
-# itf_journey_stage_upgrade_env <gname>
+# itf_missing_markers <log> <marker>...
+#
+# Prints " [marker]..." for every marker absent from the log (fixed
+# strings — the product's own spacing and em-dashes are part of the
+# contract a transcript assertion checks).  rc is irrelevant; the
+# caller judges by the output (empty = every marker present).
+itf_missing_markers() {
+    local log="$1"
+    shift
+    local marker missing=""
+    for marker in "$@"; do
+        grep -qF -- "$marker" "$log" || missing+=" [$marker]"
+    done
+    printf '%s' "$missing"
+}
+
+# itf_journey_stage_upgrade_env <gname> [--guest-ip <ip>] [--relabel]
 #
 # The shared release-upgrade staging, factored from j10: the upgrade
 # premise (active version strictly older than the tree under test), the
 # user's download of the tree under test, the change-scan baseline for
 # the OLD version, and the itf HTTP server (the dev-tarball "latest
 # release"; the pristine baseline when the old version's GitHub tag is
-# missing) with its abort-path cleanup trap.  Requires J_GUEST_IP —
-# run itf_journey_stage_from_template first.  Sets globals:
+# missing) with its abort-path cleanup trap.
+#   --guest-ip <ip>  the guest to stage; defaults to J_GUEST_IP (run
+#                    itf_journey_stage_from_template first).  Two-guest
+#                    journeys must pass the storage guest explicitly.
+#   --relabel        dev-tarball only: the premise becomes version
+#                    EQUALITY (the lab runs the tree under test) and the
+#                    staging ends in itf_journey_stage_upgrade_relabel.
+# Sets globals:
 #   J_ACTIVE_VERSION      the deployed (old) version
 #   J_TARGET_VERSION      the tree-under-test version
 #   J_UPGRADE_CMD         full upgrader invocation (cd + env + command)
@@ -994,7 +1026,35 @@ EOF
 #                         that background the upgrader themselves
 itf_journey_stage_upgrade_env() {
     local gname="$1"
-    local guest_ip="${J_GUEST_IP:?itf_journey_stage_from_template must run first}"
+    shift
+    # Two-guest journeys (j23) pass the storage guest explicitly: the
+    # second itf_journey_stage_from_template call overwrites J_GUEST_IP
+    # with the compute guest's address.  Single-guest journeys keep the
+    # historical no-argument form (J_GUEST_IP from their one clone).
+    # --relabel (dev-tarball only, j25): the lab is installed from the
+    # tree under test, so the premise is version EQUALITY and the served
+    # release ends up re-labeled one patch newer by
+    # itf_journey_stage_upgrade_relabel — the interrupted/second pass
+    # deploys a versions/<v> dir that exists on no host yet.
+    local guest_ip="${J_GUEST_IP:-}" relabel=0
+    while (( $# > 0 )); do
+        case "$1" in
+            --guest-ip) guest_ip="$2"; shift 2 ;;
+            --relabel) relabel=1; shift ;;
+            *) echo "itf: unknown itf_journey_stage_upgrade_env option: $1" >&2; return 2 ;;
+        esac
+    done
+    if [[ -z "$guest_ip" ]]; then
+        echo "itf: itf_journey_stage_upgrade_env needs --guest-ip or a prior" \
+            "itf_journey_stage_from_template (J_GUEST_IP)" >&2
+        return 2
+    fi
+    if (( relabel )) && [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — the relabel mode serves a fake" \
+            "\"latest release\" one patch newer; real GitHub cannot be re-labeled"
+        return 1
+    fi
     local vb=/usr/local/lib/zfsutilities
 
     # --- The upgrade premise: active version strictly older than the
@@ -1030,7 +1090,19 @@ itf_journey_stage_upgrade_env() {
     local oldest
     oldest="$(printf '%s\n%s\n' "$active_version" "$target_version" \
         | LC_ALL=C sort -V | head -1)"
-    if [[ "$active_version" != "$target_version" && "$oldest" == "$active_version" ]]; then
+    if (( relabel )); then
+        if [[ "$active_version" == "$target_version" ]]; then
+            itf_step pass "relabel premise holds" \
+                "the guest runs $active_version — the tree under test;" \
+                "the served release gets re-labeled one patch newer below"
+        else
+            itf_step fail "relabel premise holds" \
+                "guest runs $active_version, tree under test is $target_version —" \
+                "the relabel mode needs a lab installed from THIS tree (j23's" \
+                "stale-template rollback is the older-version premise instead)"
+            return 1
+        fi
+    elif [[ "$active_version" != "$target_version" && "$oldest" == "$active_version" ]]; then
         itf_step pass "upgrade premise holds" \
             "$active_version (deployed) < $target_version (tree under test)"
     else
@@ -1067,7 +1139,12 @@ itf_journey_stage_upgrade_env() {
             "$tag_url" 2>/dev/null)" || tag_http=""
     fi
     local dev_ip="" serve_dir=""
-    if [[ "${ITF_UPGRADE_BASELINE:-}" == "none" ]]; then
+    if (( relabel )); then
+        itf_step info "change-scan baseline available" \
+            "relabel mode: no baseline provisioned here — the relabel stage" \
+            "below captures the pristine of the deployed active tree (diff" \
+            "rendering); the scan reads the active tree's own MANIFEST"
+    elif [[ "${ITF_UPGRADE_BASELINE:-}" == "none" ]]; then
         itf_step info "change-scan baseline available" \
             "ITF_UPGRADE_BASELINE=none — no pristine source provisioned;" \
             "the upgrade captures its own baseline from the active tree (F-025)"
@@ -1191,6 +1268,8 @@ EOF
             local served_what="pristine v$active_version baseline"
             [[ "$ITF_SW_SOURCE" == "dev-tarball" ]] \
                 && served_what="latest.json + v$target_version tarball + $served_what"
+            [[ "${ITF_UPGRADE_BASELINE:-}" == "none" ]] \
+                && served_what="latest.json + v$target_version tarball (no pristine: baseline=none)"
             itf_step pass "served release ready" \
                 "$served_what at http://${dev_ip}:${ITF_HTTP_PORT}/"
         else
@@ -1199,6 +1278,13 @@ EOF
             J_PIDFILE2=""
             return 1
         fi
+    fi
+    if (( relabel )); then
+        # The re-label stage owns the rest: the pristine of the deployed
+        # active tree, the one-patch-newer latest.json, and the J_*
+        # exports for the re-labeled invocation.
+        itf_journey_stage_upgrade_relabel "$guest_ip" || return 1
+        return 0
     fi
     # Env assignments sit on the upgrader invocation itself: a prefix on
     # the leading cd would apply only to the cd.
@@ -1224,6 +1310,187 @@ EOF
     J_UPGRADE_CMD="$upgrade_cmd"
     # shellcheck disable=SC2034  # consumed by the journey scripts
     J_UPGRADE_ENV_EXPORTS="$env_exports"
+    return 0
+}
+
+# itf_journey_stage_upgrade_relabel <guest-ip>
+#
+# The pass-2 re-label of a running upgrade staging (j23 pass 2, j25's
+# relabel premise): point the served "latest release" one patch NEWER
+# than the guest's active version, and provision the pristine tarball of
+# that active deployed tree for diff rendering — captured BEFORE any
+# local modifications are injected, so it is pristine by construction.
+# The upgrade that targets the re-labeled tag deploys a versions/<v> dir
+# that exists on no host yet, keeping partial-deploy oracles
+# deterministic.  The downloaded tree's VERSION still names the active
+# version, so the upgrade prints its tag/VERSION mismatch WARN — honest,
+# and asserted by the journeys.  Requires a prior
+# itf_journey_stage_upgrade_env staging (serve dir + HTTP server up).
+# Re-exports J_ACTIVE_VERSION (deployed), J_TARGET_VERSION (re-labeled
+# tag), J_UPGRADE_CMD, J_UPGRADE_ENV_EXPORTS.
+itf_journey_stage_upgrade_relabel() {
+    local guest_ip="$1"
+    local vb=/usr/local/lib/zfsutilities
+
+    local active
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    active="$(itf_guest_exec "$guest_ip" \
+        'basename "$(readlink /usr/local/lib/zfsutilities/current)"')" || active=""
+    if [[ -z "$active" ]]; then
+        itf_step fail "relabel staging inputs" \
+            "cannot read the guest's current symlink"
+        return 1
+    fi
+    local new dev_ip serve_dir
+    new="$(printf '%s\n' "$active" | awk -F. 'BEGIN{OFS="."} {$NF=$NF+1; print}')"
+    dev_ip="$(itf_dev_ip)"
+    serve_dir="$ITF_RUN_DIR/serve"
+    if [[ -n "$dev_ip" && -d "$serve_dir" \
+        && -f "$serve_dir/latest.json" \
+        && -f "$serve_dir/zfsutilities-$active.tar.gz" ]]; then
+        :
+    else
+        itf_step fail "relabel staging inputs" \
+            "serve dir, staged tarball, or dev ip missing (dev_ip=${dev_ip:-?})" \
+            "— run itf_journey_stage_upgrade_env first"
+        return 1
+    fi
+
+    # Release shape: one top-level directory (the extractor requires it).
+    # docs/site is excluded (change scans skip it and the pull stays
+    # small).
+    if ! itf_guest_exec "$guest_ip" \
+            "tar -czf /root/itf-pristine-$active.tar.gz \
+                --exclude='$active/docs/site' \
+                -C $vb/versions '$active'" \
+            > "$ITF_RUN_DIR/guest-pristine-pack.log" 2>&1 \
+        || ! itf_guest_get "$guest_ip" "/root/itf-pristine-$active.tar.gz" \
+            "$serve_dir/pristine-$active.tar.gz" \
+            > "$ITF_RUN_DIR/guest-pristine-pull.log" 2>&1; then
+        itf_step fail "pristine $active captured" \
+            "see guest-pristine-{pack,pull}.log"
+        return 1
+    fi
+    cat > "$serve_dir/latest.json" <<EOF
+{
+  "tag_name": "v$new",
+  "html_url": "http://${dev_ip}:${ITF_HTTP_PORT}/",
+  "tarball_url": "http://${dev_ip}:${ITF_HTTP_PORT}/zfsutilities-$active.tar.gz"
+}
+EOF
+    local probe_ok=0 probe_url
+    for probe_url in \
+        "http://127.0.0.1:${ITF_HTTP_PORT}/latest.json" \
+        "http://127.0.0.1:${ITF_HTTP_PORT}/zfsutilities-$active.tar.gz" \
+        "http://127.0.0.1:${ITF_HTTP_PORT}/pristine-$active.tar.gz"; do
+        curl -fsS --max-time 10 -o /dev/null "$probe_url" || probe_ok=1
+    done
+    if (( probe_ok != 0 )); then
+        itf_step fail "re-labeled release ready" "probe fetch failed"
+        return 1
+    fi
+    local api_url="http://${dev_ip}:${ITF_HTTP_PORT}/latest.json"
+    local pristine_url="http://${dev_ip}:${ITF_HTTP_PORT}/pristine-%s.tar.gz"
+    # shellcheck disable=SC2034  # consumed by the journey scripts
+    J_ACTIVE_VERSION="$active"
+    # shellcheck disable=SC2034
+    J_TARGET_VERSION="$new"
+    # shellcheck disable=SC2034
+    J_UPGRADE_CMD="cd /root/ZFSutilities && ZFSUTILITIES_RELEASE_API=$api_url"
+    J_UPGRADE_CMD+=" ZFSUTILITIES_TAG_TARBALL_URL=$pristine_url ./bin/upgrade-zfsutilities"
+    # shellcheck disable=SC2034
+    J_UPGRADE_ENV_EXPORTS="export ZFSUTILITIES_RELEASE_API=\"$api_url\"
+export ZFSUTILITIES_TAG_TARBALL_URL=\"$pristine_url\"
+"
+    itf_step pass "re-labeled release ready" \
+        "latest.json -> v$new (same tree, one patch newer — the VERSION/tag" \
+        "mismatch WARN is honest) + pristine-$active.tar.gz at \
+http://${dev_ip}:${ITF_HTTP_PORT}/"
+    return 0
+}
+
+# itf_journey_stage_two_node_mods <tag> <s_ip> <c_ip> <version>
+#
+# j23's per-host local-modification set, shared by the two-node upgrade
+# journeys: storage MOD+ADD (docs/docs/index.md + bin/itf-local-tweak-s),
+# compute MOD+ADD+DEL (docs/docs/commands-and-modules/two-node.md +
+# bin/itf-local-tweak-c − docs/docs/user-guide/gtk-gui.md — the removal
+# classification's remote exercise).  The marker comments carry <tag> so
+# diff-rendering assertions name the journey that injected them.  Run
+# AFTER any pristine capture (the copies must stay pristine).  Exports
+# J_MOD_STORAGE_HASH / J_MOD_COMPUTE_HASH: the sha256 of each modified
+# file as injected — the salvage-must-carry-local-content oracle.
+itf_journey_stage_two_node_mods() {
+    local tag="$1" s_ip="$2" c_ip="$3" version="$4"
+    local vb=/usr/local/lib/zfsutilities
+
+    local mods_script="$ITF_RUN_DIR/guest-modify-storage.sh"
+    cat > "$mods_script" <<EOF
+set -e
+printf '\n<!-- itf local tweak ($tag storage) -->\n' \
+    >> "$vb/versions/$version/docs/docs/index.md"
+printf '#!/bin/bash\n# itf local addition ($tag storage)\n' \
+    > "$vb/versions/$version/bin/itf-local-tweak-s"
+chmod 755 "$vb/versions/$version/bin/itf-local-tweak-s"
+sha256sum "$vb/versions/$version/docs/docs/index.md"
+echo injected-storage-ok
+EOF
+    local modc_script="$ITF_RUN_DIR/guest-modify-compute.sh"
+    cat > "$modc_script" <<EOF
+set -e
+printf '\n<!-- itf local tweak ($tag compute) -->\n' \
+    >> "$vb/versions/$version/docs/docs/commands-and-modules/two-node.md"
+printf '#!/bin/bash\n# itf local addition ($tag compute)\n' \
+    > "$vb/versions/$version/bin/itf-local-tweak-c"
+chmod 755 "$vb/versions/$version/bin/itf-local-tweak-c"
+rm "$vb/versions/$version/docs/docs/user-guide/gtk-gui.md"
+sha256sum "$vb/versions/$version/docs/docs/commands-and-modules/two-node.md"
+echo injected-compute-ok
+EOF
+    local inj_ok=1
+    itf_guest_put "$s_ip" "$mods_script" /root/itf-"$tag"-modify-s.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-$tag-modify-s.sh" \
+            > "$ITF_RUN_DIR/guest-modify-storage.log" 2>&1 \
+            && grep -q injected-storage-ok "$ITF_RUN_DIR/guest-modify-storage.log"; then
+        :
+    else
+        inj_ok=0
+        itf_step fail "local modifications injected [storage]" \
+            "see guest-modify-storage.log"
+    fi
+    itf_guest_put "$c_ip" "$modc_script" /root/itf-"$tag"-modify-c.sh > /dev/null 2>&1
+    if itf_guest_exec "$c_ip" "bash /root/itf-$tag-modify-c.sh" \
+            > "$ITF_RUN_DIR/guest-modify-compute.log" 2>&1 \
+            && grep -q injected-compute-ok "$ITF_RUN_DIR/guest-modify-compute.log"; then
+        :
+    else
+        inj_ok=0
+        itf_step fail "local modifications injected [compute]" \
+            "see guest-modify-compute.log"
+    fi
+    if (( ! inj_ok )); then
+        return 1
+    fi
+    itf_step pass "local modifications injected on both hosts" \
+        "storage: docs/docs/index.md (modified) + bin/itf-local-tweak-s (added);" \
+        "compute: docs/docs/commands-and-modules/two-node.md (modified)" \
+        "+ bin/itf-local-tweak-c (added) + docs/docs/user-guide/gtk-gui.md (removed)"
+    # The salvaged copies must carry the LOCAL content — hashes from the
+    # injection logs (select by path; transcript headers precede).
+    # shellcheck disable=SC2034  # consumed by the journey scripts
+    J_MOD_STORAGE_HASH="$(grep 'docs/docs/index.md' \
+        "$ITF_RUN_DIR/guest-modify-storage.log" | head -1 | awk '{print $1}')"
+    # shellcheck disable=SC2034
+    J_MOD_COMPUTE_HASH="$(grep 'docs/docs/commands-and-modules/two-node.md' \
+        "$ITF_RUN_DIR/guest-modify-compute.log" | head -1 | awk '{print $1}')"
+    # An empty hash would make the journeys' salvage comparison pass on
+    # two empty strings — fail here instead.
+    if [[ -z "$J_MOD_STORAGE_HASH" || -z "$J_MOD_COMPUTE_HASH" ]]; then
+        itf_step fail "injection hashes recorded" \
+            "storage=${J_MOD_STORAGE_HASH:-none} compute=${J_MOD_COMPUTE_HASH:-none}" \
+            "— see guest-modify-storage.log / guest-modify-compute.log"
+        return 1
+    fi
     return 0
 }
 
@@ -2333,6 +2600,75 @@ itf_wait_vm_disk_links() {
         sleep "${ITF_LINK_POLL_INTERVAL:-10}"
     done
     return 1
+}
+
+# itf_lun_marker_write <c_ip> <vmid> <scsiN> <tag>
+#
+# The data-continuity oracle, per disk (j24's through-the-LUN marker):
+# writes a fresh 1-KiB random marker through the VM's <scsiN> by-path
+# device on the compute host and stashes it at
+# /root/itf-<tag>-marker-<scsiN>.bin there for later verification.  One
+# pass step; fails when the VM's <scsiN> config line or the by-path
+# device is missing.
+itf_lun_marker_write() {
+    local c_ip="$1" vmid="$2" slot="$3" tag="$4"
+    local script="$ITF_RUN_DIR/guest-marker-write-${slot}.sh"
+    cat > "$script" <<EOF
+#!/bin/bash
+set -e
+byp=\$(grep -m1 '^${slot}: /dev/disk/by-path/' /etc/pve/qemu-server/${vmid}.conf \
+    | awk '{print \$2}' | cut -d, -f1)
+test -n "\$byp"
+test -e "\$byp"
+echo "bypath: \$byp"
+head -c 1024 /dev/urandom > /root/itf-${tag}-marker-${slot}.bin
+dd if=/root/itf-${tag}-marker-${slot}.bin of="\$byp" bs=1024 count=1 conv=fsync
+echo marker-write-ok
+EOF
+    itf_guest_put "$c_ip" "$script" /root/itf-"${tag}"-marker-write-"${slot}".sh \
+        > /dev/null 2>&1
+    local log="$ITF_RUN_DIR/guest-marker-write-${slot}.log"
+    if itf_guest_exec "$c_ip" "bash /root/itf-${tag}-marker-write-${slot}.sh" \
+            > "$log" 2>&1 && grep -q marker-write-ok "$log"; then
+        itf_step pass "marker written [$slot]" \
+            "1 KiB through $(awk -F': ' '/^bypath:/{print $2; exit}' "$log")"
+        return 0
+    fi
+    itf_step fail "marker written [$slot]" "see $(basename "$log")"
+    return 1
+}
+
+# itf_lun_marker_verify <c_ip> <vmid> <scsiN> <tag>
+#
+# Reads the marker back through the <scsiN> by-path device and compares
+# hashes against the stashed copy (log at
+# guest-marker-verify-<scsiN>.log).  rc-only by design — callers own the
+# step semantics: a mismatch while a LUN is known-gone can be the PASS
+# for an outage journey.  NEVER call it for a LUN whose backstore is
+# keys-pending: the dead target stalls the read to the session
+# replacement timeout (hours) instead of failing fast.
+itf_lun_marker_verify() {
+    local c_ip="$1" vmid="$2" slot="$3" tag="$4"
+    local script="$ITF_RUN_DIR/guest-marker-verify-${slot}.sh"
+    cat > "$script" <<EOF
+#!/bin/bash
+set -e
+byp=\$(grep -m1 '^${slot}: /dev/disk/by-path/' /etc/pve/qemu-server/${vmid}.conf \
+    | awk '{print \$2}' | cut -d, -f1)
+test -n "\$byp"
+test -e "\$byp"
+got=\$(dd if="\$byp" bs=1024 count=1 status=none | sha256sum | awk '{print \$1}')
+want=\$(sha256sum /root/itf-${tag}-marker-${slot}.bin | awk '{print \$1}')
+echo "marker-want: \$want"
+echo "marker-got:  \$got"
+test "\$got" = "\$want"
+echo marker-ok
+EOF
+    itf_guest_put "$c_ip" "$script" /root/itf-"${tag}"-marker-verify-"${slot}".sh \
+        > /dev/null 2>&1
+    itf_guest_exec "$c_ip" "bash /root/itf-${tag}-marker-verify-${slot}.sh" \
+        > "$ITF_RUN_DIR/guest-marker-verify-${slot}.log" 2>&1
+    return $?
 }
 
 # itf_compute_fallout_sample <c_ip> <label> <vmid>...

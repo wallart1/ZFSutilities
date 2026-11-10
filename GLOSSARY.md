@@ -314,6 +314,18 @@ exact name (the grant dimension, map schema version 2) and why a
 renamed initiator shows up as drift rather than silently losing its
 LUNs. Report phrases: "the initiator IQN," "IQN prefix mismatch."
 
+## keys pending
+
+The posture of an encrypted LUN whose key is not loaded — on this
+project, specifically after a storage host reboots without its key
+device: the plain LUNs keep serving, the encrypted LUN's backstore is
+not restored (the boot journal records PENDING), and the pool state
+map classifies it keys-pending. Nothing may read the encrypted device
+while pending (the read stalls for hours against the dead target), and
+the upgrade path must not write iSCSI state — the pool map stays the
+recovery authority until the key ceremony. j25 exercises the whole
+posture.
+
 ## LIO
 
 Linux-I/O target: the Linux kernel's built-in iSCSI target subsystem —
@@ -474,6 +486,29 @@ userland while the effect lands in the kernel module — a split stack
 (one half old, one half new) must clear the bar on both sides. See
 `RECEIVE_FAMILY` in `python/zfs_capabilities.py`.
 
+## relabel mode
+
+The itf upgrade-staging mode (`itf_journey_stage_upgrade_env
+--relabel`) for a lab installed from the tree under test: the served
+"latest release" is that same tree re-labeled one patch newer, so an
+interrupted deploy targets a `versions/<v>` directory that exists on
+no host and the partial-dir checks stay deterministic. Dev-tarball
+source only — real GitHub cannot be re-labeled. j25 runs on it; j23's
+pass 2 uses the same re-label stage.
+
+## recurrence fence
+
+The installer guard that keeps a site's iSCSI target namespace from
+forking on a reinstall: when `install-two-node` runs on a host that
+already has live LIO targets, the IQN-prefix prompt defaults to the
+prefix those targets already use (read live from `targetcli /iscsi
+ls`), not to a fresh date-derived one. Without it a recovery install
+could default to a new prefix and silently strand the old targets —
+LUN tooling would look under the new prefix while Proxmox keeps
+logging into the old ones. Born from the 2026-10 production incident;
+first exercised on the reinstall path by the j24 journey (uninstall,
+then reinstall over the untouched live targets).
+
 ## response profile
 
 The per-item answer style a function-survey run applies to every prompt
@@ -493,6 +528,16 @@ instead of restarting from scratch. While one is outstanding the
 dataset cannot be destroyed ("dataset is busy"); `zfs receive -A`
 discards the token together with the partial data. The busy resolver
 offers exactly that, as a destructive choice with a safe default.
+
+## salvage
+
+The upgrade's safety copy of local content: before replacing a
+version directory, upgrade-zfsutilities archives every modified,
+added, or removed file it is about to overwrite into
+`salvaged-changes/<version>/<timestamp>/` (with a combined diff) on
+each deployment target, so the operator can re-apply anything still
+wanted. Salvage always precedes the deploy — an interrupted first
+run leaves the archive behind (j10, j23, j25).
 
 ## sample archive
 
@@ -585,6 +630,17 @@ the safe-iscsi-save gate compares against the expected-backstores
 manifest, and the thing the 2026-10-27 incident silently lost (33
 backstores defined, only 3 mapped, because the gates counted
 backstores instead of TPG mappings).
+
+## trust-on-first-upgrade
+
+How upgrade-zfsutilities handles an active version that has neither a
+`MANIFEST.sha256` nor an obtainable release tarball (every deployment
+older than 0.125.0, and versions never tagged on GitHub): it captures
+a baseline manifest from the current tree, so every future upgrade
+scans against it — modifications older than that moment are
+indistinguishable from pristine content, and the report says so
+(F-025; j19 proves the capture, j23 proves it over ssh on the remote
+host).
 
 ## TTL
 

@@ -134,8 +134,13 @@ fi
 open_ssh_master() {
     local host="$1"
     upgrade_ssh_ctrl["$host"]=$(printf '%s/ssh-%s.sock' "$staging" "$host")
+    # </dev/null: establishing a ControlMaster daemon drains the
+    # invoking shell's stdin (OpenSSH behavior), which would eat every
+    # not-yet-read answer under a piped-stdin driver — the archive
+    # prompt below would then read EOF and decline by default.  The
+    # establishment itself reads no input, so /dev/null is exact.
     ssh -o ControlMaster=auto -o ControlPath="${upgrade_ssh_ctrl[$host]}" \
-        -o ControlPersist=1800 -o ConnectTimeout=15 "root@$host" true
+        -o ControlPersist=1800 -o ConnectTimeout=15 "root@$host" true < /dev/null
 }
 
 remote_ssh() {

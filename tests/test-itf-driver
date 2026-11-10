@@ -200,6 +200,8 @@ _teardown_child() {
     local runs="$tmp_dir/teardown-runs"
     rm -rf "$runs"
     mkdir -p "$runs"
+    # shellcheck disable=SC2086,SC2016  # envs holds space-separated VAR=val
+    # words; the bash -c child script expands its own vars
     env $envs \
         ITF_RUNS_DIR="$runs" ITF_RUN_LOCK="$ITF_LOCK_FIXTURE" \
         TEARDOWN_TABLE="$table" TEARDOWN_QM_RC="$qmrc" \
@@ -274,7 +276,9 @@ test_journey_list_lists_committed_journeys() {
         j15-iscsi-boot-keys j16-iscsi-total-loss \
         j17-iscsi-interrupted-ops j18-compute-power-events \
         j19-baseline-capture j20-property-manifest \
-        j21-zfs-probes; do
+        j21-zfs-probes j22-function-survey \
+        j23-two-node-release-upgrade j24-two-node-uninstall-reinstall \
+        j25-two-node-interrupted-upgrade-keys; do
         assert_contains "$run_out" "$j"
     done
 }
@@ -761,6 +765,7 @@ and reuses the guests"
         return
     fi
     assert_contains "$run_out" "rerun of run-20260101-010101-j04-post-install-baseline"
+    # shellcheck disable=SC2012  # fixture run names are itf-controlled
     new_run="$(ls -1d "$runs_dir"/run-* | sort -r | head -1)"
     spec="$new_run/rerun-guests.tsv"
     if [[ ! -f "$spec" ]]; then
@@ -880,6 +885,7 @@ test_journey_run_rerun_writes_spec_from_latest_source() {
     # reaching the unreachable base (.invalid) at its first rerun step.
     assert_rc 1 "$run_rc"
     assert_contains "$run_out" "rerun of run-20260102-020202-j04-post-install-baseline"
+    # shellcheck disable=SC2012  # fixture run names are itf-controlled
     new_run="$(ls -1d "$runs_dir"/run-* | sort -r | head -1)"
     spec="$new_run/rerun-guests.tsv"
     if [[ -f "$spec" ]]; then

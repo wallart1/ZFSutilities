@@ -422,7 +422,8 @@ test_delfs_autoproceed_override_subprocess() {
         && "$_combined" != *"About to delete"* ]]; then
         test_pass
     else
-        test_fail "Expected rc=0, 'pool/data was deleted.', and no 'About to delete' prompt, got rc=$rc, output: $_combined"
+        test_fail "Expected rc=0, 'pool/data was deleted.', and no 'About to delete' prompt, \
+got rc=$rc, output: $_combined"
     fi
 }
 

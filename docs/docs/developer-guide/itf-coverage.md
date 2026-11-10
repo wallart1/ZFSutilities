@@ -11,9 +11,9 @@ speculative coverage). The journeys themselves are described in
 |---------|-------------|----------|
 | Fresh install, prerequisite remediation, test pools | j01 | j05 (storage role; installer drives both) |
 | Installer failure paths (declined remediation, dead apt) | j08, j09 | — |
-| Uninstall / reinstall / install over leftovers | j02, j03 | *(gap: uninstall/reinstall with live LUNs)* |
+| Uninstall / reinstall / install over leftovers | j02, j03 | j24 (live LUNs byte-survive the `--all-nodes` purge; recurrence-fence reinstall; both SW sources once releases carry the F-049 menu fix) |
 | Post-install baseline (wiring, pools, product surface) | j04 | j05 verify stages |
-| Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy), j19 (trust-on-first-upgrade baseline capture) | *(gap: two-node release upgrade — remote scan/salvage over SSH; interrupted variant with keys pending)* |
+| Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy), j19 (trust-on-first-upgrade baseline capture) | j23 (remote scan/salvage/baseline over per-host SSH masters, deploy.conf group targets, per-host switch-version output; dev-tarball only), j25 (interrupted on the encrypted lab with keys pending: SIGTERM at the scan marker, SIGKILL mid-local-deploy, SIGKILL aimed at the remote sync; recovery leaves the iSCSI records byte-identical and so does activation — the fence tick the timer restart fires is waited out first, its documented saveconfig re-save tolerated in the absent-link shape; key ceremony on the upgraded tree; dev-tarball only) |
 | GUI payload e2e matrix (offsite chain, backup/prune/rsync orchestrators, restore payloads incl. receive-as-encrypted) | j11 (+dev-container/dev-host contexts) | — |
 | Backup property fidelity (manifest capture, offsite travel, replay, retention lockstep, sendstream `.props` consumption, standalone replay, receive-as-encrypted restore + FATAL guard) | j20 (incl. the offsite-onward + restore payload pairs) | — |
 | ZFS-semantics probe matrix (receive `-o volblocksize`, stream fidelity plain/`-c`/`-cw`, keylocation prompt vs `file://`, receive-as-encrypted, raw `-o` refusal, encryptionroot-self) | j21 (`--template storage/compute/ubuntu`, per-template version-keyed expectations; `probes.tsv` = the measured truths behind `zfs_capabilities`' receive-family entries) | — |
@@ -33,18 +33,8 @@ recovery scenarios (the blind-recovery rule).
 
 ## Gap rows (future candidates — built only when a real need names them)
 
-- **Two-node release upgrade (remote-target surface)** —
-  upgrade-zfsutilities' remote half (deploy.conf groups, per-host SSH
-  control masters, remote scan/salvage/baseline, per-host
-  switch-version output) has no journey: j10/j12/j19 are single-node;
-  needs a two-product-node lab (only the storage template exists
-  today).
-- **Two-node interrupted upgrade with keys pending** — j12's
-  interrupt injections against a two-node lab where the storage guest
-  carries encrypted LUNs; needs a real upgrade-path report to name it.
-- **Uninstall/reinstall with live LUNs** — j02's cycle on a two-node lab
-  with exported LUNs and VMs referencing them; needs a real
-  uninstall-intent report to name it.
+None open. The last one — the two-node interrupted upgrade with keys
+pending — is j25.
 
 ## Parked (standing policy)
 

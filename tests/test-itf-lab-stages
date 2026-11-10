@@ -1153,6 +1153,288 @@ test_two_node_journeys_read_four_field_records() {
 }
 
 # ------------------------------------------------------------------------------
+# Upgrade staging: the relabel stage, --relabel mode, the two-node mods
+# stage, and the per-disk LUN markers (j23 pass 2 / j25)
+# ------------------------------------------------------------------------------
+
+test_upgrade_relabel_stage_rewrites_release() {
+    test_start "relabel stage: pristine capture + one-patch-newer latest.json + J_*"
+    local work="$tmp_dir/relabel-ok"
+    mkdir -p "$work/serve"
+    printf 'stale\n' > "$work/serve/latest.json"
+    printf 'tarball\n' > "$work/serve/zfsutilities-0.139.0.tar.gz"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() {
+            case "$2" in
+                *readlink*) echo "0.139.0" ;;
+                *) _calls+="pack:[$2] " ;;
+            esac
+            return 0
+        }
+        itf_guest_get() { _calls+="get:[$2] "; printf 'x' > "$3"; return 0; }
+        itf_dev_ip() { echo "10.9.9.9"; }
+        curl() { return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_journey_stage_upgrade_relabel 10.1.1.1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "$J_ACTIVE_VERSION" > "$work/active"
+        printf '%s' "$J_TARGET_VERSION" > "$work/target"
+        printf '%s' "$J_UPGRADE_CMD" > "$work/cmd"
+        printf '%s' "$J_UPGRADE_ENV_EXPORTS" > "$work/exports"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/serve/latest.json")" \
+        '"tag_name": "v0.139.1"'
+    assert_contains "$(cat "$work/serve/latest.json")" \
+        '"tarball_url": "http://10.9.9.9:8123/zfsutilities-0.139.0.tar.gz"'
+    assert_equals "0.139.0" "$(cat "$work/active")"
+    assert_equals "0.139.1" "$(cat "$work/target")"
+    assert_contains "$(cat "$work/cmd")" \
+        "ZFSUTILITIES_RELEASE_API=http://10.9.9.9:8123/latest.json"
+    assert_contains "$(cat "$work/cmd")" \
+        "ZFSUTILITIES_TAG_TARBALL_URL=http://10.9.9.9:8123/pristine-%s.tar.gz"
+    assert_contains "$(cat "$work/exports")" \
+        'export ZFSUTILITIES_TAG_TARBALL_URL="http://10.9.9.9:8123/pristine-%s.tar.gz"'
+    assert_contains "$(cat "$work/calls")" "pack:[tar -czf /root/itf-pristine-0.139.0.tar.gz"
+    assert_contains "$(cat "$work/calls")" "--exclude='0.139.0/docs/site'"
+    assert_contains "$(cat "$work/calls")" "get:[/root/itf-pristine-0.139.0.tar.gz]"
+    assert_contains "$(cat "$work/calls")" "step:pass:re-labeled release ready"
+    test -s "$work/serve/pristine-0.139.0.tar.gz" || {
+        test_fail "pristine tarball not pulled into the serve dir"
+        return
+    }
+    test_pass
+}
+
+test_upgrade_relabel_stage_fails_without_staging() {
+    test_start "relabel stage: refuses without a prior upgrade staging"
+    local work="$tmp_dir/relabel-bare"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() { case "$2" in *readlink*) echo "0.139.0";; esac; return 0; }
+        itf_dev_ip() { echo "10.9.9.9"; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_journey_stage_upgrade_relabel 10.1.1.1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "step:fail:relabel staging inputs"
+    test_pass
+}
+
+test_upgrade_env_relabel_mode_gates() {
+    test_start "upgrade env --relabel: sw-source gate + equality premise + delegation"
+    local work="$tmp_dir/env-relabel"
+    mkdir -p "$work"
+    local repo_version
+    repo_version="$(cat "$mydir/VERSION")"
+    # A version != the tree under test: the premise fails before any
+    # download.  (ITF_ROOT pins the repo root the VERSION read uses.)
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work" ITF_SW_SOURCE=dev-tarball \
+        ITF_ROOT="$mydir/tests/integrated"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() { case "$2" in *readlink*) echo "0.118.0";; esac; return 0; }
+        itf_journey_stage_download() { _calls+="download "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_journey_stage_upgrade_env j99 --guest-ip 10.1.1.1 --relabel
+        echo "$?" > "$work/rc-mismatch"
+        printf '%s' "$_calls" > "$work/calls-mismatch"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc-mismatch")"
+    assert_contains "$(cat "$work/calls-mismatch")" "step:fail:relabel premise holds"
+    if grep -q "download" "$work/calls-mismatch"; then
+        test_fail "download ran despite the broken premise"
+        return
+    fi
+    # Equality premise holds: the staging delegates to the download
+    # stage (stubbed to fail, proving the flow reached it) — the
+    # tarball/server work is journey-proven, not unit-tested.
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work" ITF_SW_SOURCE=dev-tarball \
+        ITF_ROOT="$mydir/tests/integrated"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() { case "$2" in *readlink*) echo "$repo_version";; esac; return 0; }
+        itf_journey_stage_download() { _calls+="download "; return 1; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_journey_stage_upgrade_env j99 --guest-ip 10.1.1.1 --relabel
+        echo "$?" > "$work/rc-equal"
+        printf '%s' "$_calls" > "$work/calls-equal"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc-equal")"
+    assert_contains "$(cat "$work/calls-equal")" "step:pass:relabel premise holds"
+    assert_contains "$(cat "$work/calls-equal")" "download"
+    # Non-dev-tarball sources are refused up front.
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work" ITF_SW_SOURCE=release
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() { return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_journey_stage_upgrade_env j99 --guest-ip 10.1.1.1 --relabel
+        echo "$?" > "$work/rc-release"
+        printf '%s' "$_calls" > "$work/calls-release"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc-release")"
+    assert_contains "$(cat "$work/calls-release")" "step:fail:site config: dev tarball source"
+    test_pass
+}
+
+test_two_node_mods_stage_shapes() {
+    test_start "two-node mods stage: per-host sets, tag in markers, hash exports"
+    local work="$tmp_dir/mods"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls="" _details="" _rc=0 _nohash=0
+        itf_guest_put() { _calls+="put:[$3] "; return 0; }
+        itf_guest_exec() {
+            local vdir=/usr/local/lib/zfsutilities/versions/0.139.0
+            case "$2" in
+                *modify-s.sh*)
+                    [[ "$_nohash" == 1 ]] || echo "deadbeef01  $vdir/docs/docs/index.md"
+                    echo injected-storage-ok ;;
+                *modify-c.sh*)
+                    if [[ "$_rc" == 0 ]]; then
+                        echo "cafebabe02  $vdir/docs/docs/commands-and-modules/two-node.md"
+                        echo injected-compute-ok
+                    fi
+                    return "$_rc" ;;
+            esac
+            return 0
+        }
+        itf_step() { _calls+="step:$1:$2 "; _details+="$* "; return 0; }
+        itf_journey_stage_two_node_mods j99 10.1.1.1 10.2.2.2 0.139.0
+        echo "$?" > "$work/rc"
+        printf '%s' "$J_MOD_STORAGE_HASH" > "$work/hash-s"
+        printf '%s' "$J_MOD_COMPUTE_HASH" > "$work/hash-c"
+        _rc=1
+        itf_journey_stage_two_node_mods j99 10.1.1.1 10.2.2.2 0.139.0
+        echo "$?" > "$work/rc-bad"
+        # An injection log without its hash line: the stage must refuse
+        # instead of exporting an empty hash (two empty strings would
+        # compare equal in the journeys' salvage oracle).
+        _rc=0 _nohash=1
+        itf_journey_stage_two_node_mods j99 10.1.1.1 10.2.2.2 0.139.0
+        echo "$?" > "$work/rc-nohash"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "$_details" > "$work/details"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_rc 1 "$(cat "$work/rc-bad")"
+    assert_rc 1 "$(cat "$work/rc-nohash")"
+    assert_equals "deadbeef01" "$(cat "$work/hash-s")"
+    assert_equals "cafebabe02" "$(cat "$work/hash-c")"
+    assert_contains "$(cat "$work/guest-modify-storage.sh")" \
+        "<!-- itf local tweak (j99 storage) -->"
+    assert_contains "$(cat "$work/guest-modify-compute.sh")" \
+        "<!-- itf local tweak (j99 compute) -->"
+    assert_contains "$(cat "$work/guest-modify-compute.sh")" \
+        'rm "/usr/local/lib/zfsutilities/versions/0.139.0/docs/docs/user-guide/gtk-gui.md"'
+    assert_contains "$(cat "$work/calls")" "put:[/root/itf-j99-modify-s.sh]"
+    assert_contains "$(cat "$work/calls")" "put:[/root/itf-j99-modify-c.sh]"
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:local modifications injected on both hosts"
+    assert_contains "$(cat "$work/calls")" "step:fail:local modifications injected [compute]"
+    assert_contains "$(cat "$work/calls")" "step:fail:injection hashes recorded"
+    # The pass detail names the file the compute leg really modifies.
+    assert_contains "$(cat "$work/details")" \
+        "compute: docs/docs/commands-and-modules/two-node.md (modified)"
+    test_pass
+}
+
+test_missing_markers_lists_absent_fixed_strings() {
+    test_start "missing_markers: fixed strings, every absent marker listed in order"
+    local work="$tmp_dir/missing-markers"
+    mkdir -p "$work"
+    printf '%s\n' 'INFO:   Peer node:       stor1' 'value axb here' '--flag seen' \
+        > "$work/log"
+    (
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_missing_markers "$work/log" "Peer node:       stor1" "--flag" "axb" \
+            > "$work/none"
+        # "a.b" would match "axb" as a regex; the product's spacing is
+        # part of the contract ("Peer node: stor1" has the wrong run).
+        itf_missing_markers "$work/log" "a.b" "axb" "gone" "Peer node: stor1" \
+            > "$work/some"
+        # An unreadable log reports every marker missing, never none.
+        itf_missing_markers "$work/no-such-log" "axb" > "$work/nolog" 2> /dev/null
+    )
+    assert_equals "" "$(cat "$work/none")"
+    assert_equals " [a.b] [gone] [Peer node: stor1]" "$(cat "$work/some")"
+    assert_equals " [axb]" "$(cat "$work/nolog")"
+    test_pass
+}
+
+test_lun_marker_helpers_shapes() {
+    test_start "LUN markers: per-slot scripts, write step, verify rc passthrough"
+    local work="$tmp_dir/markers"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls="" _exec_rc=0
+        itf_guest_put() { _calls+="put:[$3] "; return 0; }
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            echo "bypath: /dev/disk/by-path/ip-fake:iscsi-iqn.fake-lun-1"
+            echo marker-write-ok
+            return "$_exec_rc"
+        }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_lun_marker_write 10.2.2.2 101 scsi1 j99
+        echo "$?" > "$work/rc-write"
+        itf_lun_marker_verify 10.2.2.2 101 scsi1 j99
+        echo "$?" > "$work/rc-verify"
+        _exec_rc=1
+        itf_lun_marker_verify 10.2.2.2 101 scsi1 j99
+        echo "$?" > "$work/rc-verify-bad"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc-write")"
+    assert_rc 0 "$(cat "$work/rc-verify")"
+    assert_rc 1 "$(cat "$work/rc-verify-bad")"
+    assert_contains "$(cat "$work/guest-marker-write-scsi1.sh")" \
+        "^scsi1: /dev/disk/by-path/"
+    assert_contains "$(cat "$work/guest-marker-write-scsi1.sh")" \
+        "/root/itf-j99-marker-scsi1.bin"
+    # shellcheck disable=SC2016  # the guest-side variables are the point
+    assert_contains "$(cat "$work/guest-marker-verify-scsi1.sh")" \
+        'test "$got" = "$want"'
+    assert_contains "$(cat "$work/calls")" "put:[/root/itf-j99-marker-write-scsi1.sh]"
+    assert_contains "$(cat "$work/calls")" "put:[/root/itf-j99-marker-verify-scsi1.sh]"
+    assert_contains "$(cat "$work/calls")" "step:pass:marker written [scsi1]"
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
 # Boot-and-keys helpers (campaign G1, j15)
 # ------------------------------------------------------------------------------
 
@@ -1267,8 +1549,8 @@ targetctl: backed up saveconfig.json
 targetctl: restoring boot config (encrypted backstores excluded)
 EOF
     printf '%s\n' \
-        'targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT '\
-'save config until reconciled'\
+        'targetctl: post-restore verification FAILED — live LUNs differ from the pool map; '\
+'do NOT save config until reconciled'\
         'DRIFT: backstore vm-101-disk-1: map backstore no longer exists live' >> "$work/journal"
     cat > "$work/order-ok" <<'EOF'
 12:Finished zfs-import-cache.service.
@@ -1292,8 +1574,8 @@ targetctl: restoring boot config (encrypted backstores excluded)
 DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
 EOF
         printf '%s\n' \
-            'targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do '\
-'NOT save config until reconciled' >> "$work/journal2"
+            'targetctl: post-restore verification FAILED — live LUNs differ from the pool '\
+'map; do NOT save config until reconciled' >> "$work/journal2"
         itf_boot_journal_verdict "$work/journal2" "$work/order-ok" failed \
             vm-101-disk-1 > /dev/null 2>&1
         echo "$?" > "$work/rc-disorder"
@@ -1789,6 +2071,12 @@ test_encrypted_key_lun_gates_on_config
 test_j05_encrypted_flag_contract
 test_j05_same_ip_collision_convergence
 test_two_node_journeys_read_four_field_records
+test_upgrade_relabel_stage_rewrites_release
+test_upgrade_relabel_stage_fails_without_staging
+test_upgrade_env_relabel_mode_gates
+test_two_node_mods_stage_shapes
+test_missing_markers_lists_absent_fixed_strings
+test_lun_marker_helpers_shapes
 test_boot_journal_parser_failed_mode
 test_boot_journal_parser_pending_mode
 test_boot_journal_parser_ok_mode

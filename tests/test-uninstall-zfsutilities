@@ -576,6 +576,72 @@ EOF
     fi
 }
 
+test_interactive_dialog_real_read_piped_stdin() {
+    test_start "interactive menu answers through the real read builtin"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+
+    # Create a minimal two-node config.
+    cat > "$tmpdir/etc/zfsutilities-node.conf" <<'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="storage"
+COMPUTE_HOST="compute"
+EOF
+    export ZFSUTILITIES_NODE_CONF="$tmpdir/etc/zfsutilities-node.conf"
+
+    # set -e mirrors the shipped script: the malformed-read bug (F-049 —
+    # a prompt split across two quoted arguments made bash parse the
+    # second as a variable name) aborted there before any choice was
+    # consumed.  The mocked-read test above cannot see that shape.
+    # The status is taken AFTER the assignment, never with "|| rc=$?":
+    # a subshell on the left of || runs with errexit ignored, and the
+    # failed read would then spin the menu loop forever.
+    mock_ask_yn 0
+    local out rc
+    out="$(
+        set -e
+        do_purge="false"
+        do_all_nodes="false"
+        DO_YES="false"
+        load_uninstall_config
+        detect_node_mode
+        detect_installed_state
+        present_interactive_dialog <<< "2" > /dev/null 2>&1
+        echo "purge=$do_purge all=$do_all_nodes"
+    )"
+    rc=$?
+
+    # An invalid answer then a valid one: the loop must re-ask through
+    # the same real read (single-node skips the peer question).
+    local out2 rc2
+    out2="$(
+        set -e
+        do_purge="unset-marker"
+        do_all_nodes="true"
+        DO_YES="false"
+        NODE_MODE="single-node"
+        present_interactive_dialog <<< $'x\n1' > /dev/null 2>&1
+        echo "purge=$do_purge"
+    )"
+    rc2=$?
+
+    unset ZFSUTILITIES_NODE_CONF
+    _teardown_uninstall_env "$tmpdir"
+
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    dialog aborted rc=$rc"; }
+    [[ "$out" == "purge=true all=true" ]] \
+        || { failed=1; echo "    piped answer not taken: $out"; }
+    [[ $rc2 -eq 0 ]] || { failed=1; echo "    retry dialog aborted rc=$rc2"; }
+    [[ "$out2" == "purge=false" ]] \
+        || { failed=1; echo "    invalid answer not retried: $out2"; }
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "interactive menu did not survive the real read builtin"
+    fi
+}
+
 test_missing_bashinit_fallback() {
     test_start "script tolerates missing /root/bashinit symlink"
     local tmpdir
@@ -897,6 +963,7 @@ test_purge_removes_config_logs_cachewarm
 test_dry_run_makes_no_changes
 test_yes_skips_interactive_dialog
 test_interactive_dialog_choices
+test_interactive_dialog_real_read_piped_stdin
 test_missing_bashinit_fallback
 test_restartability_partial_uninstall
 test_all_nodes_ssh
