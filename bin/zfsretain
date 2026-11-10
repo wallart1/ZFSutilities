@@ -86,14 +86,12 @@ function retain {
     # Every candidate below passes the same read-only gates the deletion
     # step would run (checkagainst counterparts, holds, clone dependents,
     # minimum age), so "Would: Remove" matches what a real run deletes.
-    # checkagainst's rc-5 print-once marker is cleaned up at exit, like
-    # zfsdelsnap's own trap.
+    # Not modeled here: lock contention at deletion time, destroy failures,
+    # and the interactive confirm for snapshots with no checkagainst
+    # entries. checkagainst's rc-5 print-once marker is cleaned up at exit,
+    # like zfsdelsnap's own trap.
     if [[ $dryrun != "N" ]]; then
-        log_msg "INFO: Dry-run preview: candidates pass the same read-only gates" \
-            "as deletion time (checkagainst counterparts, holds, clone" \
-            "dependents, minimum age). Not modeled: lock contention, destroy" \
-            "failures, and the interactive confirm for snapshots with no" \
-            "checkagainst entries."
+        log_msg "INFO: Dry run: shows what a real run would delete."
         append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
     fi
 

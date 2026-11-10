@@ -285,7 +285,7 @@ Executes a built step list (backup, offsite, restore, prune) in the GUI. Message
 | `INFO: Starting ...: ... step(s)` | Run start record (label plus step count) after session-log creation and rsync-log truncation | First step spawns |
 | `INFO: Interrupting lock wait` | Cancel requested while the child is waiting for a dataset lock | SIGINT sent to the child to break the wait |
 | `WARN: Post-step callback failed during cancel: ...` | A step post-callback raised during cancellation | Cancel path continues |
-| `INFO: ... cancelled` | Cancel completed; trailer written with cancelled status | Runner torn down; completion callback fires with cancelled=True |
+| `INFO: ... cancelled` | Cancel completed, or a step rc=9 user abort ended the run | Trailer written with cancelled status; history entry recorded as cancelled, so the run stays in the Dashboard **Tasks** list; completion callback fires with cancelled=True |
 | `WARN: Error launching: ...` | Spawning a step failed (OSError/FileNotFoundError) | Paired with the FATAL below. |
 | `FATAL: Could not launch step: ...` | A main-list step could not be spawned; the step is treated as failed (its post-callback stays unrun) | Run finishes rc=1 (the post-backup/finally step, if any, still runs first) |
 | `WARN: Pre-step callback failed: ...` | Step pre-callback raised before spawn | Step still runs |
@@ -293,10 +293,10 @@ Executes a built step list (backup, offsite, restore, prune) in the GUI. Message
 | `WARN: Unexpected error while starting next step: ...` / `Unexpected error while checking process: ...` | Unhandled exception in the step-advance or process-poll path | Run aborted with rc=1 |
 | `WARN: Post-backup script exited with rc=...` | The post-backup script finished non-zero after an earlier fatal step | Run finishes with the original fatal rc |
 | `INFO: ... ... done (rc=...)` | Rsync step completion record including rc | Informational |
-| `INFO: Rsync log: /var/log/zfsutilities/rsync-backup.log` | Pointer to the dedicated rsync output log | Operator can inspect the file |
+| `VERB: Rsync log on ...: /var/log/zfsutilities/rsync-backup.log` | Pointer to the dedicated rsync output log, naming the local host that stores it | Operator can inspect the file on that host |
 | `WARN: Step exited with rc=...` | Any step finished non-zero | Failure handling follows (rc=9 user abort, fatal abort, or continue) |
 | `WARN: ... failed: ...` | Rsync-specific diagnosis for the failed step; for log-wrapped pull steps it ends with `(full rsync output: host:/var/log/zfsutilities/rsync-pull.log)` naming where the complete transfer record lives, and the wrapper's failure tail (header plus the last output lines) appears just above it in the log | Diagnostic |
-| `INFO: ... aborted by user` | Step rc=9 (user abort) | Run ends cancelled; trailer rc=9 |
+| `INFO: ... aborted by user` | Step rc=9 (user abort) | Run ends cancelled, the same as a Cancel: followed by `INFO: ... cancelled` |
 | `FATAL: Aborting ... because step failed` | A step marked fatal failed | Post-backup step runs first (if any), then the run finishes with the step's rc |
 | `WARN: ... failed (rc=...)` | Final summary when the run finishes non-zero | History entry recorded as failed |
 | `INFO: ... complete` | Final summary on success | History entry recorded as success |
@@ -487,7 +487,7 @@ Builds the two-part restore script. The messages below are emitted inside the ge
 | `INFO: Would: Keep ... --- <phase>; clone dependents.` | Dry run: the snapshot has clone dependents, so `zfsdelsnap` would skip the deletion | Informational; destroy or promote the clones first |
 | `INFO: Would: Keep ... --- <phase>; unexpected checkagainst rc=....` | Dry run: the paired keep report after `WARN: checkagainst returned rc=...` — the preview keeps the snapshot rather than guess at an out-of-contract code | Informational; investigate the checkagainst output named in the WARN |
 | `WARN: checkagainst returned rc=... for ...; keeping it in the preview to stay conservative.` | Dry run: `zfscheckagainst` returned a code outside its documented contract (its WARN detail names the snapshot and counterpart) | Investigate the checkagainst output; the preview keeps the snapshot rather than guessing |
-| `INFO: Dry-run preview: candidates pass the same read-only gates as deletion time (checkagainst counterparts, holds, clone dependents, minimum age). Not modeled: lock contention, destroy failures, and the interactive confirm for snapshots with no checkagainst entries.` | Emitted once per dataset at the start of a dry-run preview: the deletion-time gates run read-only via `_delsnap_preview_gate`; only what cannot be probed ahead of time is unmodeled | Informational; "Would: Remove"/"Would remove" candidates now match what a real run deletes, modulo the named residuals |
+| `INFO: Dry run: shows what a real run would delete.` | Emitted once per dataset at the start of a dry-run preview. Behind it, the deletion-time gates run read-only via `_delsnap_preview_gate` (checkagainst counterparts, holds, clone dependents, minimum age); not modeled: lock contention at deletion time, destroy failures, and the interactive confirm for snapshots with no checkagainst entries | Informational; "Would: Remove"/"Would remove" candidates match what a real run deletes, modulo the named residuals |
 | `WARN: No bucket was found for .... Skipping.` | The snapshot's bucket letter is not defined in the retention policy | Snapshot kept; add the bucket to the policy or rename the snapshot |
 | `VERB: Keeping ... — clone label or bucket 'c' is excluded from retention.` | Safety gate: clone-labeled snapshots and bucket `c` snapshots are never pruned | Informational; snapshot kept |
 | `VERB: Keeping ... — most recent snapshot in bucket '...' is protected as incremental base.` | Safety gate: the newest snapshot in each bucket is kept as the incremental send base | Informational; snapshot kept |
@@ -2172,6 +2172,8 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `INFO: Rolled back to ...` | Rollback succeeded after the destructive Yes/No confirm | Page refreshed |
 | `WARN: Error rolling back to ...` | The rollback command failed | Dataset unchanged |
 | `WARN: Cannot open ...: mountpoint is ...` | The dataset mountpoint property is not a path (legacy/none) | Browse aborted |
+| `WARN: Cannot browse ...: it is not mounted. Mount it first, then browse.` / `WARN: Cannot browse ...@...: parent dataset ... is not mounted. Mount the parent first.` | Browse was refused because the filesystem (or the snapshot's parent dataset) is not mounted | Browse aborted; mount the item, then browse again |
+| `WARN: Cannot browse ...: ... is not reachable even though the dataset is mounted (an orphaned or shadowed mount). Run Repair Mount Order on ..., then browse.` | The dataset reports mounted but its mountpoint path does not exist, so the file manager would open nothing | Browse aborted; run Repair Mount Order, then browse again |
 | `WARN: Error opening file manager: ...` / `Error browsing snapshot ...: ...` | Launching the file manager failed (mountpoint resolution or xdg-open) | Browse aborted |
 | `VERB: Opened ...` / `Browsing snapshot ...` | The file manager was launched for the dataset/snapshot path | Browse succeeded |
 | `WARN: Error resolving mountpoint for ...: ...` / `FATAL: Error resolving mountpoint for ...: ...` | The mountpoint lookup raised while browsing (WARN) or while unmounting a dataset, snapshot, or loop partition (FATAL) | That item's browse/unmount aborted |
@@ -2890,12 +2892,14 @@ Loads/saves/deletes the profile JSON files.
 
 ### [profile_dialogs](../commands-and-modules/python-modules.md#profile_dialogspy)
 
-Workload-profile dialogs: Rewrite Data (zfs rewrite restripe) and Apply Profile, plus profile edit/delete guards. The rewrite script's messages are embedded in the generated bash script; the completion summary reports what `zfs rewrite -v` actually rewrote (one output line per successfully rewritten file, captured through `tee`), because rc=0 alone covers both "rewrote files" and "nothing to rewrite".
+Workload-profile dialogs: Rewrite Data (zfs rewrite restripe) and Apply Profile, plus profile edit/delete guards. The rewrite script's messages are embedded in the generated bash script. `zfs rewrite -v` prints one line per successfully rewritten file; that file list is appended through `tee -a` to the Rewrite Data log (`rewrite_data_log`, default `/var/log/zfsutilities/rewrite-data.log`) and counted, and never reaches the session log. The completion summary reports the count, because rc=0 alone covers both "rewrote files" and "nothing to rewrite". `zfs rewrite` error lines stay in the session log and are not counted.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `FATAL: could not mount ... to rewrite data` | The temporary mount for `zfs rewrite` failed (bash-embedded) | Script exits 1; the Rewrite Data step fails |
 | `WARN: could not unmount ... after rewrite` | The temporary mount could not be restored to unmounted (bash-embedded) | Rewrite rc still reported; dataset stays mounted |
+| `INFO: Rewrite Data: file list for ... → ...` (bash-embedded) | Names the log that receives this dataset's rewritten-file list, just before the rewrite starts | Open the named log (Logs tab → Miscellaneous → `rewrite`) to see the files |
+| `WARN: Rewrite Data: cannot write the file-list log ...` (bash-embedded) | The header block could not be appended to the Rewrite Data log (unwritable path or directory) | The rewrite still runs and its count and summary are unaffected; the file list may be missing from the log |
 | `INFO: Rewrite Data: N files rewritten on ...` (bash-embedded) | This dataset's rewrite finished; the captured `-v` output counted N successfully rewritten files | Informational |
 | `INFO: Rewrite Data: nothing to rewrite on ... (zfs rewrite rewrote 0 files)` (bash-embedded) | `zfs rewrite` exited 0 having rewritten no files (empty or already-conformant dataset) | Informational |
 | `WARN: Rewrite Data: could not count rewritten files on ...` (bash-embedded) | The captured output could not be counted (count recorded as -1) | The rewrite rc still governs the step; the summary reports the count as incomplete |

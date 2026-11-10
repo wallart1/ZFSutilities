@@ -630,6 +630,55 @@ class TestPoolsPageLayout(unittest.TestCase):
         self.assertFalse(divider_cb())
         paned_mock.set_position.assert_called_once_with(124)
 
+    def test_page_is_vertically_scrollable(self):
+        """The tab is wrapped in a vertical-only ScrolledWindow like other tabs.
+
+        Without it the paned panes crush the tables to their minimums on
+        short windows — the scrub queue collapsed to about two rows.
+        """
+        pp = _import_pools_page()
+        with patch.object(pp, "refresh_pools_page", MagicMock()):
+            with patch.object(pp, "ScrubQueue", MagicMock()):
+                app = self._make_app()
+                page = pp.create_pools_page(app)
+
+        self.assertIs(page, pp.Gtk.ScrolledWindow.return_value)
+        page.set_policy.assert_any_call(
+            pp.Gtk.PolicyType.NEVER,
+            pp.Gtk.PolicyType.AUTOMATIC,
+        )
+        # The page viewport sizes its content by NATURAL height: both
+        # tables' capped windows have tiny minimums, and the default
+        # MINIMUM policy would clamp the page to the window height and
+        # shrink-crush them.
+        page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            pp.Gtk.ScrollablePolicy.NATURAL
+        )
+
+    def test_table_windows_pack_non_expanding(self):
+        """Both capped table windows hold their natural row-driven height.
+
+        Expanding packs stretch the windows past the 20-row cap whenever
+        the panes get extra space, so the scrub queue would show more
+        than its cap without scrolling.
+        """
+        pp = _import_pools_page()
+        with patch.object(pp, "refresh_pools_page", MagicMock()):
+            with patch.object(pp, "ScrubQueue", MagicMock()):
+                app = self._make_app()
+                pp.create_pools_page(app)
+
+        # mock_gtk shares one ScrolledWindow mock, so every pack of a
+        # ScrolledWindow on the (shared) page boxes is recorded together;
+        # the two table windows are the only ScrolledWindow packs.
+        sw = pp.Gtk.ScrolledWindow.return_value
+        packs = [c.args for c in pp.Gtk.Box.return_value.pack_start.call_args_list]
+        self.assertEqual(
+            [(sw, False, False, 0), (sw, False, False, 0)],
+            [a for a in packs if a and a[0] is sw],
+            "both table windows must pack non-expanding",
+        )
+
     def test_scrub_view_attaches_cell_tooltips(self):
         """Ellipsized scrub cells show their full text on hover."""
         pp = _import_pools_page()

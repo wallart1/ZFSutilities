@@ -1424,7 +1424,12 @@ def _outcome_markup(entry):
     FATAL renders red, WARN amber, and INFO/VERB/DEBUG green.  When no
     level information is available (no log file, missing log, or no
     level-prefixed lines), fall back to the exit-code-based result.
+    A cancelled run always shows as cancelled: the operator's cancel is the
+    outcome, whatever levels its log reached before it stopped.
     """
+    result = entry.get("result", "unknown")
+    if result == "cancelled":
+        return "<span foreground='#FF8C00'>⏸</span> cancelled"
     highest = entry.get("highest_level")
     if highest == "FATAL":
         return "<span foreground='#CC0000'>✗</span> FATAL"
@@ -1432,11 +1437,8 @@ def _outcome_markup(entry):
         return "<span foreground='#FF8C00'>⚠</span> WARN"
     if highest in ("INFO", "VERB", "DEBUG"):
         return f"<span foreground='#00AA00'>✓</span> {highest}"
-    result = entry.get("result", "unknown")
     if result == "success":
         return "<span foreground='#00AA00'>✓</span> success"
-    if result == "cancelled":
-        return "<span foreground='#FF8C00'>⏸</span> cancelled"
     return f"<span foreground='#CC0000'>✗</span> {result}"
 
 

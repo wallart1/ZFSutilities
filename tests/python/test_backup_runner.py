@@ -230,7 +230,7 @@ class TestReceivedByteCounting(unittest.TestCase):
     def test_on_stderr_parses_received_line(self):
         runner = self._runner()
         runner._total_bytes_received = 0
-        with patch("os.read", return_value=b"received 312B stream in 0.12 seconds"):
+        with patch("os.read", return_value=b"received 312B stream in 0.12 seconds\n"):
             result = runner._on_stderr(0, br.GLib.IOCondition.IN)
         self.assertEqual(runner._total_bytes_received, 312)
         self.assertTrue(result)
@@ -238,7 +238,7 @@ class TestReceivedByteCounting(unittest.TestCase):
     def test_on_stderr_parses_gib_size(self):
         runner = self._runner()
         runner._total_bytes_received = 0
-        with patch("os.read", return_value=b"received 2GiB stream in 5.00 seconds"):
+        with patch("os.read", return_value=b"received 2GiB stream in 5.00 seconds\n"):
             runner._on_stderr(0, br.GLib.IOCondition.IN)
         self.assertEqual(runner._total_bytes_received, 2 * 1024**3)
 
@@ -246,14 +246,14 @@ class TestReceivedByteCounting(unittest.TestCase):
         """Bare 'M' suffix from zfs receive must be counted (regression)."""
         runner = self._runner()
         runner._total_bytes_received = 0
-        with patch("os.read", return_value=b"received 319M stream in 8.46 seconds"):
+        with patch("os.read", return_value=b"received 319M stream in 8.46 seconds\n"):
             runner._on_stderr(0, br.GLib.IOCondition.IN)
         self.assertEqual(runner._total_bytes_received, 319 * 1000**2)
 
     def test_on_stdout_parses_received_line(self):
         runner = self._runner()
         runner._total_bytes_received = 0
-        with patch("os.read", return_value=b"received 1MiB stream in 1.00 seconds"):
+        with patch("os.read", return_value=b"received 1MiB stream in 1.00 seconds\n"):
             runner._on_stdout(0, br.GLib.IOCondition.IN)
         self.assertEqual(runner._total_bytes_received, 1024 * 1024)
 
@@ -309,7 +309,7 @@ class TestSubprocessOutputLogging(unittest.TestCase):
 
             def fake_read(fd, _size):
                 if fd == 0:
-                    return line.encode()
+                    return (line + "\n").encode()
                 return b""
 
             with patch("os.read", side_effect=fake_read):
@@ -365,7 +365,7 @@ class TestSubprocessOutputLogging(unittest.TestCase):
 
             def fake_read(fd, _size):
                 if fd == 0:
-                    return line.encode()
+                    return (line + "\n").encode()
                 return b""
 
             with patch("os.read", side_effect=fake_read):
@@ -388,7 +388,7 @@ class TestSubprocessOutputLogging(unittest.TestCase):
 
             def fake_read(fd, _size):
                 if fd == 0:
-                    return line.encode()
+                    return (line + "\n").encode()
                 return b""
 
             with patch("os.read", side_effect=fake_read):
@@ -398,6 +398,41 @@ class TestSubprocessOutputLogging(unittest.TestCase):
                 content = fh.read()
         self.assertEqual(content.count(formatted), 1)
         runner.log.assert_called_once_with(formatted)
+
+
+class TestRsyncLogPointer(unittest.TestCase):
+    """A finished rsync step points at its log, naming the host it lives on."""
+
+    def test_rsync_step_logs_verb_pointer_with_hostname(self):
+        runner = br.BackupRunner(MagicMock(), MagicMock())
+        runner.running = True
+        runner.steps = [
+            BashStep([], "rsync step", is_rsync=True, fatal=False),
+            BashStep([], "step2", is_rsync=False, fatal=False),
+        ]
+        runner.current_step = 0
+        runner._finally_step = None
+        runner._session_start_time = time.time()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+
+            fake_process = MagicMock()
+            fake_process.poll.return_value = 0
+            fake_process.stdout.fileno.return_value = 3
+            fake_process.stdout.closed = True
+            fake_process.stderr.fileno.return_value = 4
+            fake_process.stderr.closed = True
+            runner.process = fake_process
+
+            with patch.object(runner, "_log") as mock_log:
+                runner._check_process()
+            expected = f"VERB: Rsync log on {br._get_local_hostname()}: {br.RSYNC_LOG_FILE}"
+
+        mock_log.assert_any_call(expected)
+        self.assertFalse(
+            any("INFO: Rsync log" in str(c) for c in mock_log.call_args_list),
+            "the rsync log pointer must not stay at INFO",
+        )
 
 
 class TestAbortHandling(unittest.TestCase):
@@ -657,6 +692,109 @@ class TestHistoryEntry(unittest.TestCase):
         mock_add.assert_called_once()
         entry = mock_add.call_args[0][0]
         self.assertNotIn("log_file", entry)
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_names_entry_by_operation_detail(self, mock_add):
+        runner = self._runner()
+        runner.label = "Dataset action"
+        runner.operation_detail = "Rewrite Data: tank/data"
+        runner._total_bytes_received = 0
+        runner._session_start_time = time.time()
+        runner._session_log_file = None
+        runner._finish(rc=0)
+        entry = mock_add.call_args[0][0]
+        self.assertEqual(entry["name"], "Rewrite Data: tank/data")
+        self.assertEqual(entry["type"], "dataset")
+
+
+class TestCancelledHistory(unittest.TestCase):
+    """Both cancellation endings record the run as a cancelled history entry.
+
+    The Dashboard Tasks list draws its finished rows from history, so a
+    cancelled run that skips history vanishes from the list.
+    """
+
+    def _runner(self, label="Dataset action", detail=None):
+        runner = br.BackupRunner(MagicMock(), MagicMock(), label=label)
+        runner.operation_detail = detail
+        runner.running = True
+        runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False)]
+        runner._session_start_time = time.time()
+        return runner
+
+    def _exit_rc_nine(self, runner):
+        fake_process = MagicMock()
+        fake_process.poll.return_value = 9
+        fake_process.stdout.fileno.return_value = 3
+        fake_process.stdout.closed = True
+        fake_process.stderr.fileno.return_value = 4
+        fake_process.stderr.closed = True
+        runner.process = fake_process
+        runner._check_process()
+
+    def test_cancel_records_cancelled_entry_with_log_file(self):
+        runner = self._runner(detail="Rewrite Data: tank/data")
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            _patch_log_dirs(tmpdir),
+            patch.object(br, "add_history_entry") as mock_add,
+        ):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            runner.cancel()
+        mock_add.assert_called_once()
+        entry = mock_add.call_args[0][0]
+        self.assertEqual(entry["result"], "cancelled")
+        self.assertEqual(entry["name"], "Rewrite Data: tank/data")
+        self.assertEqual(entry["type"], "dataset")
+        self.assertEqual(entry["log_file"], log_path)
+
+    def test_cancel_names_entry_by_label_without_detail(self):
+        runner = self._runner(label="Backup")
+        with patch.object(br, "add_history_entry") as mock_add:
+            runner.cancel()
+        entry = mock_add.call_args[0][0]
+        self.assertEqual(entry["name"], "Backup")
+        self.assertEqual(entry["result"], "cancelled")
+
+    def test_lock_wait_interrupt_records_no_history(self):
+        runner = self._runner()
+        runner._in_lock_wait = True
+        fake_process = MagicMock()
+        fake_process.poll.return_value = None
+        runner.process = fake_process
+        with patch.object(br, "add_history_entry") as mock_add:
+            runner.cancel()
+        mock_add.assert_not_called()
+        self.assertTrue(runner.running)
+
+    def test_rc_nine_records_cancelled_entry_trailer_and_notification(self):
+        runner = self._runner(detail="Rewrite Data: tank/data")
+        on_complete = MagicMock()
+        runner._on_complete = on_complete
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            _patch_log_dirs(tmpdir),
+            patch.object(br, "add_history_entry") as mock_add,
+            patch.object(br, "notify_run_finished") as mock_notify,
+        ):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            self._exit_rc_nine(runner)
+            with open(log_path) as fh:
+                content = fh.read()
+        mock_add.assert_called_once()
+        entry = mock_add.call_args[0][0]
+        self.assertEqual(entry["result"], "cancelled")
+        self.assertEqual(entry["name"], "Rewrite Data: tank/data")
+        self.assertEqual(entry["log_file"], log_path)
+        self.assertIn("# END: cancelled", content)
+        self.assertNotIn("# END: rc=9", content)
+        mock_notify.assert_called_once()
+        self.assertEqual(mock_notify.call_args.kwargs.get("result"), "cancelled")
+        self.assertIsNone(mock_notify.call_args.kwargs.get("rc"))
+        on_complete.assert_called_once_with(cancelled=True)
+        self.assertFalse(runner.running)
 
 
 class TestSessionTrailer(unittest.TestCase):
@@ -983,10 +1121,119 @@ class TestStdoutStderrMerging(unittest.TestCase):
         runner._total_bytes_received = 0
         with patch(
             "os.read",
-            return_value=b"separator\nINFO: Processing ds.\nreceived 1GiB stream in 1.00 seconds",
+            return_value=b"separator\nINFO: Processing ds.\nreceived 1GiB stream in 1.00 seconds\n",
         ):
             runner._on_stderr(0, br.GLib.IOCondition.IN)
         self.assertEqual(runner._total_bytes_received, 1024**3)
+
+
+class TestLineReassembly(unittest.TestCase):
+    """Output lines split across 8 KiB reads are logged whole, exactly once.
+
+    Regression: a stewie Rewrite Data session log held dozens of path
+    fragments — each read was split into lines on its own, so a line
+    crossing a read boundary became two broken lines.
+    """
+
+    def _runner(self):
+        runner = br.BackupRunner(MagicMock(), MagicMock(), progress_func=MagicMock())
+        runner.steps = [BashStep([], "step", is_rsync=False, fatal=False)]
+        return runner
+
+    def _feed(self, callback, chunks, fd=0):
+        reads = iter(chunks)
+        with patch("os.read", side_effect=lambda _fd, _size: next(reads)):
+            for _ in chunks:
+                callback(fd, br.GLib.IOCondition.IN)
+
+    def _logged(self, runner):
+        return [c.args[0] for c in runner.log.call_args_list]
+
+    def test_merged_stream_line_split_across_reads(self):
+        runner = self._runner()
+        self._feed(runner._on_stderr, [b"INFO: first\n/pool/da", b"ta/file1\nINFO: last\n"])
+        self.assertEqual(self._logged(runner), ["INFO: first", "/pool/data/file1", "INFO: last"])
+
+    def test_stdout_line_split_across_reads(self):
+        runner = self._runner()
+        self._feed(runner._on_stdout, [b"alpha\nbe", b"ta\n"])
+        self.assertEqual(self._logged(runner), ["alpha", "beta"])
+
+    def test_rsync_stderr_line_split_across_reads(self):
+        runner = self._runner()
+        runner._current_desc = "pull"
+        self._feed(runner._on_rsync_stderr, [b"rsync: link_stat fai", b"led\n"])
+        self.assertEqual(self._logged(runner), ["pull: rsync: link_stat failed"])
+        self.assertEqual(runner._current_rsync_stderr, ["rsync: link_stat failed"])
+
+    def test_multibyte_character_split_across_reads(self):
+        runner = self._runner()
+        self._feed(runner._on_stderr, [b"caf\xc3", b"\xa9\n"])
+        self.assertEqual(self._logged(runner), ["café"])
+
+    def test_marker_split_across_reads_is_intercepted(self):
+        runner = self._runner()
+        with patch.object(runner, "_emit_input_event") as emit:
+            self._feed(runner._on_stderr, [b"ZFSU-INPUT-REQ|inp-1|Proc", b"eed? (y/N): \n"])
+        emit.assert_called_once_with("req", "inp-1", "Proceed? (y/N):")
+        runner.log.assert_not_called()
+
+    def test_unterminated_fragment_waits_then_tick_flushes_it(self):
+        runner = self._runner()
+        clock = [100.0]
+        with patch.object(br.time, "monotonic", side_effect=lambda: clock[0]):
+            self._feed(runner._on_stderr, [b"Continue? [y/N] "])
+            runner.log.assert_not_called()
+            # A fragment younger than the flush age stays buffered...
+            runner._flush_partial_lines(br._PARTIAL_LINE_FLUSH_SECONDS)
+            runner.log.assert_not_called()
+            # ...and is shown as-is once the writer has paused long enough.
+            clock[0] += br._PARTIAL_LINE_FLUSH_SECONDS
+            runner._flush_partial_lines(br._PARTIAL_LINE_FLUSH_SECONDS)
+        self.assertEqual(self._logged(runner), ["Continue? [y/N]"])
+
+    def test_check_process_tick_flushes_paused_fragment(self):
+        runner = self._runner()
+        runner.running = True
+        runner.process = MagicMock()
+        runner.process.poll.return_value = None
+        with patch.object(runner, "_flush_partial_lines") as flush:
+            self.assertTrue(runner._check_process())
+        flush.assert_called_once_with(br._PARTIAL_LINE_FLUSH_SECONDS)
+
+    def test_pv_carriage_return_updates_still_drive_progress(self):
+        runner = self._runner()
+        pv = b" 100MiB 0:00:05 [20MiB/s] [====>] 50%"
+        self._feed(runner._on_stderr, [b"\r" + pv + b"\r" + pv.replace(b"50%", b"60%")])
+        # The completed update drives progress at once and is not logged.
+        runner.progress.assert_called()
+        self.assertIn("50%", runner.progress.call_args.args[1])
+        runner.log.assert_not_called()
+        # The newest, still-unterminated update arrives with the tick flush.
+        runner._flush_partial_lines(0)
+        self.assertIn("60%", runner.progress.call_args.args[1])
+        runner.log.assert_not_called()
+
+    def test_exit_drain_flushes_buffered_remainder_once(self):
+        runner = self._runner()
+        fake_process = MagicMock()
+        fake_process.stdout.fileno.return_value = 0
+        fake_process.stdout.closed = False
+        fake_process.stderr = None
+        runner.process = fake_process
+        self._feed(runner._on_stderr, [b"INFO: done\ntail without newl"])
+        drain_reads = iter([b"ine", b""])
+        with patch("os.read", side_effect=lambda _fd, _size: next(drain_reads)):
+            runner._drain_remaining()
+        self.assertEqual(self._logged(runner), ["INFO: done", "tail without newline"])
+
+    def test_cancel_flushes_buffered_fragment(self):
+        runner = self._runner()
+        runner.running = True
+        self._feed(runner._on_stderr, [b"partial before cancel"])
+        with patch.object(br, "add_history_entry"):
+            runner.cancel()
+        self.assertIn("partial before cancel", self._logged(runner))
 
 
 class TestLockWaitStartedTimestamp(unittest.TestCase):

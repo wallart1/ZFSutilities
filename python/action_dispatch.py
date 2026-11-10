@@ -520,7 +520,8 @@ PAGE_SPECS = {
                 "_ds_repair_mount_order_btn",
                 (
                     "Reorder legacy mounts of the selected dataset's family so children "
-                    "mount after parents."
+                    "mount after parents. The repair unmounts and remounts the affected "
+                    "datasets and asks for confirmation first."
                 ),
             ),
             (
@@ -620,7 +621,11 @@ PAGE_SPECS = {
                 "Repair Mount Order",
                 "system-run",
                 "_repair_mount_order_button",
-                "Reorder legacy mounts so child datasets mount after their parents.",
+                (
+                    "Reorder legacy mounts so child datasets mount after their parents. "
+                    "The repair unmounts and remounts the affected datasets and asks "
+                    "for confirmation first."
+                ),
             ),
             (
                 "Cancel Selected Tasks",

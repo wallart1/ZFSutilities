@@ -13,6 +13,7 @@ def _paths_cfg(**overrides):
     cfg = {
         "cron_log": "/var/log/zfsutilities/cron.log",
         "scrub_manager_log": "/var/log/zfsutilities/scrub-manager.log",
+        "rewrite_data_log": "/var/log/zfsutilities/rewrite-data.log",
         "logrotate_file": "/etc/logrotate.d/zfsutilities",
     }
     cfg.update(overrides)
@@ -25,6 +26,7 @@ class TestBuildLogrotateContent(unittest.TestCase):
         for path in (
             "/var/log/zfsutilities/cron.log",
             "/var/log/zfsutilities/scrub-manager.log",
+            "/var/log/zfsutilities/rewrite-data.log",
         ):
             self.assertIn(f"{path} {{", content)
 
@@ -43,6 +45,20 @@ class TestBuildLogrotateContent(unittest.TestCase):
         # Compression is enabled: the GUI viewer reads .gz rotations directly,
         # so nothing disables it.
         self.assertNotIn("nocompress", content)
+
+    def test_rewrite_log_rotates_by_copytruncate(self):
+        # The Rewrite Data writer holds its log open for a whole dataset
+        # rewrite; only copytruncate keeps it writing to the live file.
+        content = logrotate_manager.build_logrotate_content(_paths_cfg())
+        stanzas = {
+            block.split(" {", 1)[0]: block for block in content.split("\n\n") if " {" in block
+        }
+        rewrite = stanzas["/var/log/zfsutilities/rewrite-data.log"]
+        self.assertIn("copytruncate", rewrite)
+        self.assertNotIn("create 0644", rewrite)
+        for path in ("/var/log/zfsutilities/cron.log", "/var/log/zfsutilities/scrub-manager.log"):
+            self.assertIn("create 0644 root root", stanzas[path])
+            self.assertNotIn("copytruncate", stanzas[path])
 
     def test_configured_paths_are_honored(self):
         content = logrotate_manager.build_logrotate_content(

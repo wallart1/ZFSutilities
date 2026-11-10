@@ -103,7 +103,17 @@ class TestCreateDatasetsPage(unittest.TestCase):
         with patch.object(dp, "refresh_datasets_page"):
             page = dp.create_datasets_page(app)
 
-        self.assertIs(page, dp.Gtk.Box.return_value)
+        # The page is wrapped in a vertical-only ScrolledWindow like the
+        # other tabs, with the viewport sizing content by NATURAL height
+        # (the tree's capped window has a tiny minimum).
+        self.assertIs(page, dp.Gtk.ScrolledWindow.return_value)
+        page.set_policy.assert_any_call(
+            dp.Gtk.PolicyType.NEVER,
+            dp.Gtk.PolicyType.AUTOMATIC,
+        )
+        page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            dp.Gtk.ScrollablePolicy.NATURAL
+        )
         self.assertTrue(hasattr(app, "datasets_store"))
         self.assertTrue(hasattr(app, "datasets_view"))
         self.assertTrue(hasattr(app, "datasets_search"))

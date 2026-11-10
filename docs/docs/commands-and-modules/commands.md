@@ -3113,6 +3113,12 @@ sudo archive-vm <vmid>
    `.disk_info` sidecar. A failed run destroys exactly the intermediate datasets it created;
    an interrupted run's unverified leftovers are destroyed and re-made on re-run, while
    verified archives (dataset + `@archive` snapshot + matching volblocksize) are skipped.
+   Every data movement shows a live progress line on the terminal: a bar,
+   percent done, elapsed time, estimated time remaining, transfer rate, and
+   bytes moved. The line updates in place and comes from a display-only `pv`
+   stage, so progress never enters the session log. A run without a terminal
+   (cron, redirected stderr) shows no progress line; `ARCHIVE_PROGRESS_MODE`
+   can force it on (`force`), pin it (`tty`), or suppress it (`off`).
 6. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
 7. **Verify** — Confirms all archived datasets and the config file exist and have expected
    sizes, and that each archived zvol's `volblocksize` matches what its method implies
@@ -3135,6 +3141,8 @@ sudo archive-vm <vmid>
 | `PVE_CONF_DIR`                             | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
 | `JSON_CONFIG` / `ZFSUTILITIES_CONFIG_PATH` | Path to the JSON config file                                             |
 | `transfer_rate_limit`                      | Transfer rate limit (enforced by `lib/pace_stream.py`); empty = unlimited |
+| `archive_progress_mode`                    | Progress display mode for the engine: `tty`, `force`, or empty (off)     |
+| `ARCHIVE_PROGRESS_MODE`                    | Overrides display detection: `tty`, `force`, or `off` (default: auto)   |
 | `ARCHIVE_VM_TEST_NO_ROOT`                  | Test hook: skip root check when set                                      |
 
 **Called modules:**
@@ -3196,7 +3204,11 @@ shared JSON default `archive_rate_limit`, enforced by the pacer
 `lib/pace_stream.py`) so a restore cannot saturate a small storage host. Re-runs are idempotent: restored disks carry a `RESTORED_AS`
 completion marker in their `.disk_info` sidecar, so a re-run skips verified
 disks, offers a confirmed destroy-and-redo for unmarked leftovers, and exits
-cleanly when the whole restore is already complete.
+cleanly when the whole restore is already complete. Every data movement
+shows the same live progress line as `archive-vm` — a bar, percent,
+elapsed, ETA, rate, bytes — drawn on the terminal by a display-only `pv`
+stage; progress never enters the session log, and a run without a terminal
+shows no progress line.
 
 ```bash
 sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
@@ -3261,6 +3273,8 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | Node-config globals                        | See [Two-Node Infrastructure Commands](two-node.md)                      |
 | `PVE_CONF_DIR`                             | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
 | `JSON_CONFIG` / `ZFSUTILITIES_CONFIG_PATH` | Path to the JSON config file                                             |
+| `archive_progress_mode`                    | Progress display mode for the engine: `tty`, `force`, or empty (off)     |
+| `ARCHIVE_PROGRESS_MODE`                    | Overrides display detection: `tty`, `force`, or `off` (default: auto)   |
 | `UNARCHIVE_VM_TEST_NO_ROOT`                | Test hook: skip root check when set                                      |
 
 **Called modules:**

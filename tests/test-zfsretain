@@ -662,23 +662,22 @@ test_dryrun_caveat_names_unmodeled_residuals() {
     retain "pool/fs" "dailybackup" 2>"$_logfile"
     msg_level="FATAL"
     dryrun="N"
-    test_start "Dry-run preview says candidates pass the read-only gates"
-    if grep -q -- "candidates pass the same read-only gates" "$_logfile" \
-        && grep -q -- "Not modeled: lock contention" "$_logfile"; then
+    test_start "Dry run prints the short plain-language banner"
+    if grep -q -- "Dry run: shows what a real run would delete" "$_logfile"; then
         test_pass
     else
-        test_fail "Expected the read-only-gates caveat, got: $(cat "$_logfile")"
+        test_fail "Expected the dry-run banner, got: $(cat "$_logfile")"
     fi
-    # A real run must not carry the preview caveat.
+    # A real run must not carry the preview banner.
     : > "$_logfile"
     msg_level="INFO"
     retain "pool/fs" "dailybackup" 2>>"$_logfile"
     msg_level="FATAL"
-    test_start "Real run does not print the dry-run caveat"
-    if ! grep -q -- "Dry-run preview" "$_logfile"; then
+    test_start "Real run does not print the dry-run banner"
+    if ! grep -q -- "Dry run: shows what a real run would delete" "$_logfile"; then
         test_pass
     else
-        test_fail "Real run carried the dry-run caveat, got: $(cat "$_logfile")"
+        test_fail "Real run carried the dry-run banner, got: $(cat "$_logfile")"
     fi
     rm -f "$_logfile"
     mock_retention_policy() {

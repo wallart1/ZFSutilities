@@ -3398,3 +3398,202 @@ at the next release prune)*
   (before and after the changelog).
 - Pre-existing issues: 1 addressed this turn (order-dependent schedule
   failures); PREEXISTING.md now holds 1 entry (flat mock listing).
+
+## 2026-11-09 (pub2): Pools Scrub-Manager sizing + page scroll parity
+
+- User report: scrub queue treeview showed only 2 lines (should show up
+  to 20 then scroll); center content area not scrollable.
+- Root cause (Xvfb probes, real shell geometry): Pools page returned a
+  bare box (no page viewport) and packed both table windows expanding;
+  the paned divider default = top pane natural (286px) exceeded the
+  700px-window page share (486px) minus the bottom pane's minimum
+  (244px), so GTK clamped the divider to max-position and pinned the
+  scrub pane at its minimum — scrub window at its 60px floor ≈ 2 rows.
+- Fix (approved plan, user chose natural-until-20 + all three pages):
+  - pools_page: both capped table windows pack non-expanding; page box
+    wrapped in ScrolledWindow(NEVER, AUTOMATIC) + viewport NATURAL
+    vscroll policy (dashboard/disks idiom).
+  - datasets_page: same page-level wrapper (tree window was already
+    non-expanding).
+  - restore_page: existing wrapper gained the NATURAL vscroll cure only.
+- Acceptance probe (real code): 5-row queue fully visible at 500/700/
+  1200px windows (was 2 rows); page scrollbar live exactly when the
+  window is shorter than the page; 25-row queue holds the capped window
+  and scrolls inside it; pool table never crushed. Datasets with 30
+  rows engages the page scrollbar at a 500px window.
+- Tests: pools layout gains page-scrollable + non-expanding-pack cases;
+  datasets return-shape assertion updated to the wrapper; restore gains
+  the NATURAL-vscroll case (resets the exhausted Frame/Expander
+  side_effects and shared viewport mock the earlier frames test leaves
+  behind). 412 affected tests green; lint clean.
+- Known residual (by design): a deliberately high saved pools_paned
+  divider can still pinch the scrub pane; dragging it back recovers
+  (saved layout is the user's explicit choice).
+
+## 2026-11-09 (pub2): Dashboard Tasks — cancelled runs stay in the list
+
+- User report: cancelling a Rewrite Data task removed its row from the
+  Dashboard Tasks list; expected a finished/cancelled row with View Log.
+- Root cause: Tasks draws completed rows from history only; BackupRunner
+  wrote history only in `_finish()`. `cancel()` and the rc=9 user-abort
+  branch skipped it (rc=9 also skipped the notification and wrote an
+  `rc=9` trailer, so the Logs page showed Failed).
+- Fix (approved plan):
+  - backup_runner: `_end_cancelled()` is the one cancellation ending
+    (trailer cancelled, history cancelled, notification cancelled,
+    on_complete(cancelled=True)); `_record_history()` shared with
+    `_finish()`, names entries by `operation_detail or label`.
+  - dashboard_page `_outcome_markup`: a cancelled result wins over the
+    log's highest level.
+  - conftest: autouse fence points `backup_history.HISTORY_PATH` at a
+    per-test temp file (runner endings now write history from cancel()).
+- Docs: gtk-gui.md Tasks section + messages manual rows for
+  `... cancelled` / `... aborted by user`.
+- Gotcha: notifications still name dataset actions "Dataset action"
+  (`self.label`); only history uses `operation_detail`.
+
+## 2026-11-10 (pub2): Rewrite Data file list → own log; runner line reassembly
+
+- User report: Rewrite Data floods Messages/session log with one line per
+  rewritten file. stewie evidence (cancelled 2026-11-08 09:20 run): 21,221
+  lines / 2.6 MB in 9 min, 20,756 of them paths; dozens split mid-path.
+- Fix (approved plan; separate log chosen over VERB because the capped
+  session log drops its middle and VERB lines still fill it):
+  - New `paths.rewrite_data_log` (default `<log dir>/rewrite-data.log`),
+    config v32 migration (also seeds the lazy-only `rsync_pull_log`),
+    Logs → Miscellaneous type `rewrite`, logrotate stanza.
+  - Script: `zfs rewrite ... | tee -a -- "$rewrite_log" > capture`; header
+    block + `INFO: ... file list for <ds> → <log>` pointer; no `2>&1`
+    (errors stay in session log, no longer counted).
+  - Runner: per-fd `_LineAssembler` (incremental UTF-8, holds the
+    post-terminator remainder); `_check_process` tick flushes fragments
+    silent ≥0.2 s (read -p prompts, newest pv update); drain + cancel
+    flush everything; drain routes through the live per-stream handlers.
+- Gotcha: rewrite log stanza is `copytruncate`, not create — tee holds the
+  log open for a whole dataset rewrite (hours).
+- Gotcha: tests that feed runner callbacks unterminated chunks now need a
+  trailing "\n" (or an explicit `_flush_partial_lines()`).
+- Gotcha: one serial pytest process over the GUI-heavy runner-adjacent
+  suites showed failures + a hang; each suite passes alone — judge by the
+  xdist gate (`tests/run-tests`).
+
+## 2026-11-10 (pub2): Browse refuses unreachable targets instead of false "Opened"
+
+- User report (deployed 0.138.0, stewie): Browse on
+  `fivebays/threeamigos/proxmox/Stewie` logged `VERB: Opened <path>` but no
+  file manager window appeared.
+- stewie evidence: dataset reports MOUNTED=yes and sits in the kernel mount
+  table, yet its path does not resolve — orphaned/shadowed mount. So a
+  `mounted`-property check alone cannot catch it; `os.path.isdir` on the live
+  path is the fence. (Same class Repair Mount Order exists for; the button
+  gate in datasets_page cannot see it because the row flag says mounted.)
+- Fix in `on_datasets_browse`: filesystem branch refuses when `mounted != yes`
+  ("Mount it first, then browse") and when the mountpoint path is missing
+  despite mounted=yes (shared `_warn_browse_unreachable` helper names the
+  orphaned/shadowed cause and Repair Mount Order); snapshot branch gets the
+  same two fences (parent-unmounted wording mirrors the Mount action's).
+  Volume-partition branch untouched (findmnt is already live truth).
+- User decision: refuse with a clear reason; no auto-mount on Browse.
+
+## 2026-11-10 (pub2): Repair Mount Order confirm now names its disruptions
+
+- User ask (Dashboard): (1) does an enabled Repair Mount Order button also
+  mean a Warnings row, (2) clicking must clearly warn of disruptions and
+  offer cancel.
+- (1) already holds: one `find_unreachable_mounts()` pass feeds both the
+  Warnings rows and `set_sensitive` (dashboard_page); covered by existing
+  tests. No change.
+- (2) gap: `_confirm_mount_repair` listed the plan but never said the
+  filesystems are unmounted/remounted (files briefly inaccessible, close
+  users first), and it was the file's only QUESTION/OK_CANCEL dialog (OK
+  default = Enter starts a disruptive repair).
+- Fix: `_format_repair_plan` prepends the plain-language disruption notice;
+  `_confirm_mount_repair` now follows the `_confirm_yes_no` convention —
+  WARNING + YES_NO + `set_default_response(NO)`; both tabs' tooltips in
+  action_dispatch name the unmount/remount + confirmation. Shared dialog,
+  so Dashboard full-scope and Datasets subtree-scope both get it.
+
+## 2026-11-10 (pub2): rsync log pointer VERB+host; zfsretain banner plain
+
+- User items: (1) `INFO: Rsync log: <path>` → VERB and name the host that
+  stores the log; (2) the 40-word zfsretain dry-run banner is "ridiculous"
+  — plain language, ≤10 words.
+- (1) backup_runner now logs `VERB: Rsync log on <host>: <path>` via
+  command_builders' `_get_local_hostname()` (the runner writes the file
+  locally, so the host is always local).
+- (2) banner is now `INFO: Dry run: shows what a real run would delete.`
+  (user-picked wording). The not-modeled caveats (lock contention, destroy
+  failures, interactive confirm) moved into the code comment and stay in
+  the messages-manual row.
+
+## 2026-11-10 (pub2): archive-vm / unarchive-vm live progress, log untouched
+
+- User ask: a progress report for `archive-vm` that does not spam the log.
+- Mechanism: display-only `pv` stage in the shared engine
+  (`lib/archive-engine.sh`), the same law as transfer-lib's
+  `transfer_pv_args` — tty → `-pterb`, `ZFSUTILITIES_LOG_INHERIT=Y` →
+  `-fpterb`, headless → no stage. Covers the device copy, the sha256
+  read-back, and raw send/receive, in both directions (shared engine, so
+  `unarchive-vm` gets it too). Zero new `log_msg` lines: `pv` writes stderr
+  only, so the session log cannot grow from progress.
+- Mode is decided ONCE in the invoking script (`archive_progress_mode`,
+  from its own stderr; `ARCHIVE_PROGRESS_MODE=tty|force|off` overrides) and
+  rides to the storage-side payload as a positional argument — the remote
+  engine's stderr is an ssh pipe. No node-lib change (`on_storage` still
+  forwards only `transfer_rate_limit`).
+- TRAP found and fixed in-flight: `"${archive_pv_args[@]}" dd of=...`
+  (the `pace_pipe` splice trick) is WRONG for pv — pv takes every trailing
+  word as a FILE OPERAND and would try to open "dd"/"of=...". The array
+  holds option words only and `pv "${archive_pv_args[@]}"` is its own
+  pipeline segment, with explicit pipeline variants per pacer × display
+  combination (the `transfer_do` shape). The harness pv mock models the
+  operand rule (file operand → reads that file), which is what exposed it.
+- Sizing: `zfs get -Hp volsize` (bytes) for copy/verify; `zfs send -nPcw`
+  dry-run for raw; both fail open to a sizeless display.
+- Mock fidelity (tests/test-lib.sh): a `p` in a `zfs get` option cluster
+  now returns suffixed sizes as exact bytes (`mock_size_to_bytes`; other
+  value shapes untouched); `zfs send` detects `-n` inside a cluster.
+- New suite `tests/test-archive-engine`; progress sections added to
+  `test-archive-vm` and `test-unarchive-vm`.
+- Docs: commands.md (both commands + Globals rows), modules.md (engine
+  Progress paragraph + function rows), proxmox-integration.md,
+  testing.md suite rows, GLOSSARY (`pv`, and `full gate` from the user's
+  "Items to be added by Zcode" note — the note line itself left in place).
+- NOT done: `docs/docs/user-guide/restore.md` — the approved plan listed
+  it, but that page only mentions the archive scripts in volblocksize
+  bullets; there is no transfer narrative to attach a progress line to.
+- First real-terminal exercise awaits a production run on the user's cue.
+
+## 2026-11-10 (pub2): 0.140.0 cycle wrap-up
+
+- Steps 1/4 skipped by precondition (pub2 lane, not pub main;
+  PREEXISTING unchanged at 1 entry — the sever-vm-clone one-off flake).
+- Review-pass FIND, fixed in-task and red-proofed: the paced raw
+  send/receive pipelines spliced the receiver's words onto the pacer
+  segment (`| "${pace_pipe[@]}" zfs receive ...`); pace_stream.py's CLI
+  is `<rate> [--] [file]` only, so the real pacer answered usage rc 2
+  and every rate-limited raw archive/restore (encrypted zvol + prompted
+  rate OR enclosure cap — caps apply even unprompted) FATALed and rolled
+  back. Broken since 0.123.0 (eb1642f) in both directions; the suites'
+  python3 stub passed stdin through and IGNORED trailing words, so it
+  never failed a test (mock-fidelity class, again). Fix: pacer is its
+  own filter segment (the transfer_do shape, which transfer-lib.sh
+  always used); stubs in both suites now enforce the real CLI (usage
+  rc 2 on extra words); 4 new tests (paced-only + paced-with-display,
+  both directions); red-proof: reverting the two pipeline lines fails
+  exactly the two paced-only tests. testing.md's old archive row claimed
+  a "raw-pipeline pacer segment" that did not exist — row rewritten.
+  modules.md pace_stream.py section now states the CLI contract.
+- Shellcheck: one SC2123 in the new test-archive-engine (intentional
+  PATH swap to hide pv) suppressed with a documented directive; ruff
+  check + format clean; 100-col sweep clean.
+- One-off, not recorded: test-unarchive-vm two-node progress test
+  failed once in an ad-hoc 3-suite parallel run ("Not a ZFS dataset"
+  at the archive-base check), then passed alone and in three repeat
+  parallel runs AND the full gates. Same class as the sever flake.
+- Gates: full run (no soaks) green; full run with soaks green; mkdocs
+  rc 0 (standing MkDocs-2.0 banner only). VERSION 0.140.0, changelog
+  written, site rebuilt twice.
+- End-user headline: encrypted-VM archives/restores under a rate cap
+  work again; archive progress shows on the terminal; Rewrite Data file
+  lists live in their own log; cancelled runs stay in Tasks.

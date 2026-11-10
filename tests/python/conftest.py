@@ -125,6 +125,25 @@ def _reset_dataset_lock_state():
         pass
 
 
+# --- Run-history isolation ---------------------------------------------------
+#
+# backup_history binds HISTORY_PATH from the state directory at import time
+# (default /var/lib/zfsutilities/history.json). Runner endings — finish and
+# both cancellation paths — append history entries, so a test that drives a
+# runner to any ending must never write the host's real history (a sudo
+# test leg could). Point the bound path at a per-test temporary file; suites
+# that set their own path inside the test keep working, and the original is
+# restored afterwards.
+
+
+@pytest.fixture(autouse=True)
+def _isolate_run_history(tmp_path, monkeypatch):
+    history_module = sys.modules.get("backup_history")
+    if history_module is not None:
+        monkeypatch.setattr(history_module, "HISTORY_PATH", str(tmp_path / "history.json"))
+    yield
+
+
 # --- Private-display fence -------------------------------------------------
 #
 # xdist workers are `python -c <bootstrap>` processes; the one real-GTK

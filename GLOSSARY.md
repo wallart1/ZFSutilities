@@ -219,6 +219,15 @@ and GUI operations driven through the real window. Repeated runs
 explore different corners of the surface; the sample archive makes any
 single run exactly repeatable.
 
+## full gate
+
+Short form of [full unit gate](#full-unit-gate), the phrase reports use
+("the full gate is green") for the complete unit-tier run — every suite
+via `tests/run-tests`, soak suites excluded unless `--with-soak`. When a
+report says full gate, nothing was cherry-picked: the whole unit tier
+ran, at the end, before reporting, per the house rules in
+tests/AGENTS.md.
+
 ## full unit gate
 
 Running the complete unit-tier test gate — every suite, not just the
@@ -453,6 +462,20 @@ re-applies each property with `zfs set` — a `file://` keylocation
 additionally gets a best-effort non-interactive `zfs load-key`. Everything
 about replay is WARN-only: a missing, stale, or corrupt manifest never
 fails a restore; the dataset simply keeps its inherited defaults.
+
+## pv
+
+A standard terminal tool (`pv`, "pipe viewer") that shows transfer
+progress — bar, percent, elapsed time, ETA, rate, bytes — for whatever
+flows through it. This repository uses it as a display-only pipeline
+stage: `zfs-send-receive` (via `lib/transfer-lib.sh`) and the archive
+engine (`lib/archive-engine.sh`) put `pv` between the data source and the
+writer so a long transfer shows a live, single updating line. Two house
+laws govern it. Display only: `pv` never rate-limits here — pacing is
+`lib/pace_stream.py`'s job (`pv -L` bursts after stalls and was removed).
+Terminal only: `pv` writes to stderr, never through `log_msg`, so
+progress never grows the session log; a run without a terminal shows no
+progress line at all.
 
 ## receive as encrypted
 

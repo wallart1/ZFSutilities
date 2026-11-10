@@ -1,5 +1,120 @@
 # Changelog
 
+## 0.140.0
+
+*Released 2026-11-10*
+
+### Added
+
+- **Live progress for `archive-vm` and `unarchive-vm`.** Every data
+  movement — device copy, sha256 read-back, raw send/receive — shows a
+  one-line progress display on the terminal: bar, percent, elapsed time,
+  ETA, rate, and bytes. The display is a display-only `pv` stage in the
+  shared engine (`lib/archive-engine.sh`), under the same rule as
+  `transfer-lib.sh`: natural display when stderr is a terminal, forced
+  output when a capturing parent set `ZFSUTILITIES_LOG_INHERIT=Y`, and no
+  stage otherwise. `pv` writes to stderr only, so progress never enters
+  the session log. The invoking script decides the mode once and carries
+  it to the storage-side payload as an argument, so two-node runs show
+  the same line. `ARCHIVE_PROGRESS_MODE` (`tty`, `force`, `off`)
+  overrides the detection. A missing `pv` binary drops the display and
+  never fails a transfer.
+- **Rewrite Data file-list log.** `zfs rewrite -v` prints one line per
+  rewritten file — tens of thousands on a large dataset — and that list
+  flooded the Messages panel and pushed the run's own summary out of the
+  capped session log. The list now goes to its own persistent log
+  (`paths.rewrite_data_log`, default
+  `/var/log/zfsutilities/rewrite-data.log`), one header-plus-list block
+  per dataset; the session log keeps a single pointer line. The log
+  appears in the Logs tab under Miscellaneous (type `rewrite`) and is
+  rotated weekly by logrotate with `copytruncate`, because a rewrite
+  holds the log open for hours.
+
+### Fixed
+
+- **Rate-limited archive and restore of encrypted VM disks always
+  failed.** Encrypted zvols travel by raw send/receive, and with a rate
+  in force — a prompted rate or a per-enclosure cap — the engine handed
+  the pacer the receiver's command words. The pacer's command line
+  accepts a rate and an optional file only, so it exited with a usage
+  error, the pipeline failed, and the run rolled back with
+  `FATAL: Failed to archive ... (raw send/receive)`. Present since
+  0.123.0 in both `archive-vm` and `unarchive-vm`; unencrypted disks
+  (device copy) and unlimited runs were never affected. The pacer now
+  stands as its own pipeline segment between send and receive.
+- **Cancelled runs vanished from the Dashboard Tasks list.** The list
+  draws finished rows from run history, and a cancel wrote none. Both
+  cancellation endings — the Cancel button and a step's user abort
+  (rc=9) — now leave the same record: a cancelled session-log trailer, a
+  cancelled history entry, and a cancelled notification. The row stays
+  in the list with **View Log**, and a cancelled outcome is shown as
+  cancelled whatever message levels its log reached. A user abort no
+  longer reads as Failed on the Logs tab.
+- **Browse logged "Opened" while no file manager window appeared.** A
+  dataset can report `mounted=yes` while its mountpoint path does not
+  resolve (an orphaned or shadowed mount). Browse now refuses with a
+  reason: the item is not mounted, the snapshot's parent is not mounted,
+  or the path is unreachable — the last pointing at Repair Mount Order.
+- **Step output split mid-line.** The runner logged each pipe read as it
+  arrived, so a line that straddled two reads appeared as two lines, and
+  a multi-byte character could be cut in half. Output is now reassembled
+  per stream into whole lines. A fragment left without a line end — a
+  prompt, the newest progress update — is shown once its stream pauses.
+- **Pools tab: the scrub queue showed two rows.** Both tables on the
+  Pools tab now size to their rows up to 20 and scroll inside beyond
+  that. The Pools, Datasets, and Restore pages scroll as a whole when
+  the window is shorter than the page instead of squeezing their tables.
+
+### Changed
+
+- **Repair Mount Order asks before it disrupts.** The confirmation
+  dialog now opens with a plain statement that the listed filesystems
+  are unmounted and remounted and are briefly inaccessible. It is a
+  warning dialog with Yes/No buttons and No as the default, so an
+  accidental Enter cancels. Both buttons' tooltips say the same.
+- **Configuration version 32.** The migration seeds
+  `paths.rewrite_data_log` and fills `paths.rsync_pull_log` for
+  configurations that predate that key. User-set paths are preserved.
+- **Dataset actions keep their operation name in history.** A completed
+  dataset action is recorded under the name its running row showed (for
+  example *Rewrite Data: tank/data*) instead of the generic runner
+  label, and the Tasks list's completed rows gain the `dataset` type.
+- **Rewrite Data counts only rewritten files.** `zfs rewrite` error
+  lines are no longer merged into the counted file list; they stay in
+  the session log.
+- **Rsync log pointer.** `INFO: Rsync log: <file>` is now
+  `VERB: Rsync log on <host>: <file>`, naming the host that stores the
+  log.
+- **`zfsretain` dry-run banner.** The 40-word preview caveat is now
+  `INFO: Dry run: shows what a real run would delete.` The detail moved
+  to the messages manual.
+
+### Tests
+
+- The pacer stub in `test-archive-vm` and `test-unarchive-vm` enforces
+  `pace_stream.py`'s real command line. The old stub passed its input
+  through and ignored extra words, which is how the paced raw defect
+  stayed green. New tests cover the paced raw path in both directions,
+  paced-only and with the progress display.
+- New suite `test-archive-engine` for the progress display options;
+  progress sections in `test-archive-vm` and `test-unarchive-vm`.
+- The harness `zfs` mock answers parsable (`-p`) size queries in exact
+  bytes and recognizes a dry-run flag inside an option cluster.
+- Python suites cover line reassembly, both cancellation endings, the
+  Browse refusals, the repair confirmation, the Rewrite Data script and
+  log, the logrotate stanza, the version 32 migration, and the page
+  scrolling. A shared fixture points run history at a per-test file, so
+  no test writes the host's history.
+
+### Documentation
+
+- `commands.md`, `modules.md`, and `proxmox-integration.md` describe the
+  progress display; `modules.md` also states the pacer's command line
+  and that it must stand as its own pipeline segment.
+- `gtk-gui.md`, the messages manual, `data-structures.md`,
+  `python-modules.md`, and `testing.md` follow the changes above.
+- `GLOSSARY.md` gains `pv` and `full gate`.
+
 ## 0.139.0
 
 *Released 2026-11-05*

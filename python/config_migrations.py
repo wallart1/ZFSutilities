@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 31
+CONFIG_VERSION = 32
 
 
 def _migrate_1_to_2(config):
@@ -428,6 +428,22 @@ def _migrate_30_to_31(config):
     return config
 
 
+def _migrate_31_to_32(config):
+    """Seed the persistent-log path keys added after the paths section.
+
+    Adds ``rewrite_data_log`` (the Rewrite Data file-list log) and fills
+    ``rsync_pull_log``, which configs migrated before that key existed only
+    gained through lazy seeding. Reuses get_paths_config so the seeds match
+    the runtime; user-set paths are preserved. Lazy import: config_core
+    imports this module at load time.
+    """
+    from config_core import get_paths_config
+
+    get_paths_config(config, persist=False)
+    config["config_version"] = 32
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -459,6 +475,7 @@ MIGRATIONS = [
     _migrate_28_to_29,
     _migrate_29_to_30,
     _migrate_30_to_31,
+    _migrate_31_to_32,
 ]
 
 

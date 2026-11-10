@@ -2536,8 +2536,12 @@ class TestBrowse(unittest.TestCase):
             ),
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da.os.path, "isdir", return_value=True),
         ):
-            app.ctx.zfs_repository.get_property.return_value = "/tank/vm-100"
+            app.ctx.zfs_repository.get_property.side_effect = lambda dataset, prop: {
+                "mountpoint": "/tank/vm-100",
+                "mounted": "yes",
+            }[prop]
             da.on_datasets_browse(app)
 
             mock_subprocess.Popen.assert_called_once_with(["xdg-open", "/tank/vm-100"])
@@ -2561,8 +2565,12 @@ class TestBrowse(unittest.TestCase):
             ),
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da.os.path, "isdir", return_value=True),
         ):
-            app.ctx.zfs_repository.get_property.return_value = "/tank"
+            app.ctx.zfs_repository.get_property.side_effect = lambda dataset, prop: {
+                "mountpoint": "/tank",
+                "mounted": "yes",
+            }[prop]
             da.on_datasets_browse(app)
 
             mock_subprocess.Popen.assert_called_once_with(["xdg-open", "/tank"])
@@ -2586,7 +2594,9 @@ class TestBrowse(unittest.TestCase):
             patch.object(da, "update_ds_button_sensitivity") as mock_update,
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da.os.path, "isdir", return_value=True),
         ):
+            app.ctx.zfs_repository.get_property.return_value = "yes"
             da.on_datasets_browse(app)
 
             mock_subprocess.Popen.assert_called_once_with(
@@ -2594,6 +2604,121 @@ class TestBrowse(unittest.TestCase):
             )
             mock_log.assert_any_call("VERB: Browsing snapshot tank/vm-100@snap1")
             mock_update.assert_called_once_with(app)
+
+    def test_refuses_unmounted_filesystem(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da.os.path, "isdir", return_value=True),
+        ):
+            app.ctx.zfs_repository.get_property.side_effect = lambda dataset, prop: {
+                "mountpoint": "/tank/vm-100",
+                "mounted": "no",
+            }[prop]
+            da.on_datasets_browse(app)
+
+            mock_subprocess.Popen.assert_not_called()
+            mock_log.assert_any_call(
+                "WARN: Cannot browse tank/vm-100: it is not mounted. Mount it first, then browse."
+            )
+
+    def test_refuses_unreachable_mountpoint(self):
+        """mounted=yes but the path is missing: the orphaned-mount browse bug."""
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da.os.path, "isdir", return_value=False),
+        ):
+            app.ctx.zfs_repository.get_property.side_effect = lambda dataset, prop: {
+                "mountpoint": "/tank/vm-100",
+                "mounted": "yes",
+            }[prop]
+            da.on_datasets_browse(app)
+
+            mock_subprocess.Popen.assert_not_called()
+            warning = "".join(str(c) for c in mock_log.call_args_list if "WARN" in str(c))
+            self.assertIn("Cannot browse tank/vm-100: /tank/vm-100 is not reachable", warning)
+            self.assertIn("orphaned or shadowed mount", warning)
+            self.assertIn("Run Repair Mount Order on tank/vm-100", warning)
+
+    def test_refuses_snapshot_with_unmounted_parent(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(da, "get_snapshot_mountpoint") as mock_snap_path,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            app.ctx.zfs_repository.get_property.return_value = "no"
+            da.on_datasets_browse(app)
+
+            mock_snap_path.assert_not_called()
+            mock_subprocess.Popen.assert_not_called()
+            mock_log.assert_any_call(
+                "WARN: Cannot browse tank/vm-100@snap1: parent dataset "
+                "tank/vm-100 is not mounted. Mount the parent first."
+            )
+
+    def test_refuses_snapshot_unreachable_path(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da.os.path, "isdir", return_value=False),
+        ):
+            app.ctx.zfs_repository.get_property.return_value = "yes"
+            da.on_datasets_browse(app)
+
+            mock_subprocess.Popen.assert_not_called()
+            warning = "".join(str(c) for c in mock_log.call_args_list if "WARN" in str(c))
+            self.assertIn("Cannot browse tank/vm-100@snap1", warning)
+            self.assertIn("Run Repair Mount Order on tank/vm-100", warning)
 
 
 class TestDeleteSnapshots(unittest.TestCase):
@@ -3983,6 +4108,39 @@ class TestMountRepair(unittest.TestCase):
             result = da.run_mount_repair(app)
         self.assertIsNone(result)
         mock_log.assert_called_once_with("INFO: Mount order is clean; nothing to repair")
+
+    def test_repair_plan_text_warns_of_disruption(self):
+        da = self._import_under_mock()
+        text = da._format_repair_plan(self._plan())
+        self.assertIn("unmounts and remounts the listed filesystems", text)
+        self.assertIn("briefly inaccessible", text)
+        self.assertIn("refuses to start while any is in use", text)
+        # The plan sections stay intact beneath the notice.
+        self.assertIn("The following mounts are unreachable", text)
+        self.assertIn("Unmount (shadowed covers lifted as needed):", text)
+        self.assertIn("Remount parents first:", text)
+        self.assertIn("canmount noauto → on", text)
+
+    def test_confirm_dialog_is_disruptive_warning_with_no_default(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        with patch.object(da.Gtk, "MessageDialog") as mock_dialog:
+            dialog = mock_dialog.return_value
+            dialog.run.return_value = da.Gtk.ResponseType.NO
+            approved = da._confirm_mount_repair(app, self._plan())
+        self.assertFalse(approved)
+        kwargs = mock_dialog.call_args.kwargs
+        self.assertEqual(kwargs["message_type"], da.Gtk.MessageType.WARNING)
+        self.assertEqual(kwargs["buttons"], da.Gtk.ButtonsType.YES_NO)
+        # Enter must cancel, not start, the disruptive repair.
+        dialog.set_default_response.assert_called_once_with(da.Gtk.ResponseType.NO)
+        detail = dialog.format_secondary_text.call_args.args[0]
+        self.assertIn("briefly inaccessible", detail)
+
+        with patch.object(da.Gtk, "MessageDialog") as mock_dialog:
+            mock_dialog.return_value.run.return_value = da.Gtk.ResponseType.YES
+            approved = da._confirm_mount_repair(app, self._plan())
+        self.assertTrue(approved)
 
     def test_on_datasets_repair_mount_order_is_selection_scoped(self):
         da = self._import_under_mock()

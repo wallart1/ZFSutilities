@@ -65,6 +65,12 @@ def create_restore_page(app, ctx):
     box.set_margin_top(10)
     box.set_margin_bottom(10)
     scrolled.add(box)
+    # NATURAL vscroll policy: the viewport sizes the page by its natural
+    # height, matching the other tabs' page-level scrollbar (MINIMUM would
+    # clamp the page to the window height).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     # Title
     title = Gtk.Label()

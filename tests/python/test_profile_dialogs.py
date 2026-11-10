@@ -1009,7 +1009,9 @@ class TestBuildRewriteCommand(unittest.TestCase):
     """_build_rewrite_command pins the zfs rewrite flags, capture, and mount handling."""
 
     def _script(self, pd, ds="pool1/data", mp="/pool1/data"):
-        return pd._build_rewrite_command(ds, mp, "/run/cap.out", "/run/results.tsv")
+        return pd._build_rewrite_command(
+            ds, mp, "/run/cap.out", "/run/results.tsv", "/var/log/zfsu/rewrite-data.log"
+        )
 
     def test_rewrite_flags_and_mountpoint(self):
         pd = _import_profile_dialogs()
@@ -1037,14 +1039,44 @@ class TestBuildRewriteCommand(unittest.TestCase):
         self.assertIn("zfs unmount pool1/data", script)
         self.assertIn("exit $rewrite_rc", script)
 
-    def test_output_streamed_and_captured_for_the_summary(self):
-        # -v prints one line per successfully rewritten file; the output is
-        # streamed live through tee AND captured so the completion summary
-        # can say what was actually rewritten (rc=0 alone covers a no-op).
+    def test_file_list_goes_to_rewrite_log_and_capture_only(self):
+        # -v prints one line per successfully rewritten file. That list goes
+        # to the persistent rewrite log (live, via tee -a) and the per-dataset
+        # capture for the count — never to the session log/Messages panel.
+        # stderr is not merged: real errors stay in the session log and are
+        # never counted as rewritten files.
         pd = _import_profile_dialogs()
         script = self._script(pd)
-        self.assertIn("zfs rewrite -P -r -x -v /pool1/data 2>&1 | tee -- /run/cap.out", script)
+        self.assertIn("rewrite_log=/var/log/zfsu/rewrite-data.log\n", script)
+        self.assertIn(
+            'zfs rewrite -P -r -x -v /pool1/data | tee -a -- "$rewrite_log" > /run/cap.out',
+            script,
+        )
+        self.assertNotIn("2>&1", script)
         self.assertIn("rewrite_rc=${PIPESTATUS[0]}", script)
+
+    def test_rewrite_log_header_and_pointer_line(self):
+        pd = _import_profile_dialogs()
+        script = self._script(pd)
+        self.assertIn('>> "$rewrite_log"', script)
+        self.assertIn("Rewrite Data: pool1/data (/pool1/data)", script)
+        self.assertIn("${ZFSUTILITIES_LOG_FILE:-none}", script)
+        self.assertIn(
+            'log_msg "INFO: Rewrite Data: file list for pool1/data → $rewrite_log"', script
+        )
+        self.assertIn(
+            'log_msg "WARN: Rewrite Data: cannot write the file-list log $rewrite_log"', script
+        )
+
+    def test_configured_log_path_is_quoted_once(self):
+        # A user-set path with spaces or shell metacharacters lands in one
+        # shell-quoted assignment and is only ever expanded as "$rewrite_log".
+        pd = _import_profile_dialogs()
+        script = pd._build_rewrite_command(
+            "pool1/data", "/pool1/data", "/run/cap.out", "/run/r.tsv", "/srv/my logs/$x.log"
+        )
+        self.assertIn("rewrite_log='/srv/my logs/$x.log'\n", script)
+        self.assertEqual(script.count("/srv/my logs/$x.log"), 1)
 
     def test_count_recorded_per_dataset_with_degraded_unknown(self):
         # The captured line count is appended as count<TAB>dataset to the
@@ -1115,13 +1147,20 @@ class TestRewriteScriptExecution(unittest.TestCase):
                 handle.write('bashinit() { :; }\nlog_msg() { echo "log_msg: $*"; }\n')
             results = os.path.join(tmpdir, "results.tsv")
             capture = os.path.join(tmpdir, "cap.out")
-            script = pd._build_rewrite_command(ds, f"/{ds}", capture, results)
+            rewrite_log = os.path.join(tmpdir, "logs", "rewrite-data.log")
+            os.makedirs(os.path.dirname(rewrite_log))
+            with open(rewrite_log, "w") as handle:
+                handle.write("earlier block\n")
+            script = pd._build_rewrite_command(ds, f"/{ds}", capture, results, rewrite_log)
             env = dict(os.environ, HOME=home, PATH=bin_dir + os.pathsep + os.environ["PATH"])
+            env["ZFSUTILITIES_LOG_FILE"] = "/sessions/run.log"
             proc = subprocess.run(
                 ["bash", "-c", script], capture_output=True, text=True, env=env, check=False
             )
             with open(results) as handle:
                 recorded = handle.read()
+            with open(rewrite_log) as handle:
+                self.rewrite_log_text = handle.read()
             return proc, recorded, os.path.exists(capture)
 
     def test_two_rewritten_files_are_counted_and_summarized(self):
@@ -1132,6 +1171,31 @@ class TestRewriteScriptExecution(unittest.TestCase):
         self.assertEqual(recorded, "2\tpool1/data\n")
         self.assertFalse(capture_left, "per-dataset capture must be removed after counting")
         self.assertIn("INFO: Rewrite Data: 2 files rewritten on pool1/data", proc.stdout)
+
+    def test_file_list_lands_in_rewrite_log_not_the_step_output(self):
+        proc, _recorded, _capture_left = self._run_script(
+            "echo /pool1/data/f1; echo /pool1/data/f2; exit 0"
+        )
+        # The step output (session log / Messages panel) has no file paths.
+        self.assertNotIn("/pool1/data/f1", proc.stdout)
+        self.assertNotIn("/pool1/data/f2", proc.stdout)
+        self.assertIn("INFO: Rewrite Data: file list for pool1/data", proc.stdout)
+        # The rewrite log keeps earlier blocks, then a header naming the
+        # dataset and session log, then the file list.
+        text = self.rewrite_log_text
+        self.assertTrue(text.startswith("earlier block\n"), text)
+        self.assertIn("Rewrite Data: pool1/data (/pool1/data)", text)
+        self.assertIn("Session log: /sessions/run.log", text)
+        self.assertLess(text.index("Session log:"), text.index("/pool1/data/f1\n"))
+        self.assertIn("/pool1/data/f1\n/pool1/data/f2\n", text)
+
+    def test_rewrite_errors_stay_in_step_output_and_are_not_counted(self):
+        proc, recorded, _capture_left = self._run_script(
+            "echo /pool1/data/f1; echo 'cannot rewrite /pool1/data/bad' >&2; exit 0"
+        )
+        self.assertEqual(recorded, "1\tpool1/data\n")
+        self.assertIn("cannot rewrite /pool1/data/bad", proc.stderr + proc.stdout)
+        self.assertNotIn("cannot rewrite", self.rewrite_log_text)
 
     def test_noop_rewrite_records_zero_and_says_nothing_to_rewrite(self):
         proc, recorded, _capture_left = self._run_script("exit 0")
@@ -1200,6 +1264,7 @@ class TestRewriteData(unittest.TestCase):
 
     def _supported_app(self, name="pool1/data", ds_type="filesystem"):
         app = _make_app()
+        app.config["paths"] = {"rewrite_data_log": "/var/log/test/rewrite-data.log"}
         app.ctx.zfs_caps.supports.return_value = True
         app.ctx.zfs_caps.supports_pool_feature.return_value = True
         app.ctx.zfs_repository.get_properties.return_value = {
@@ -1262,8 +1327,10 @@ class TestRewriteData(unittest.TestCase):
             self.assertEqual(command[0:2], ["bash", "-c"])
             self.assertIn("zfs rewrite -P -r -x -v /pool1/data", command[2])
             # The step carries its per-dataset capture file and the shared
-            # results file for the truthful completion summary.
-            self.assertIn("| tee -- /run/rewrite/results.tsv.0.out", command[2])
+            # results file for the truthful completion summary, and tees the
+            # file list into the configured rewrite log.
+            self.assertIn("rewrite_log=/var/log/test/rewrite-data.log\n", command[2])
+            self.assertIn('| tee -a -- "$rewrite_log" > /run/rewrite/results.tsv.0.out', command[2])
             self.assertIn(">> /run/rewrite/results.tsv", command[2])
 
             app.dataset_runner.finish(cancelled=False)

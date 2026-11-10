@@ -595,13 +595,27 @@ when no rate was prompted). Resolver failures fail open with a loud WARN
 and the prompted rate; a rate with the pacer itself missing stays a loud
 FATAL (a paced run never silently runs unlimited).
 
+**Progress:** every data movement can draw a live one-line progress display
+(bar, percent, elapsed, ETA, rate, bytes) through a display-only `pv`
+stage — the same law as `transfer-lib.sh`'s `transfer_pv_args`: natural
+in-place display when stderr is a terminal, forced output (`-f`) when a
+capturing parent set `ZFSUTILITIES_LOG_INHERIT=Y`, and no stage otherwise.
+`pv` writes to stderr only, never through `log_msg`, so progress never
+grows the session log. The invoking script sets `$archive_progress_mode`
+(`tty`|`force`|empty) once from its own stderr and carries it across
+two-node ssh hops as an `on_storage` payload argument (the remote engine's
+stderr is a pipe and cannot test the operator's terminal). A missing `pv`
+binary or an unrecognized mode silently drops the display; progress never
+fails a transfer.
+
 **Functions:**
 
 | Function                          | Purpose                                                              |
 | --------------------------------- | -------------------------------------------------------------------- |
 | `archive_dev_wait(<dev>)`         | Bounded wait for a `/dev/zvol` node to settle (udev).                |
-| `archive_copy_devices(<src>, <dst>, <var>)` | Device copy that hashes the source in flight (`tee`→fifo→background `sha256sum`); stores the digest in `<var>`; pacer-read or plain-dd reader; failures are SIGPIPE-contained by pipefail. |
-| `archive_hash_verify(<src>, <dst>, <expected>)` | Read back the destination and compare its sha256 against the in-flight source hash; FATAL on mismatch. |
+| `archive_pv_args([<total>])`      | Build the display-only pv option array from `$archive_progress_mode`; empty = no stage. |
+| `archive_copy_devices(<src>, <dst>, <var>, [<total>])` | Device copy that hashes the source in flight (`tee`→fifo→background `sha256sum`); stores the digest in `<var>`; pacer-read or plain-dd reader; optional `<total>` arms the progress display; failures are SIGPIPE-contained by pipefail. |
+| `archive_hash_verify(<src>, <dst>, <expected>, [<total>])` | Read back the destination and compare its sha256 against the in-flight source hash; FATAL on mismatch; optional `<total>` arms the progress display. |
 | `archive_create_parents(<parent>, <var>)` | Create the parent chain only if absent; sets `<var>` to the shallowest created level for exact rollback. |
 | `archive_rollback_created(...)`   | Destroy exactly the datasets this run created.                       |
 | `archive_one_zvol(...)`           | Archive one zvol (copy or raw per encryption); writes the `.original_volblocksize` and `METHOD=` sidecar lines. |
@@ -733,6 +747,12 @@ instead of buying a later burst, which is all `pv -L`'s long-run average
 ever guaranteed. A dead downstream consumer kills the pacer via SIGPIPE
 (exit 141) so `pipefail` pipelines fail loudly. Rate grammar: digits plus
 an optional K/M/G/T/P/E suffix (optional `i`/`b`), 1024-based.
+
+The command line is `pace_stream.py <rate> [--] [file]` and nothing else:
+any further word is a usage error (exit 2). The pacer is a filter, never a
+command prefix, so in a pipeline it stands as its own segment —
+`send | pacer | receive`. Words of the next stage must not follow it on
+the same segment.
 
 ---
 

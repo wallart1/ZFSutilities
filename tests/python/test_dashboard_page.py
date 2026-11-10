@@ -1423,6 +1423,14 @@ class TestOutcomeMarkup(unittest.TestCase):
         self.assertNotIn("#CC0000", markup)
         self.assertNotIn("✗", markup)
 
+    def test_cancelled_beats_highest_level(self):
+        for level in ("INFO", "WARN", "FATAL"):
+            with self.subTest(level=level):
+                markup = dp._outcome_markup({"result": "cancelled", "highest_level": level})
+                self.assertIn("cancelled", markup)
+                self.assertIn("⏸", markup)
+                self.assertNotIn(level, markup)
+
 
 class TestAttachHighestLevels(unittest.TestCase):
     """_attach_highest_levels annotates recent entries from the log index."""
@@ -3215,6 +3223,29 @@ class TestRefreshTasksSection(unittest.TestCase):
         self.assertEqual(appended[5], "")
         self.assertEqual(appended[6], "/var/log/zfsutilities/sessions/daily.log")
         self.assertEqual(appended[7], "/var/log/zfsutilities/sessions/daily.log")
+
+    def test_cancelled_dataset_action_stays_as_completed_row(self):
+        app, store, _selection = self._make_app()
+        log_file = "/var/log/zfsutilities/sessions/dataset.log"
+        recent = [
+            {
+                "timestamp": "2026-11-09T10:15:00",
+                "type": "dataset",
+                "name": "Rewrite Data: tank/data",
+                "result": "cancelled",
+                "log_file": log_file,
+                "highest_level": "INFO",
+            }
+        ]
+        self._run_refresh(app, recent=recent)
+        store.append.assert_called_once()
+        appended = store.append.call_args[0][0]
+        self.assertEqual(appended[1], "dataset")
+        self.assertEqual(appended[2], "Rewrite Data: tank/data")
+        self.assertIn("cancelled", appended[3])
+        self.assertEqual(appended[4], "completed")
+        # The log file column drives View Log for the finished row.
+        self.assertEqual(appended[6], log_file)
 
     def test_completed_row_without_log_uses_timestamp_key(self):
         app, store, _selection = self._make_app()
