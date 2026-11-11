@@ -117,7 +117,8 @@ candidate for `zfsutils-linux` (probed at runtime), the core section appends a
 note that Debian carries the package in the `contrib` archive. A functional
 probe (`modinfo zfs`) also verifies the ZFS kernel module is built — on Debian
 `zfs-dkms` builds it only when the matching kernel headers are installed, so a
-missing module is remediated with `linux-headers-$(uname -r)`.
+missing module is remediated with the `linux-headers-<architecture>` meta
+package, which tracks every new kernel.
 
 **Called modules:** `lib/iscsi-lib.sh` — only its read-only restore-time
 detectors, and only in `--two-node` mode (sourced with

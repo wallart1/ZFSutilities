@@ -168,8 +168,9 @@ prerequisite_description() {
         zfs)                  echo "The ZFS userspace command-line tool" ;;
         zpool)                echo "The ZFS pool administration tool" ;;
         zfs-kernel-module)
-            echo "The ZFS kernel module (on Debian built by zfs-dkms, which needs the"
-            echo "matching kernel headers)"
+            echo "The ZFS kernel module (on Debian built by zfs-dkms; the"
+            echo "linux-headers meta package keeps it building on every"
+            echo "new kernel)"
             ;;
         pv)                   echo "Pipe Viewer, used for transfer progress bars" ;;
         rsync)                echo "File synchronization tool used by pull backups" ;;

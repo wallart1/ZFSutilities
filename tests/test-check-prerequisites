@@ -227,9 +227,10 @@ EOF
 
     # modinfo drives the zfs-kernel-module functional check
     # (MODINFO_STUB=ok | missing); no stub = kmod invisible = the module
-    # probe is skipped.  uname is stubbed unconditionally so the
-    # expected headers-package name is deterministic (uname is used
-    # nowhere else in the script).
+    # probe is skipped.  uname is stubbed unconditionally so its outputs
+    # are deterministic (uname is used nowhere else in the script); dpkg
+    # answers --print-architecture so the headers meta-package name in
+    # the remediation row is deterministic too.
     cat > "$tmp_bin/uname" << 'EOF'
 #!/usr/bin/bash
 [[ "$1" == "-r" ]] && echo "6.1-test-amd64" || echo Linux
@@ -279,6 +280,8 @@ EOF
 #!/usr/bin/bash
 if [[ "$1" == "-l" ]]; then
     echo "ii  $2"
+elif [[ "$1" == "--print-architecture" ]]; then
+    echo "amd64"
 fi
 EOF
     chmod +x "$tmp_bin/dpkg"
@@ -654,7 +657,7 @@ test_module_row_when_not_built() {
     fi
     row=$(printf '%s\n' "$output" | grep -m1 '^core|zfs-kernel-module|')
     local expected
-    expected="core|zfs-kernel-module|linux-headers-6.1-test-amd64|"
+    expected="core|zfs-kernel-module|linux-headers-amd64|"
     expected+="kernel module not built (zfs-dkms needs the matching headers)"
     if [[ "$row" != "$expected" ]]; then
         test_fail "Unexpected module row: $row"

@@ -43,8 +43,10 @@ relevant to developers working on ZFS Utilities.
   on Debian this package is in the `contrib` archive — enable `contrib` in
   `/etc/apt/sources.list` (or the equivalent `.sources` file) if `apt` reports
   no installation candidate. On Debian the ZFS kernel module is built by
-  `zfs-dkms` and needs `linux-headers-$(uname -r)`; the prerequisite checker
-  probes for the built module and remediates with the headers package
+  `zfs-dkms` and needs the kernel headers; the prerequisite checker
+  probes for the built module and remediates with the
+  `linux-headers-<architecture>` meta package, which tracks every new
+  kernel so routine upgrades keep rebuilding the module
 - `rsync` — file synchronization (`sudo apt install rsync`)
 - `python3` — required by config helpers, iSCSI scripts, and the GUI
 

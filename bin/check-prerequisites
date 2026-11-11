@@ -205,11 +205,21 @@ fi
 # the module whenever kmod is available (systems with prebuilt modules
 # — Ubuntu, PVE — pass this without the headers).  Installing the
 # headers package triggers dkms to build every registered module.
+#
+# The remedy names the ARCHITECTURE META package (linux-headers-<arch>),
+# never the running kernel's concrete headers: the meta tracks every
+# future kernel, so a routine `apt full-upgrade` lands the new kernel's
+# headers alongside the kernel and dkms rebuilds zfs by itself.  With
+# only the concrete package, each new kernel boots headerless and the
+# module goes missing until this check catches it after the fact
+# (proven live on the ITF storage template: a 6.12.111 → 6.12.116
+# upgrade rebooted with "Module zfs not found", 2026-11-10).
 if command -v modinfo >/dev/null 2>&1; then
     if modinfo zfs >/dev/null 2>&1; then
         pass "zfs-kernel-module"
     else
-        fail "core" "zfs-kernel-module" "linux-headers-$(uname -r)" \
+        fail "core" "zfs-kernel-module" \
+             "linux-headers-$(dpkg --print-architecture 2>/dev/null || echo amd64)" \
              "kernel module not built (zfs-dkms needs the matching headers)"
     fi
 fi

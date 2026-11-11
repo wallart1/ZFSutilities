@@ -406,6 +406,16 @@ its helper scripts under a `WARN` gate, so an archive run prints its own
 step-by-step narrative and the helpers speak only when something is
 wrong. Unset (the default), every message prints.
 
+## meta package
+
+A package whose only job is to depend on the current version of
+something, so installing it always pulls the latest matching piece. The
+prerequisite checker remediates a missing ZFS kernel module with
+`linux-headers-amd64` (the headers meta package) rather than one
+kernel's headers: the meta tracks every future kernel, so a routine
+`apt full-upgrade` lands the new kernel's headers automatically and
+`zfs-dkms` rebuilds the module on its own.
+
 ## mock
 
 A stand-in that imitates a real dependency during tests, so suites can
