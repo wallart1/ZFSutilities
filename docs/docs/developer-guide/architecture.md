@@ -53,31 +53,15 @@ prefix. This prevents duplicate lines and ensures that raw output (dataset
 lists, `zfs receive` progress, separator lines, etc.) is preserved alongside
 `log_msg` output.
 
-- In `backup_runner.py`, `prepare_session_log()` creates the session file and
-  uses `logging_config.session_log_context()` to set/restore
-  `ZFSUTILITIES_LOG_FILE` and `ZFSUTILITIES_LOG_INHERIT`. The inherit flag is
-  passed to the **subprocess environment** only so the bash script does not
-  create a competing log. Python `log_msg` calls made by the runner itself
-  always write to the session log file; the `ZFSUTILITIES_LOG_INHERIT` flag is
-  not checked by Python code.
-- In `profile_runner.py`, `_run_command()` prints subprocess output to stderr
-  for display and appends it raw to the session log via `_write_raw_line()`.
-  Python `log_msg` calls made by the runner itself (e.g. "Running profile:")
-  write to the file because `ZFSUTILITIES_LOG_FILE` is set. That stderr
-  mirror carries `pv` progress lines to the GUI status bar for Run Now
-  launches; for cron launches the job line sets `ZFSUTILITIES_FROM_CRON=Y`,
-  and `_silence_cron_output()` fences the runner's own fds 1/2 onto
-  `/dev/null` once the session log exists, so the cron log receives only
-  pre-log failures (see the sequence diagram below for the full picture).
-  The fence also engages for a pre-fence cron line — one with no marker
-  whose fd 1 is the cron log itself — and every run converges the
-  cron/logrotate drop-ins to the current format before creating the session
-  log (`cron_manager.converge_scheduler_files`, also called at GUI startup).
+Cron launches fence the runner's own output streams onto `/dev/null` once the
+session log exists, so the weekly cron log receives only the failures that
+precede the session log. A cron line that redirects straight into the cron log
+is fenced the same way. The cron/logrotate drop-ins are persisted `/etc` state:
+`cron_manager.converge_scheduler_files()` re-derives their content at GUI
+startup and at the start of every run, rewriting a file only when it differs.
 
-After a run finishes, is cancelled, or aborts with rc=9, `BackupRunner` clears
-`_session_log_file` and `_session_start_time`. This lets the same runner
-instance prepare a fresh session log for the next operation instead of
-re-using or appending to the previous run's file.
+After a run finishes, is cancelled, or aborts with rc=9, the runner discards
+its session-log state so the next operation starts a fresh log file.
 
 | Context                  | Auto-set? | Notes                                                                                                                                              |
 | ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -111,12 +95,11 @@ Bash and Python `log_msg` apply the same rule. In bash,
 the caller's value afterward. The helper runs the command in the current
 shell, so shell state and exit traps stay with the caller.
 
-`archive-vm` sets the gate to `WARN` for the transfer engine and for
-`remove-vm-disk --from-archive`. An archive run therefore narrates its own
-steps, and its child scripts speak only when something is wrong. A message
-that must survive a driven gate lifts the gate for one call
-(`ZFSUTILITIES_MSG_LEVEL='' log_msg ...`); the engine does this for the
-`Enclosure rate cap applied` notice.
+`archive-vm` sets the gate to `WARN` for the archive engine calls. An archive
+run therefore narrates its own steps, and the engine speaks only when
+something is wrong. A message that must survive a driven gate lifts the gate
+for one call (`ZFSUTILITIES_MSG_LEVEL='' log_msg ...`); the engine does this
+for the `Enclosure rate cap applied` notice.
 
 ### Session log size cap
 
@@ -146,7 +129,7 @@ content to prevent unbounded RAM growth.
 ### Persistent log index
 
 The Logs tab uses `python/log_index.py` to avoid re-reading every
-historical session log on startup or refresh. The index is a JSON file at
+past session log on startup or refresh. The index is a JSON file at
 `/var/log/zfsutilities/sessions/.log_index.json` that stores, per log file:
 
 | Field               | Purpose                                                            |
@@ -455,45 +438,35 @@ sequenceDiagram
 
 ### Single-writer session log
 
-`ZFSUTILITIES_LOG_INHERIT=Y` is the critical switch. When present in a subprocess's environment, `bashinit` does **not** create its own session log; instead, bash `log_msg` writes only to stderr. The Python runner reads stderr (and stdout) from the subprocess pipe and appends every line to the session log file with a timestamp prefix, except for `pv` progress lines which are captured for the live progress indicator but omitted from the log to avoid one line per second. This guarantees:
+`ZFSUTILITIES_LOG_INHERIT=Y` is the critical switch. When present in a subprocess's environment, `bashinit` does **not** create its own session log; instead, bash `log_msg` writes only to stderr. The Python runner reads stderr (and stdout) from the subprocess pipe and appends every line to the session log file with a timestamp prefix. This guarantees:
 
 1. **No duplicate lines** — Both bash and Python log output appear exactly once.
 2. **Raw output preserved** — `zfs receive` progress lines and separator lines are written to the session log even though they are not `log_msg` calls. `pv` rate output is captured for the GUI status bar but is not written to the session log.
 3. **Atomic finish** — The runner writes a `# END: rc=..., duration=...s` trailer after the subprocess terminates.
 
 For cron launches the job line additionally sets `ZFSUTILITIES_FROM_CRON=Y`.
-Right after `profile_runner.py` creates its session log,
-`_silence_cron_output()` rewrites the runner's own fds 1 and 2 onto
-`/dev/null`. Without the fence, the cron line's `2>&1 | stamper >> cron.log`
-redirection would capture the whole run — the stderr mirror above plus one
-forced `pv` line per second — duplicating the session log into the
-weekly-rotated cron log. With it, the cron log holds only failures from
-before the session log existed, and an unhandled runner crash is caught at
-the top of the run so its traceback and a failed trailer land in the session
-log rather than vanishing into the fenced streams. Run Now and manual
-terminal launches never set the marker and stream exactly as before.
+Once the session log exists, `profile_runner.py` fences the runner's own
+output streams for the rest of the run, so the weekly cron log holds only the
+failures that precede the session log. An unhandled runner crash is caught at
+the top of the run; its traceback and a failed trailer land in the session
+log. Run Now and manual terminal launches are not fenced.
 
 Cron terminates a job's command at the first unescaped `%` and feeds the
 remainder to the job's stdin (crontab(5)), so `generate_cron_line()`
-backslash-escapes every `%` in the command portion it builds — the stamper's
-`strftime` format, the profile name, paths, and user-entered conditions
-alike; a pre-escaped `\%` is left alone. Cron strips the backslash before
-the shell sees the command, so the executed pipeline is unchanged. Cron
-launches additionally append two breadcrumb lines directly to the cron log —
-`Scheduled run started (cron)` when the runner starts and
-`Scheduled run finished (cron) ... rc=N` on exit — written as file appends
-past the fenced streams so a schedule that stops firing shows up as missing
-breadcrumbs instead of an empty log.
+backslash-escapes every `%` in the command portion it builds; a pre-escaped
+`\%` is left alone. Cron strips the backslash before the shell sees the
+command, so the executed pipeline is unchanged. Cron launches also append two
+breadcrumb lines directly to the cron log — `Scheduled run started (cron)`
+when the runner starts and `Scheduled run finished (cron) ... rc=N` on exit —
+so a schedule that stops firing shows up as missing breadcrumbs instead of an
+empty log.
 
-A cron line from a pre-fence deployment carries no marker; its plain
-`>> cron.log` redirect leaves fd 1 pointing at the cron log itself, and
-`_silence_cron_output()` treats that redirect as a cron launch too, so a
-stale drop-in cannot keep flooding the log even before it is regenerated.
-Regeneration no longer depends on a Schedule-page save: the drop-ins are
-persisted `/etc` state, and `cron_manager.converge_scheduler_files()`
-re-derives their expected content at GUI startup and at the start of every
-run, rewriting each only when it differs (missing drop-ins are created only
-when active profiles exist, so a host with no schedules gains none).
+A cron line that redirects its output straight into the cron log is treated
+as a cron launch and fenced the same way. The drop-ins are persisted `/etc`
+state: `cron_manager.converge_scheduler_files()` re-derives their content at
+GUI startup and at the start of every run, rewriting each only when it
+differs. Missing drop-ins are created only when active profiles exist, so a
+host with no schedules gains none.
 
 ### Progress parsing
 
@@ -507,8 +480,8 @@ stderr:
 
 ### Python GUI architecture
 
-The Python layer in `python/` was refactored to reduce coupling and
-improve testability while keeping the same bash orchestration contract:
+The Python layer in `python/` is organized into focused modules behind the
+same bash orchestration contract:
 
 | Module | Responsibility |
 | ------ | -------------- |
@@ -516,17 +489,16 @@ improve testability while keeping the same bash orchestration contract:
 | `config_core.py` | Core JSON config: `load_config`/`save_config`, path helpers, UI state, log/history retention, dashboard config. |
 | `feature_config.py` | Per-feature getters/setters: backup, offsite, restore, retention, pools, checkagainst, snapshot names, scrub manager. |
 | `logging_config.py` | `log_msg`, message levels, GUI sink, `session_log_context()`. |
-| `runner_factory.py` | Creates `BackupRunner` instances with shared GUI callbacks; removes runner ownership from `gui_helpers.py`. |
+| `runner_factory.py` | Creates `BackupRunner` instances with shared GUI callbacks; keeps runner ownership out of `gui_helpers.py`. |
 | `zfs_repository.py` | Repository pattern wrapper for all direct `zfs`/`zpool` subprocess calls; returns typed dataclasses (`PoolRow`, `DatasetRow`, `SnapshotRow`, `HoldRow`). |
 | `pool_create.py` | Pure create-pool logic: disk eligibility, pool-name validation, ashift suggestion, width-aware RAIDZ capacity estimator, profile→`-O` option mapping. No GTK, no subprocess. |
 | `pool_create_wizard.py` | GTK create-pool wizard (Disks page): four-step modal dialog with exact-command review and typed confirmation; executes via the Dataset action runner under a pool-name `zlm` write lock and offers to register the new pool in the pool registry. |
-| `pool_growth.py` | Pure pool-growth policy (Phase 4): attach/replace/detach target classification, infra-vdev validation, scrub-block check. No GTK; the only live-state reader takes the repository as a parameter. |
+| `pool_growth.py` | Pure pool-growth policy: attach/replace/detach target classification, infra-vdev validation, scrub-block check. No GTK; the only live-state reader takes the repository as a parameter. |
 | `pool_growth_dialogs.py` | GTK dialogs and Disks-page handlers for the five pool-growth operations; shared review scaffold (exact command, warnings, confirmation matched to the danger); executes via the Dataset action runner under a pool-scope `zlm` write lock. |
 | `command_builders.py` | Builds bash commands and returns `BashStep` dataclasses instead of loose tuples. |
 
-`backup_config.py` remains as a compatibility shim that re-exports the public
-API from the three split modules so existing callers can be migrated
-incrementally.
+`backup_config.py` re-exports the public API of `config_core.py`,
+`feature_config.py`, and `logging_config.py` for compatibility.
 
 ---
 
@@ -541,18 +513,26 @@ flowchart LR
     C --> D["send-receive<br/>full + incremental internally"]
 ```
 
-**Why two steps?**
+**Why two steps?** This restores the complete snapshot history, not just the latest state.
 
-- **Step 1** sends the oldest available snapshot as a full stream. Because `force='Y'`, the destination dataset may be destroyed and recreated. `releaseholds='Y'` ensures holds do not block the destruction.
-- **Step 2** sends every snapshot from the oldest base up to the newest one (`-I` mode). This restores the complete snapshot history, not just the latest state.
-- **`zfs-send-receive` executes both steps** inside a single invocation, so wrappers such as `zfsrestore` and `zfsfullcopy` do not call it twice.
+### Destination hold preservation
+
+A send stream carries no holds, so a full copy by itself would lose every hold tag on the destination snapshots. [`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive) preserves them on every full copy (`doincrementals='N'` or `force='Y'`) unless `preserve_target_holds='N'` or dry-run is set:
+
+- **Capture** — before any dataset is touched, all holds under the destination are written to a temporary file. A failed capture aborts the run before any transfer.
+- **Preparation** — destination preparation releases only `offsite-*` receipt holds, so the old snapshots can be destroyed. Holds with other tags are never released; they block the destruction, and a blocked preparation aborts the run.
+- **Reapply** — after the transfer completes, the captured tags are applied to the restored snapshots. A tag already present counts as success. A captured snapshot missing from the restored lineage is skipped with a WARN.
+- **Not covered** — plain incremental runs (nothing is destroyed), dry-run, `preserve_target_holds='N'`, and fatal exits mid-run. A fatal exit skips the reapply and leaves the capture file for manual `zfsreapplyholds --apply`.
+
+The end-user view of this behavior is [Preserving Target Holds During a Restore](../user-guide/restore.md#preserving-target-holds-during-a-restore); the parameter is documented in [Global Variables](global-variables.md).
+
+Restore scope and follow-up:
+
 - **Dataset selection** is controlled by `$depth` via `zfsbuildfsarray`. The GUI defaults to `depth='0'` (restore only the named dataset) unless **Restore entire subtree (recursive)** is enabled; the command-line scripts default to `depth=''` (full subtree). An explicit `$depth` set by the caller always takes precedence.
 - **After the send-receive**, `ensure-restored-vm-iscsi` re-exports any restored
-  VM disk zvols that are referenced by a Proxmox VM config but no longer have an
+  VM disk zvols that are referenced by a Proxmox VM config but have no active
   iSCSI LUN. This handles restores to a missing/detached disk while preserving the
   LUN index recorded in the VM config.
-
-
 
 ---
 
@@ -612,7 +592,7 @@ ZFS Utilities reads configuration from several layers. Higher layers override or
 
 ### JSON config migrations
 
-The `config_version` field in the JSON file tracks schema evolution independently of the software release version. When `config_core.load_config()` detects an older version, it runs the migration chain (`v1 → v2 → … → v15` today). Each migration is a pure Python function that mutates the dict and bumps the version. See [Data Structures — Config migrations](data-structures.md#config-migrations) for how to add a new migration.
+The `config_version` field in the JSON file tracks schema evolution independently of the software release version. When `config_core.load_config()` detects an older version, it runs the migration chain (`v1 → v2 → … → v15`). Each migration is a pure Python function that mutates the dict and bumps the version. See [Data Structures — Config migrations](data-structures.md#config-migrations) for how to add a new migration.
 
 ---
 
@@ -620,8 +600,8 @@ The `config_version` field in the JSON file tracks schema evolution independentl
 
 In two-node mode, ZFS volumes (zvols) are exposed as iSCSI LUNs to the compute node. When a full copy destroys and recreates a destination dataset, the iSCSI backstore and LUN must be removed before `zfs destroy` and restored after `zfs receive` so that the compute node's by-path symlinks remain stable.
 
-When a restore recreates a VM disk zvol that did not have an active iSCSI LUN (for
-example, because the disk was detached or the destination was missing), the restore
+When a restore recreates a VM disk zvol with no active iSCSI LUN (for
+example, a detached disk or a missing destination), the restore
 pipeline calls `ensure-restored-vm-iscsi` to create the backstore and LUN mapping
 using the same LUN index already recorded in the Proxmox VM config, then rescans the
 compute host.  EFI disks are detected by their 4 MiB size and matched against the

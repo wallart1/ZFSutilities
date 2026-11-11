@@ -310,6 +310,18 @@ implementation. House style now uses the word sparingly in agent
 reports (name the pattern plainly instead), but the developer docs
 still use it freely.
 
+## input hold
+
+The GUI's channel for a script question. A job the GUI launches gets a
+pseudo-terminal (PTY) on stdin, so its terminal checks pass and it can
+prompt; the ask helpers (`ask_yn`/`ask_line`, `input_hold`) also print
+`ZFSU-INPUT-REQ` marker lines that the job runner intercepts and turns
+into an answering panel in the GUI (`ZFSUTILITIES_INPUT_HOLD=Y` arms the
+helpers). The typed answer flows back through the PTY as if it were
+keyed into a terminal window. Without the GUI the helpers ask on the
+terminal directly. The mechanics live with BackupRunner in the
+python-modules reference.
+
 ## IQN
 
 iSCSI Qualified Name — the unique permanent name every iSCSI
@@ -427,6 +439,17 @@ busy" refusal with an empty `lsof`: the busy-resolver's report names
 the holding pid and its mountpoint (found by scanning
 `/proc/*/mounts`), and never touches the container itself.
 
+## offsite candidate
+
+A pool the Pool Registry (Pools page) marks for offsite rotation — the
+backup pools that alternate between being attached to the storage node
+and sitting off-site. The mark is the authority the pool-identity
+detectors consult: a pool flagged this way is exempt from the
+"not imported" and "not configured" warnings (detached is its normal
+state; attached is still a known pool), while the GUID check still
+applies — an attached rotation pool's GUID is recorded in the state map
+so a pool reused under its name is caught.
+
 ## oracle
 
 The authoritative source a check or exercise is judged against — the
@@ -497,6 +520,18 @@ re-applies each property with `zfs set` — a `file://` keylocation
 additionally gets a best-effort non-interactive `zfs load-key`. Everything
 about replay is WARN-only: a missing, stale, or corrupt manifest never
 fails a restore; the dataset simply keeps its inherited defaults.
+
+## PTY (pseudo-terminal)
+
+A software stand-in for a terminal. It is a pair of connected endpoints:
+the program on one side sees an ordinary terminal, and a program on the
+other side plays the keyboard and screen. The GUI's job runner gives each
+step a PTY as its input, so a step can ask a question and read the typed
+answer as it would in a terminal window. Scripts test for a terminal with
+`[[ -t 0 ]]`, which is true on a PTY and false on a pipe. Code behind that
+test therefore runs in GUI and terminal sessions but not under the test
+suites, whose input is a pipe. `tests/pty_run.py` gives a test child a PTY
+so such code can be exercised.
 
 ## pv
 

@@ -1147,6 +1147,72 @@ PYEOF
     fi
 }
 
+test_offsite_candidate_guid_recorded_when_imported() {
+    reset_mocks
+    load_healthy_topology
+    # z40tb: an offsite rotation pool attached during a rotation — no
+    # iSCSI target, never in node.conf — but its GUID joins the pools
+    # section so the identity fence covers it.
+    _mock_zpool_guid[z40tb]=13118082129064717561
+    local cfg
+    cfg=$(mktemp)
+    printf '{"config_version": 31, "pools": [{"name": "threeamigos"}, {"name": "z40tb",'\
+' "offsite_candidate": true}]}\n' > "$cfg"
+    test_start "An imported offsite-candidate pool's GUID joins the pools section"
+
+    # Command-scoped env for each call; restored afterward as hygiene.
+    local _saved_cfg_path="${ZFSUTILITIES_CONFIG_PATH:-}"
+    ZFSUTILITIES_CONFIG_PATH="$cfg" collect_live_state
+    printf '%s\n' "$(emit_state_json)" > /tmp/export-iscsi-state-offsite.$$.json
+    local ok
+    ok=$(python3 - "$$" <<'PYEOF'
+import json, sys, os
+p = "/tmp/export-iscsi-state-offsite.%s.json" % sys.argv[1]
+with open(p) as f:
+    m = json.load(f)
+os.unlink(p)
+ok = m.get("pools") == {
+    "threeamigos": "4338716537971988948",
+    "NVME1": "252995746834113014",
+    "z40tb": "13118082129064717561",
+}
+print("OK" if ok else "FAIL:%r" % m.get("pools"))
+PYEOF
+    )
+
+    # Selectivity: with no offsite marking (no readable GUI config), the
+    # same attached pool is not recorded — the fence extension is opt-in
+    # via the Pool Registry flag.
+    ZFSUTILITIES_CONFIG_PATH="/nonexistent-zfsutilities-config.json" collect_live_state
+    printf '%s\n' "$(emit_state_json)" > /tmp/export-iscsi-state-offsite2.$$.json
+    local ok2
+    ok2=$(python3 - "$$" <<'PYEOF'
+import json, sys, os
+p = "/tmp/export-iscsi-state-offsite2.%s.json" % sys.argv[1]
+with open(p) as f:
+    m = json.load(f)
+os.unlink(p)
+ok = m.get("pools") == {
+    "threeamigos": "4338716537971988948",
+    "NVME1": "252995746834113014",
+}
+print("OK" if ok else "FAIL:%r" % m.get("pools"))
+PYEOF
+    )
+    if [[ -n "$_saved_cfg_path" ]]; then
+        ZFSUTILITIES_CONFIG_PATH="$_saved_cfg_path"
+    else
+        unset ZFSUTILITIES_CONFIG_PATH
+    fi
+    rm -f "$cfg"
+
+    if [[ "$ok" == "OK" && "$ok2" == "OK" ]]; then
+        test_pass
+    else
+        test_fail "pools section wrong ($ok / $ok2)"
+    fi
+}
+
 test_check_reports_guid_drift() {
     reset_mocks
     load_healthy_topology
@@ -1343,6 +1409,7 @@ test_check_mixed_drift_not_keys_pending
 test_check_unencrypted_missing_failed
 test_check_legacy_list_map_no_false_drift
 test_pool_guid_unreadable_omitted
+test_offsite_candidate_guid_recorded_when_imported
 test_check_reports_guid_drift
 test_check_without_map_fails
 test_print_map_dumps_newest

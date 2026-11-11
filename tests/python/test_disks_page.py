@@ -1046,14 +1046,120 @@ class TestTopologySelectionHighlight(unittest.TestCase):
         self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
 
-    def test_partition_leaf_highlights_partition_and_whole_disk_rows(self):
+    def test_partition_leaf_highlights_whole_disk_row_only(self):
         dp = _import_disks_page()
-        app = self._highlight_app(disk_names=("/dev/sda1",), extra_rows=("/dev/sda", "/dev/sdb"))
+        disks = [
+            _disk(path="/dev/sda", pools=[]),
+            _disk(path="/dev/sda1", parent_path="/dev/sda", pools=["pool1"]),
+            _disk(path="/dev/sdb", pools=[]),
+        ]
+        app = _make_app(disks=disks, topologies={"pool1": _mirror_topology(("/dev/sda1",))})
+        app.disks_store = FakeListStore(
+            [_disk_row("/dev/sda"), _disk_row("/dev/sda1", "pool1"), _disk_row("/dev/sdb")]
+        )
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
         rows = self._select(dp, app, (0, 0, 0))
-        # /dev/sda1 leaf highlights its own row and the /dev/sda whole-disk row.
+        # The partition member tints its backing whole-disk row, not itself.
         self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
-        self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
+
+
+class TestTopologySelectionHighlightsBackingDisk(unittest.TestCase):
+    """A topology member tints the physical disk backing it, never a partition."""
+
+    def _select(self, dp, app, path):
+        dp._repopulate_topology(app)
+        selection = app.disks_topology_view.get_selection()
+        selection.paths = [path]
+        dp._on_topology_selection_changed(selection, app)
+        return app.disks_store.rows
+
+    def _app_with_partition_members(self, leaf_names):
+        """One mirror pool whose members are partitions of sda and sdb (by-id)."""
+        disks = [
+            _disk(path="/dev/sda", by_id="ata-SSD-1234", pools=[]),
+            _disk(
+                path="/dev/sda2",
+                by_id="ata-SSD-1234-part2",
+                parent_path="/dev/sda",
+                disk_type="part",
+                pools=["pool1"],
+            ),
+            _disk(path="/dev/sdb", by_id="ata-HDD-5678", pools=[]),
+            _disk(
+                path="/dev/sdb1",
+                by_id="ata-HDD-5678-part1",
+                parent_path="/dev/sdb",
+                disk_type="part",
+                pools=["pool1"],
+            ),
+            _disk(path="/dev/sdc", pools=[]),
+        ]
+        app = _make_app(disks=disks, topologies={"pool1": _mirror_topology(leaf_names)})
+        app.disks_store = FakeListStore(
+            [
+                _disk_row("/dev/sda"),
+                _disk_row("/dev/sda2", "pool1"),
+                _disk_row("/dev/sdb"),
+                _disk_row("/dev/sdb1", "pool1"),
+                _disk_row("/dev/sdc"),
+            ]
+        )
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        return app
+
+    def test_by_id_partition_member_tints_disk_not_partition(self):
+        dp = _import_disks_page()
+        app = self._app_with_partition_members(("/dev/disk/by-id/ata-SSD-1234-part2",))
+        rows = self._select(dp, app, (0, 0, 0))
+        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[4][dp.COL_D_HIGHLIGHT])
+
+    def test_vdev_node_tints_backing_disks_of_all_members(self):
+        dp = _import_disks_page()
+        app = self._app_with_partition_members(
+            ("/dev/disk/by-id/ata-SSD-1234-part2", "/dev/disk/by-id/ata-HDD-5678-part1")
+        )
+        rows = self._select(dp, app, (0, 0))
+        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[2][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[3][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[4][dp.COL_D_HIGHLIGHT])
+
+    def test_kernel_path_partition_member_tints_disk_not_partition(self):
+        dp = _import_disks_page()
+        app = self._app_with_partition_members(("/dev/sda2",))
+        rows = self._select(dp, app, (0, 0, 0))
+        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
+
+    def test_member_missing_from_inventory_falls_back_to_own_path(self):
+        dp = _import_disks_page()
+        # /dev/sdz9 is unknown to the inventory: the fail-open fallback keeps
+        # the raw path, so the whole-disk prefix rule still tints /dev/sdz.
+        disks = [_disk(path="/dev/sdz", pools=["pool1"])]
+        app = _make_app(disks=disks, topologies={"pool1": _mirror_topology(("/dev/sdz9",))})
+        app.disks_store = FakeListStore([_disk_row("/dev/sdz", "pool1")])
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        rows = self._select(dp, app, (0, 0, 0))
+        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
+
+    def test_pool_wide_tint_lands_on_parent_disk_of_partition_member(self):
+        dp = _import_disks_page()
+        app = self._app_with_partition_members(
+            ("/dev/disk/by-id/ata-SSD-1234-part2", "/dev/disk/by-id/ata-HDD-5678-part1")
+        )
+        dp._highlight_pool_disks(app, "pool1")
+        rows = app.disks_store.rows
+        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[2][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[3][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[4][dp.COL_D_HIGHLIGHT])
 
 
 class TestDiskSelectionTopologyHighlight(unittest.TestCase):

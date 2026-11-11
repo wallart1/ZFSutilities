@@ -45,6 +45,30 @@ destination up to date. Customize and use
 [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore), which automates
 this two-step process.
 
+### Where a Restore Lands
+
+The typed destination decides the restored dataset's name. There are two
+behaviors:
+
+- **Conventional mapping** — the destination ends with a suffix of the
+  source path. The restore keeps the source's relative path under the
+  destination, stripping the stacked leading qualifiers back off.
+  `backuppool/threeamigos/data` restored to `threeamigos/data` lands at
+  `threeamigos/data`.
+- **Rename** — the destination shares no suffix with the source path. The
+  source is received exactly as the typed name:
+  `backuppool/threeamigos/data` restored to `poolB/renamed` lands at
+  `poolB/renamed`, and a recursive restore puts descendants beneath the new
+  name (`poolB/renamed/sub`).
+
+In the GUI's Restore tab, **Auto-determine destination** computes the
+conventional destination by stripping leading qualifiers until a known pool
+name remains. A manual destination is free-form, and the confirmation dialog
+says when a restore is a rename. On the command line,
+[`zfsrestore`](../commands-and-modules/commands.md#zfsrestore) maps the
+source to the destination with `$sourcefsremovequalifiers` and `$destfs`:
+strip that many leading source components, then prepend `$destfs`.
+
 ### Recursive restores
 
 By default, the command-line `zfsrestore` and

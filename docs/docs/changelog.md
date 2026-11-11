@@ -1,5 +1,102 @@
 # Changelog
 
+## 0.141.0
+
+*Released 2026-11-11*
+
+### Added
+
+- **Dashboard Tasks: live rows pinned at top, never dropped mid-run.**
+  Running and waiting tasks always sit above the completed ones, sorted
+  ascending by start time (longest-running first), while completed rows
+  stay newest-first below. A live task the collectors momentarily stop
+  reporting keeps its last-known row for up to two consecutive missed
+  refreshes and is dropped the moment its completed entry appears, so a
+  refresh landing in a collector's blind window no longer erases a task
+  that is still running.
+- **`tests/pty_run.py`.** A test helper that runs a child with a
+  pseudo-terminal on stdin and plays a scripted conversation against it
+  (expect/send/end-of-input steps, bounded by a timeout). Terminal-gated
+  code (`[[ -t 0 ]]`) was invisible to every suite — their stdin is a
+  pipe — and can now be exercised in `gui` shape (PTY stdin, piped
+  output, like the GUI's job runner) or `terminal` shape (all descriptors
+  on the PTY).
+
+### Fixed
+
+- **Lock-conflict prompt no longer aborts strict callers.** A GUI backup
+  that hit a lock conflict died at `ZFSUTILITIES_HEADLESS: unbound
+  variable`: the GUI runner gives every step a terminal on stdin, the
+  terminal check passed, and an unset-variable read fired under the
+  strict backup payload — three independent test masks had hidden it.
+  Every optional environment knob read in the bash tree now carries a
+  default, the conflict prompt's holder-field reads are fenced (a lock
+  released mid-prompt no longer kills the caller), end of input at
+  either prompt reads as pressing Enter, and the Wait choice restores
+  the caller's Ctrl+C handler, which the old code left disarmed.
+- **Property manifests survive a guarded backup root.** A pool root
+  with `readonly=on` (an offsite rotation pool experiment) was inherited
+  by the manifest store, which then mounted read-only and failed every
+  manifest write. The store is now created with `readonly=off` pinned,
+  capture self-heals an already-guarded store under its write lock
+  (replay stays read-only and untouched), and a failed write names the
+  real reason (e.g. `Read-only file system`) instead of just `failed`.
+- **Attached offsite rotation pools are no longer flagged "unexpected."**
+  A pool marked as an offsite candidate in the Pools tab is exempt from
+  both pool-identity set-difference warnings — missing while rotated
+  offsite and imported-but-not-configured while attached — in the
+  Dashboard, `setup-iscsi-targets`, and the post-restore gate; the GUID
+  identity check still applies, and the iSCSI state map now records an
+  attached rotation pool's GUID so a reused pool name is still caught.
+  The warning text now says what to do ("add it to the node config or
+  export it").
+- **Disks page: topology tint lands on the disk row.** Selecting a
+  Pool Topology row whose members are partitions tinted the partition
+  row in the Disk Inventory. Every member now resolves to its backing
+  physical disk, so the tint marks disk rows — for device, vdev, and
+  pool-wide selections alike.
+
+### Changed
+
+- **Restore documentation rewritten for destination freedom.** The
+  restore guides no longer describe name-derived destinations as a
+  requirement: stripping the source qualifiers is the conventional
+  shape, any destination is accepted, and a new "Where a Restore Lands"
+  section (with worked examples) covers both the GUI's auto-determine
+  and free-form manual behavior.
+
+### Documentation
+
+- **Architecture guide reworked.** Answers the question asked with no
+  historical narration; new "Why two steps?" answer for the Restore Flow
+  and a "Destination hold preservation" subsection stating the full
+  capture/release/reapply contract with its when-not side. One factual
+  correction: the terminal message-level gate covers the archive engine
+  calls only, not `remove-vm-disk --from-archive`.
+- **Strict-caller rules documented.** The lock-manager page states the
+  two prompting conditions (terminal stdin, not headless) and the GUI's
+  PTY arrangement; `$ZFSUTILITIES_HEADLESS` joined the global-variables
+  reference; the coding policies gained the terminal-check rule (default
+  every read behind `[[ -t 0 ]]`); the testing guide documents
+  `tests/pty_run.py` and the new suite coverage.
+
+### Tests
+
+- Strict-caller prompt coverage via the PTY helper: each conflict choice
+  (GUI and terminal shapes), end of input at both prompts, a lock
+  released between conflict and prompt, interrupt-handler restoration
+  after a wait, and the headless decision with the variable unset and
+  set; the headless variable's test-suite mask was removed.
+- `test-strict-mode` gained a static guard: no bare read of a
+  `ZFSUTILITIES_*` or `ZFSLOCK_*` environment variable that no bash
+  file assigns — red-proven against the pre-fix files.
+- New coverage for the Dashboard Tasks ordering and miss-carry (survive,
+  drop limit, completion swap, count reset), the Disks backing-disk
+  resolution (by-id, vdev node, kernel path, unknown-device fail-open,
+  pool-wide tint), the offsite-candidate exemption in both identity
+  detectors plus the state-map GUID recording, and the manifest-store
+  readonly self-heal with its reason-bearing WARN.
+
 ## 0.140.0
 
 *Released 2026-11-10*

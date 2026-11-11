@@ -120,6 +120,23 @@ zfs() {
             echo "$2" >> "$_pmock_snaps_file"
             return 0
             ;;
+        set)
+            # Stateful like the real thing: a set updates the props
+            # fixture so later `zfs get` calls observe the new value
+            # (the readonly self-heal must not re-run once cleared).
+            local kv prop t=$'\t'
+            kv="$2"
+            target="${*: -1}"
+            prop="${kv%%=*}"
+            value="${kv#*=}"
+            if grep -q "^${target}${t}${prop}${t}" "$_pmock_props_file" 2>/dev/null; then
+                sed -i "s|^${target}${t}${prop}${t}.*|${target}${t}${prop}${t}${value}|" \
+                    "$_pmock_props_file"
+            else
+                printf '%s\t%s\t%s\n' "$target" "$prop" "$value" >> "$_pmock_props_file"
+            fi
+            return 0
+            ;;
     esac
     return 0
 }
@@ -258,9 +275,12 @@ test_ensure_creates_once() {
     reset_state
     propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
     propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
-    if [[ "$(grep -c 'zfs create -pu backup/tank/zfsutilities-manifests' \
+    # The full string pins the create flags: -p for the parents, and the
+    # explicit readonly=off so a guarded backup root (pool root
+    # readonly=on) is never inherited by the tool-owned store.
+    if [[ "$(grep -c 'zfs create -pu -o readonly=off backup/tank/zfsutilities-manifests' \
             "$_zfs_capture_file")" != "1" ]]; then
-        test_fail "expected exactly one zfs create -p"
+        test_fail "expected exactly one zfs create -pu -o readonly=off"
         return
     fi
     assert_contains "$(get_log)" \
@@ -355,7 +375,7 @@ test_capture_happy_path() {
 properties)."
     local capture
     capture=$(cat "$_zfs_capture_file")
-    if [[ "$capture" != *"zfs create -pu backup/tank/zfsutilities-manifests"* \
+    if [[ "$capture" != *"zfs create -pu -o readonly=off backup/tank/zfsutilities-manifests"* \
           || "$capture" != *"zfs mount backup/tank/zfsutilities-manifests"* \
           || "$capture" != *"zfs snapshot \
 backup/tank/zfsutilities-manifests@daily-20261102T0500Z-d"* \
@@ -462,18 +482,56 @@ test_capture_get_failure_fails_open() {
     test_pass
 }
 
+test_capture_selfheals_readonly_store() {
+    test_start "an inherited readonly=on store is healed once, before the mount"
+
+    reset_state
+    _pmock_existing="backup/tank/zfsutilities-manifests"
+    add_prop backup/tank/zfsutilities-manifests readonly on
+    add_prop tank/src/data compression lz4
+    add_prop tank/other/data compression off
+
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || true
+    propmanifest_capture tank/other/data backup '@daily-20261102T0500Z-d' || true
+
+    if [[ "$(grep -c 'zfs set readonly=off backup/tank/zfsutilities-manifests' \
+            "$_zfs_capture_file")" != "1" ]]; then
+        test_fail "heal must run exactly once (the set is observable state)"
+        return
+    fi
+    local set_line mount_line
+    set_line=$(grep -n -m1 'zfs set readonly=off' "$_zfs_capture_file" | cut -d: -f1)
+    mount_line=$(grep -n -m1 'zfs mount backup/tank/zfsutilities-manifests' \
+        "$_zfs_capture_file" | cut -d: -f1)
+    if [[ -z "$set_line" || -z "$mount_line" || "$set_line" -ge "$mount_line" ]]; then
+        test_fail "heal must precede the mount (set=$set_line mount=$mount_line)"
+        return
+    fi
+    assert_contains "$(get_log)" \
+        "VERB: Cleared readonly on backup/tank/zfsutilities-manifests for manifest writes."
+    if [[ ! -f "$_pmock_store/tank%2Fsrc%2Fdata@daily-20261102T0500Z-d" ]] \
+            || [[ ! -f "$_pmock_store/tank%2Fother%2Fdata@daily-20261102T0500Z-d" ]]; then
+        test_fail "both manifests must land after the heal"
+        return
+    fi
+    test_pass
+}
+
 test_capture_write_failure_fails_open() {
-    test_start "a write failure WARNs, leaves no temp file, fails open"
+    test_start "a write failure WARN names the reason, leaves no temp file, fails open"
 
     reset_state
     add_prop tank/src/data compression on
-    _pmock_mountpoint="/proc"
+    # A nonexistent mountpoint dir makes the probe fail deterministically
+    # (ENOENT for root and non-root alike) so the WARN's reason text is
+    # stable across environments.
+    _pmock_mountpoint="/nonexistent-propmanifest-mountpoint"
     local rc=0
     propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
     assert_rc 0 "$rc"
     assert_contains "$(get_log)" \
         "WARN: Property manifest for tank/src/data not written (write to \
-backup/tank/zfsutilities-manifests failed)."
+backup/tank/zfsutilities-manifests failed: No such file or directory)."
     test_pass
 }
 
@@ -577,6 +635,7 @@ test_capture_snapshot_idempotent
 test_capture_dryrun_logs_and_does_nothing
 test_capture_lock_conflict_fails_open
 test_capture_get_failure_fails_open
+test_capture_selfheals_readonly_store
 test_capture_write_failure_fails_open
 test_capture_mount_refusal_latches_skip
 test_capture_legacy_mountpoint_latches_skip

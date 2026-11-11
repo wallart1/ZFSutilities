@@ -372,6 +372,69 @@ release commit.)
   helpers awaits the user's cue. Behavior of both commands is unchanged
   until then.
 
+## 2026-11-10 (evening) — property manifests vs the readonly z40tb experiment (user bug report)
+
+- User report: the 21:34 offsite GUI run (temp → z40tb, first real offsite
+  run since manifests shipped in 0.138.0) logged 16 unexpected
+  `Property manifest for ... not written (write to
+  z40tb/temp/zfsutilities-manifests failed)` WARNs. The "No common
+  snapshot" WARNs (full copies) were expected and untouched.
+- Root cause on stewie: the z40tb POOL ROOT carries a local `readonly=on`
+  (a user experiment, since declared unneeded; fivebays is local `off`;
+  tweety has no non-default readonly anywhere). `zfs create -pu` made the
+  store inherit it → mounted read-only (`mount` shows `ro,noatime`) →
+  every write probe failed EROFS. Fail-open held: data verified, no
+  manifests. Secondary defect: the WARN named no reason.
+- Fix (approved plan, executed): the store never inherits protection
+  flags — create is now `zfs create -pu -o readonly=off`, and capture
+  self-heals a pre-existing guarded store (`zfs set readonly=off` under
+  the store's write lock, before the mount) so z40tb's already-created
+  store recovers on the next run with no manual node work. The heal sits
+  in `propmanifest_capture` (write path) deliberately — replay mounts
+  read-only and reads fine, so it never mutates. Write-failure WARNs now
+  carry the shell's real error (`... failed: Read-only file system`).
+- Tests: `test_capture_selfheals_readonly_store` added (heal-once,
+  before-mount ordering, both manifests land; mock `zfs set` made
+  stateful so the once-ness is observable); `test_ensure_creates_once`
+  and `test_capture_happy_path` pin the new create string;
+  `test_capture_write_failure_fails_open` moved to a nonexistent
+  mountpoint dir (ENOENT is deterministic for root and non-root; /proc's
+  EACCES text was environment-fragile) and asserts the reason text.
+  All red-proofed before the lib changed. Plan's separate
+  `test_create_uses_readonly_off`/`test_write_warn_carries_reason` were
+  folded into the updated tests (identical assertion sites).
+- Today's z40tb generation carries no manifests (replay falls back to
+  newest available); next offsite run after deploy captures normally.
+  Optional user cleanup, not required: `zfs set readonly=off z40tb`.
+
+## 2026-11-10 (later) — offsite-candidate pool-identity exemption (user bug report)
+
+- User report: Dashboard warned "Pool z40tb is imported but not configured
+  in node.conf — an unexpected pool is serving data here" although z40tb is
+  a long-designated offsite rotation pool (Pool Registry lists it). Verified
+  on stewie: z40tb imported + `offsite_candidate: true`, but absent from
+  node.conf's POOL_TARGET (rotation sibling z22tb IS listed) — so the
+  warning fired on every rotation where z40tb is the attached pool.
+- Fix (approved plan, executed): the offsite exemption now covers BOTH
+  set-difference shapes in `dashboard_page.py::_compute_pool_identity_warnings`
+  and `lib/iscsi-lib.sh::detect_pool_identity`; the message tail became
+  actionable ("— add it to the node config or export it"). GUID shape
+  untouched. `bin/export-iscsi-state::collect_live_state` now records
+  imported offsite candidates' GUIDs into the state map's `pools` dict, so
+  an attached rotation pool stays inside the GUID fence (map consumers are
+  the identity detectors + export drift check only — no rebuild logic
+  reads `pools`).
+- New tests: python `test_offsite_candidate_imported_not_configured_is_exempt`;
+  bash `test_two_node_identity_offsite_candidate_imported_exempt`;
+  `test_offsite_candidate_guid_recorded_when_imported` (with selectivity
+  sub-check). All three red-proofed against the old logic (temp reverts).
+- Verified on bash 5.2 while writing the export test: `VAR=x func` does NOT
+  persist after the call (the function sees it, the caller's shell doesn't)
+  — the test's save/restore of ZFSUTILITIES_CONFIG_PATH is hygiene, not a
+  fence; the bash-traps env-prefix note stands as written.
+- node.conf on the nodes deliberately untouched: the Pool Registry flag is
+  the authority for "known rotation pool". Effect lands on the next deploy.
+
 ## 2026-11-09 (later) — j23 two-node release-upgrade journey (user-cued ITF gap)
 
 - The user named the itf-coverage.md gap row "two-node release upgrade
@@ -3929,3 +3992,155 @@ at the next release prune)*
   (harness); j05's lease re-acquire rewrites guest-j05-storage.txt
   instead of the role-named record (harness); over-100-column lines
   remain in common.sh and the older journeys (j15/j16/j17/j20).
+
+## 2026-11-11 (pub2): restore destination-naming docs audit
+
+- Task: audit the docs after 0.139.0's rename freedom removed the
+  requirement that a restore destination be derived from the source
+  name. Two stale passages found, one silent page; the rest of the
+  sweep (gtk-gui rename paragraph, python-modules, messages/index,
+  commands zfsrestore, global-variables, modules, architecture,
+  README, profiles) verified accurate against
+  compute_auto_destination/compute_restore_params.
+- concepts.md: "must be stripped back off ... handle this
+  automatically" rewritten — stripping is the conventional shape, the
+  original name is no longer required, GUI auto-determine vs free-form
+  manual, links to the new restore.md section.
+- gtk-gui.md Restore tab: "The destination dataset is the one that was
+  originally backed up" now reads "typically ... any destination is
+  accepted", with links; the user's pending hand-edits (sidebar table,
+  Dashboard pool-identity) left untouched.
+- restore.md: new "Where a Restore Lands" subsection — conventional
+  suffix mapping vs rename (worked examples), GUI auto-determine and
+  manual behavior, CLI $sourcefsremovequalifiers + $destfs mapping.
+- Gates: test_docs_integrity green (new anchor + cross-links resolve);
+  grep sweep clean. Full suite green except one xdist flake
+  (test_zfs_lock_manager local-conflict message test — passes alone
+  and file-wide on rerun; filed in PREEXISTING.md).
+
+## 2026-11-11 (pub2): Disks page — topology tint lands on the disk row
+
+- User item: selecting a Pool Topology row of type "disk" tinted the
+  partition row in the Disk Inventory; the disk row should tint instead.
+  Root cause: `_highlight_topology_devices` matched raw leaf paths — a
+  by-id `-partN` leaf realpaths to the partition, and the whole-disk
+  prefix rule compares raw strings, so the disk row never matched.
+- Fix: new `_backing_disk_paths()` resolves each member to its physical
+  disk via the cached inventory (`parent_path`, path realpath, and by-id —
+  indexed BOTH as the bare basename the repository stores and the full
+  /dev/disk/by-id/ form the topology leaves carry; unknown devices keep
+  their raw path, fail-open). `_path_matches_any_device` itself is
+  unchanged — a whole-disk target matches only its own row, so partitions
+  stop tinting for free. Covers device rows AND vdev/pool nodes (same
+  call path); `_highlight_pool_disks` maps members to `parent_path or
+  path` so the pool-wide tint follows the same rule.
+- Tests: TestTopologySelectionHighlightsBackingDisk (by-id member, vdev
+  node, kernel-path member, unknown-device fail-open, pool-wide tint) +
+  rewrote the old partition-leaf test (both-rows expectation → disk-row
+  only). Red on the old code, all green after the fix; full disks suite
+  green. Ruff clean.
+- Docs: gtk-gui.md Disks section — both tint passages now say disk rows;
+  partition members tint their whole disk; inventory→topology direction
+  unchanged.
+- PREEXISTING += 1 (recurrence note on the lock-manager xdist flake +
+  new entry: partition-member pools leave the disk row pool-less —
+  `_pools_for_disk` matches exact realpath/basename only, so the disk
+  row's Pools column is blank and selecting it clears the pane).
+
+## 2026-11-11 (pub2): architecture.md reworked per review pattern
+
+- User review of docs/docs/developer-guide/architecture.md set the pattern:
+  answer exactly the question asked; no historical references ("now", "no
+  longer", "as before", refactor narration); architecture-level prose only
+  (code-walkthrough detail belongs in code comments). Applied throughout.
+- Restore Flow: "Why two steps?" answered with the single sentence; new
+  "Destination hold preservation" subsection states the full
+  capture/release-only-offsite/reapply contract with the when-not side
+  (plain incrementals, dry-run, preserve_target_holds='N', fatal exits).
+  Facts verified in zfs-send-receive (capture gate ~L531, reapply ~L988),
+  zfsrestore, zfsreapplyholds, zfsdelfs.
+- Factual fix found while verifying: the msg-level-gate section claimed the
+  WARN gate covers remove-vm-disk --from-archive; the code gates only the
+  archive engine calls. Corrected to match current behavior.
+- History purge: session-logging/cron-fence pre-fence narration, "stream
+  exactly as before", "Regeneration no longer depends", "was refactored",
+  "remains as a compatibility shim ... migrated incrementally", "today",
+  "Phase 4", "no longer have an iSCSI LUN", "historical session log".
+  Legitimate current-world "legacy"/"history" uses kept (snapshot-name
+  formats, config layer, history JSON).
+- Detail trim: single-writer cron-fence mechanics compressed (code homes
+  verified: _silence_cron_output docstrings, profile_runner.py:339-341 pv
+  comment); added the one missing code comment (session-log state clearing,
+  backup_runner.py finish+cancel paths).
+- Gates: mkdocs build to /tmp clean (anchors resolve); history-marker grep
+  sweep clean; full suite at turn end.
+
+## 2026-11-11 (pub2): lock-conflict prompt under strict callers (user bug report)
+
+- User report: GUI backup on stewie (0.140.0) aborted at step 9/12 —
+  `zfslockmanager: line 1134: ZFSUTILITIES_HEADLESS: unbound variable`,
+  rc=1. Cause chain: the 21:34 offsite GUI leg (fivebays -> z40tb, still
+  running) held w locks on fivebays/threeamigos/proxmox/vm-*; the backup's
+  destination lock (threeamigos/proxmox -> fivebays) hit a genuine
+  conflict; the GUI runner gives every step a PTY on stdin, so
+  `[[ -t 0 && "$VAR" != "Y" ]]` reached the unset read under the strict
+  zfs-send-receive payload. No data touched; the dead step's locks were
+  released; the offsite run continued.
+- Why every suite was green: tests stub _zfslock_is_interactive, the
+  set-e child template exported ZFSUTILITIES_HEADLESS=Y, and no suite has
+  a terminal on stdin. Three independent masks.
+- Fix (zfslockmanager): default the headless read; fence the six
+  holder-field reads; EOF at either prompt reads as the empty default with
+  ask_line fenced; the force-confirm variable is local; the W branch
+  restores the caller's INT trap (the old eval-of-empty left the wait
+  handler armed, swallowing every later Ctrl+C). Guarded re-reads
+  defaulted in zfsconfig and installer-lib. The field/ask_line fences are
+  tolerance hardening: every strict script reaches the resolver through a
+  conditional call, so no live errexit-active caller exists.
+- Tests: tests/pty_run.py (PTY stdin; gui shape = the runner's piped
+  output, terminal shape = all fds on the PTY; expect/send/eof/run steps,
+  all bounded by a timeout). New strict-child sections in
+  test-zfslockmanager (choices, fences, headless decision); _sete_child no
+  longer exports the headless variable. Red-proofs: each of the five
+  product terms reverted alone fails exactly its tests; the variable
+  revert reproduces the production error line.
+- Fence: test-strict-mode guard — no bare read of a ZFSUTILITIES_* or
+  ZFSLOCK_* variable that no bash file assigns. Red-proven against the
+  pre-fix files: it flags all five sites, including line 1134.
+- Docs: lock-manager.md (interactive conditions, GUI PTY, set -u note),
+  global-variables.md (the missing $ZFSUTILITIES_HEADLESS row at the
+  anchor modules.md already linked), coding-policies.md (terminal-check
+  rule), testing.md (pty_run.py section plus rows), GLOSSARY.md (PTY).
+- PREEXISTING += 1: zfsdailybackup (strict) calls cleanup with three
+  arguments; cleanup's bare $4 and optional-global reads abort under
+  set -u (semantics probe-verified, not run end-to-end). Also removed two
+  test counts from earlier notes-file entries per the no-counts rule.
+- Not fixed, noted here only: the W wait's sleep stays unfenced — an
+  interrupted sleep would abort an errexit-active bare caller (none
+  exists).
+
+## 2026-11-11 (pub2): Dashboard Tasks — live rows pinned at top; never dropped mid-run
+
+- User request: running tasks always at the top of the Tasks list, sorted
+  ascending datetime, never removed while running.
+- Root causes: `_refresh_tasks_section` sorted all rows newest-first, so a
+  running task sat below recent completions; and the store is rebuilt from
+  collector output every refresh, so one refresh that fails to report a task
+  dropped its row — concretely, `BackupRunner._finish`/`_end_cancelled` flip
+  `running` off BEFORE writing history, and profile lock-file / surface-test
+  state / dataset-action tracker reads have momentary races. Scrubs were
+  already covered upstream (scrub queue tick has miss-hysteresis).
+- Fix (dashboard_page): live block (waiting+running) sorts above completed,
+  ascending by start (longest-running first, timeless rows atop the block);
+  completed rows stay newest-first. New `_retain_unreported_live_rows` keeps
+  a last-known live row on `app._dashboard_task_carry` for up to
+  `_TASK_CARRY_MISS_LIMIT` (2) consecutive missed refreshes, dropping it the
+  moment a completed row with the same session log file appears. Bounded
+  grace is deliberate: scrub/surface-test/ZFS-op tasks never write history
+  rows, so unbounded carry would leave permanent ghosts.
+- Tests: `test_live_rows_sort_above_completed` (renamed from the old
+  reverse-chronological mixed test), `test_live_rows_sort_ascending_by_start`,
+  carry survive/drop-limit, carry-vs-completed swap, and miss-count reset.
+  `_make_app` gives the app a real `_dashboard_task_carry` dict.
+- Docs: gtk-gui.md Tasks section — live-first ascending order and the
+  retention behavior in user terms.

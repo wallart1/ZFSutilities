@@ -1950,7 +1950,8 @@ both `saveconfig.json` and `expected-backstores.txt` (they live on the OS
 disk) while the pools re-import current — LUNs created after the backup point
 vanish and the manifest cannot restore them. This script writes the
 authoritative map (`iscsi-state.json`: per-target LUN → backstore,
-per-backstore zvol device, ACL initiators, the configured pools' GUIDs) plus a
+per-backstore zvol device, ACL initiators, and the GUIDs of every
+configured pool and any attached offsite-candidate rotation pool) plus a
 copy of `node.conf` onto every online pool at `<pool>/zfsutilities/`, so any
 surviving pool can serve recovery. `safe-iscsi-save` invokes it after every
 successful save, keeping the map as fresh as the last LUN change.
@@ -1999,7 +2000,9 @@ the map's history.
    dependency.
 3. Collect the live topology: per-target LUN mappings and ACL initiators for
    every pool in the node config, plus every VM backstore and its zvol device,
-   and each pool's GUID (a pool whose GUID cannot be read is omitted from the
+   and each pool's GUID — configured pools, plus any attached pool marked as
+   an offsite candidate in the GUI config, so the identity fence covers
+   rotation pools too (a pool whose GUID cannot be read is omitted from the
    `pools` section — an offline pool must not fail the export).
 4. Render the state map as deterministic JSON (sections sorted; only the
    `generated` timestamp varies between runs).
@@ -2372,7 +2375,10 @@ pattern as orphan-target deletion. Pool-identity detection
 or replaced pool (expected pool missing, unexpected pool imported, live GUID
 differing from the map-recorded GUID, or an importable pool duplicating an
 imported name on non-zvol devices) is printed as warnings only — identities
-are never repaired automatically.
+are never repaired automatically. Pools marked as offsite candidates in the
+GUI config are exempt from the expected-missing and unexpected-import
+findings (routinely detached by design; an attached one is still a
+registry-known pool whose GUID stays fenced).
 
 ```bash
 sudo setup-iscsi-targets

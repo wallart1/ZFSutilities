@@ -64,7 +64,7 @@ _zfsconfig_lock_file() {
 # Honours ZFSUTILITIES_PYLIB, then checks the repo root and deployed bin/ layouts.
 _zfsconfig_pylib() {
     if [[ -n "${ZFSUTILITIES_PYLIB:-}" ]]; then
-        printf '%s\n' "$ZFSUTILITIES_PYLIB"
+        printf '%s\n' "${ZFSUTILITIES_PYLIB:-}"
         return 0
     fi
     local script_dir

@@ -33,8 +33,8 @@ from logging_config import log_msg
 from zfs_repository import TopologyNode, ZfsRepository, valid_rate_limit
 
 # Foreground color used to tint the rows in one pane that correlate with the
-# current selection in the other: disks of the selected pool (or of the
-# selected topology node) in the Disk Inventory, and the devices of the
+# current selection in the other: the physical disks backing the selected
+# pool or topology node in the Disk Inventory, and the devices of the
 # selected inventory disk in the Pool Topology.
 POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 
@@ -976,11 +976,12 @@ def _on_topology_selection_changed(selection, app):
     """When a topology node is selected, highlight its devices in the inventory.
 
     A device node highlights that device, a vdev node highlights every device
-    in the vdev, and the pool node highlights every device in the pool. The
-    pool selector follows the pool containing the selection, and an empty
-    selection (or a node with no devices) restores the pool-wide highlight.
-    The inventory selection is never modified; the correlation is teal
-    foreground text only.
+    in the vdev, and the pool node highlights every device in the pool. Every
+    member resolves to its backing physical disk, so the tint lands on disk
+    rows, never on partition rows. The pool selector follows the pool
+    containing the selection, and an empty selection (or a node with no
+    devices) restores the pool-wide highlight. The inventory selection is
+    never modified; the correlation is teal foreground text only.
     """
     if getattr(app, "_disks_syncing_selection", False):
         return
@@ -1167,12 +1168,15 @@ def _selected_disk_is_wipeable(app) -> bool:
 def _highlight_pool_disks(app, pool_name):
     """Set the highlight flag on every disk row that belongs to *pool_name*.
 
-    Passing *pool_name* as ``None`` or a pool not present in the cached data
-    clears all highlights.
+    A member that is itself a partition tints its parent disk, so the tint
+    always lands on a physical-disk row. Passing *pool_name* as ``None`` or a
+    pool not present in the cached data clears all highlights.
     """
     data = app._disks_inventory_cache.get()
     if pool_name:
-        pool_member_paths = {disk.path for disk in data.disks if pool_name in disk.pools}
+        pool_member_paths = {
+            disk.parent_path or disk.path for disk in data.disks if pool_name in disk.pools
+        }
     else:
         pool_member_paths = set()
 
@@ -1374,12 +1378,52 @@ def _path_matches_any_device(row_path: str, device_paths: set[str]) -> bool:
     return False
 
 
+def _backing_disk_paths(app, device_paths) -> set[str]:
+    """Resolve topology device paths to the physical disks that back them.
+
+    Each cached inventory entry is indexed by its kernel path, that path's
+    realpath, and its by-id name; a hit maps to the entry's parent disk
+    (partitions carry ``parent_path``) or to the entry itself. A device the
+    inventory does not know (unplugged, mid-refresh) keeps its own path, so
+    the highlight fails open to the raw-path matching.
+    """
+    index: dict[str, str] = {}
+    for disk in app._disks_inventory_cache.get().disks:
+        target = disk.parent_path or disk.path
+        keys = [disk.path]
+        if disk.by_id:
+            # Inventory by-id names are bare basenames while topology leaves
+            # carry the full /dev/disk/by-id/ path; index both forms.
+            keys.extend((disk.by_id, f"/dev/disk/by-id/{disk.by_id}"))
+        for key in keys:
+            index[key] = target
+            try:
+                index[os.path.realpath(key)] = target
+            except OSError:
+                pass
+    resolved = set()
+    for device in device_paths:
+        target = index.get(device)
+        if target is None:
+            try:
+                target = index.get(os.path.realpath(device))
+            except OSError:
+                target = None
+        resolved.add(target if target is not None else device)
+    return resolved
+
+
 def _highlight_topology_devices(app, device_paths):
-    """Highlight every inventory row that matches one of *device_paths*."""
+    """Highlight the physical-disk row backing each of *device_paths*.
+
+    Every member resolves to its whole disk first (see _backing_disk_paths),
+    so the tint lands on disk rows, never on partition rows.
+    """
+    disk_paths = _backing_disk_paths(app, device_paths)
     it = app.disks_store.get_iter_first()
     while it:
         path = app.disks_store.get_value(it, COL_D_NAME)
-        app.disks_store.set_value(it, COL_D_HIGHLIGHT, _path_matches_any_device(path, device_paths))
+        app.disks_store.set_value(it, COL_D_HIGHLIGHT, _path_matches_any_device(path, disk_paths))
         it = app.disks_store.iter_next(it)
 
 

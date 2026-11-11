@@ -627,7 +627,7 @@ ensure_retention_profiles() {
 
     local python_src
     if [[ -n "${ZFSUTILITIES_PYTHON_SRC:-}" ]]; then
-        python_src="$ZFSUTILITIES_PYTHON_SRC"
+        python_src="${ZFSUTILITIES_PYTHON_SRC:-}"
     elif [[ -d "/usr/local/lib/zfsutilities/current/python" ]]; then
         python_src="/usr/local/lib/zfsutilities/current/python"
     else

@@ -8,10 +8,13 @@
 #
 # Store shape: <destfs>/<source-pool>/zfsutilities-manifests — one small
 # dedicated filesystem per backup root, created once (zfs create -p,
-# canmount=on), inheriting the backup root's efficiency settings. It must
-# stay unencrypted; a refusal to create it (e.g. under an encrypted
-# parent) WARNs once and skips manifests for the rest of the run — fail
-# open, the data still flows.
+# canmount=on), inheriting the backup root's efficiency settings but
+# never its protection flags: readonly=off is pinned at create time and
+# re-asserted at capture time, so a guarded backup root (pool root
+# readonly=on) cannot block the tool-owned store. It must stay
+# unencrypted; a refusal to create it (e.g. under an encrypted parent)
+# WARNs once and skips manifests for the rest of the run — fail open,
+# the data still flows.
 #
 # One file per dataset per generation, named <dataset with / → %2F>@<snap>:
 # a header (format version, dataset, snapshot, body sha256) followed by
@@ -108,8 +111,11 @@ function propmanifest_ensure_dataset {
     # Created unmounted on purpose: propmanifest_mount is the single owner
     # of the store's mounted life (it records the mount only when THIS
     # library did it), so a create-time auto-mount would leak past
-    # propmanifest_finish. -u keeps the bookkeeping honest.
-    if err=$(zfs create -pu "$mds" 2>&1); then
+    # propmanifest_finish. -u keeps the bookkeeping honest. readonly=off
+    # is explicit: without it a guarded backup root (pool root
+    # readonly=on) is inherited, the store mounts read-only, and every
+    # manifest write fails EROFS.
+    if err=$(zfs create -pu -o readonly=off "$mds" 2>&1); then
         log_msg "VERB: Created property-manifest dataset $mds"
         _propmanifest_ok="$mds"
     else
@@ -206,7 +212,7 @@ function propmanifest_snapshot {
 # Usage: propmanifest_capture <fs> <destfs> <snapname-with-@>
 function propmanifest_capture {
     local fs="$1" destfs="$2" snap="$3"
-    local mds mnt body sum fname dir tmpf count lock_rc lock_id
+    local mds mnt body sum fname dir tmpf count lock_rc lock_id werr
     mds=$(propmanifest_dataset "$destfs" "$fs")
 
     if [[ ${dryrun:-N} != 'N' ]]; then
@@ -240,6 +246,23 @@ function propmanifest_capture {
         return 0
     fi
 
+    # Self-heal an inherited guard: a store created before the explicit
+    # readonly=off (or under a readonly=on backup root) mounts read-only
+    # and every write fails EROFS. The store is tool-owned, so the flag
+    # is cleared here — under the write lock this capture already holds,
+    # and only on the write path: replay mounts read-only and reads fine.
+    # A refusal latches a run-level skip like the other store failures.
+    if [[ "$(zfs get -H -o value readonly "$mds" 2>/dev/null)" == "on" ]]; then
+        if ! zfs set readonly=off "$mds" 2>/dev/null; then
+            log_msg "WARN: Could not clear readonly on $mds — skipping property" \
+                "manifests for this run."
+            _propmanifest_skip="$mds"
+            zfslock_release "$lock_id"
+            return 0
+        fi
+        log_msg "VERB: Cleared readonly on $mds for manifest writes."
+    fi
+
     propmanifest_mount "$mds"
     mnt="$_propmanifest_mnt"
     if [[ -z "$mnt" ]]; then
@@ -257,24 +280,28 @@ function propmanifest_capture {
     fname="$(propmanifest_escape "$fs")@${snap#@}"
     sum=$(printf '%s' "$body" | sha256sum | awk '{print $1}')
     tmpf="$dir/.tmp.${fname}.$$"
-    # Probe the temp file openable first — with the redirections in this
-    # order the probe's own failure message is silenced; the body write
-    # then runs against a known-openable file.
-    if ! : 2>/dev/null > "$tmpf"; then
-        log_msg "WARN: Property manifest for $fs not written (write to $mds failed)."
-        zfslock_release "$lock_id"
-        return 0
-    fi
-    if ! {
+    # Probe the temp file openable first, then write and rename. The
+    # redirections are ordered stderr-first so the shell's own failure
+    # message lands in $werr — the WARN then names the real reason
+    # (e.g. 'Read-only file system'), not just 'failed'.
+    werr=""
+    if ! werr=$(: 2>&1 > "$tmpf"); then :
+    elif ! werr=$({
             printf '# zfsutilities property manifest v1\n'
             printf '# dataset: %s\n' "$fs"
             printf '# snapshot: %s\n' "$snap"
             printf '# sha256: %s\n' "$sum"
             printf '\n'
             printf '%s' "$body"
-        } > "$tmpf" 2>/dev/null || ! mv -f "$tmpf" "$dir/$fname" 2>/dev/null; then
+        } 2>&1 > "$tmpf"); then :
+    elif ! werr=$(mv -f "$tmpf" "$dir/$fname" 2>&1); then :
+    fi
+    if [[ -n "$werr" ]]; then
+        werr="${werr##*: }"
+        [[ -n "$werr" ]] || werr="unknown failure"
         rm -f "$tmpf" 2>/dev/null || true
-        log_msg "WARN: Property manifest for $fs not written (write to $mds failed)."
+        log_msg "WARN: Property manifest for $fs not written (write to $mds" \
+            "failed: $werr)."
         zfslock_release "$lock_id"
         return 0
     fi

@@ -361,6 +361,7 @@ class BackupRunner:
             log_file=self._session_log_file,
             session_log_file=self._session_log_file,
         )
+        # Drop this run's session-log state so the next run prepares a fresh log.
         if self._session_log_prev is not None:
             restore_session_log(self._session_log_prev)
             self._session_log_prev = None
@@ -918,6 +919,7 @@ class BackupRunner:
         except Exception as exc:
             self._log(f"WARN: Could not write session trailer: {exc}")
 
+        # Drop this run's session-log state so the next run prepares a fresh log.
         if self._session_log_prev is not None:
             try:
                 restore_session_log(self._session_log_prev)

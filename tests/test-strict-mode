@@ -177,9 +177,79 @@ test_final_statement_is_exit_safe() {
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "unfenced final statement"; fi
 }
 
+test_env_knob_reads_are_defaulted() {
+    test_start "optional environment knobs are never read without a default"
+    # A ZFSUTILITIES_* / ZFSLOCK_* name that no bash file assigns is an
+    # environment knob: a Python runner, a test, or the operator sets it —
+    # or nobody does. Under a strict caller a bare read of one aborts
+    # "unbound variable" the moment the line executes, and a line behind a
+    # terminal check ([[ -t 0 && "$KNOB" ... ]]) executes in no piped-stdin
+    # suite. Found live: the 0.140.0 GUI backup died on
+    # $ZFSUTILITIES_HEADLESS at its first lock conflict. Fence: such a name
+    # is read only in a defaulting form (${NAME:-...} and its relatives).
+    # Names a bash file assigns at command position (paths.sh,
+    # zfslockmanager, bashinit's exports) are set before use and exempt;
+    # comment lines are skipped. Pass 1 collects the assigned names, pass 2
+    # reports the bare reads of every other name.
+    local -a files=()
+    local f violations
+    for f in "$old_mydir"/bin/* "$old_mydir"/lib/*.sh; do
+        [[ -f "$f" ]] || continue
+        [[ $(head -n 1 "$f") == '#!'*python* ]] && continue
+        files+=("$f")
+    done
+    violations=$(awk '
+        BEGIN {
+            # Text allowed before a name at command position: nothing, or a
+            # declaring builtin with its options.
+            cmdpos = "^[ \t]*((export|readonly|local|declare( -[A-Za-z]+)*)[ \t]+)?$"
+        }
+        /^[ \t]*#/ { next }
+        {
+            rest = $0
+            consumed = 0
+            while (match(rest, /(ZFSUTILITIES|ZFSLOCK)_[A-Z0-9_]+/)) {
+                name = substr(rest, RSTART, RLENGTH)
+                prefix = substr($0, 1, consumed + RSTART - 1)
+                after = substr(rest, RSTART + RLENGTH, 2)
+                n = length(prefix)
+                b1 = (n >= 1) ? substr(prefix, n, 1) : ""
+                b2 = (n >= 2) ? substr(prefix, n - 1, 1) : ""
+                kind = ""
+                if (b1 == "$") {
+                    kind = "read"
+                } else if (b1 == "{" && b2 == "$") {
+                    kind = (after ~ /^(:[-=+?]|[-=+?])/) ? "defaulted" : "read"
+                } else if ((b1 == "#" || b1 == "!") && b2 == "{") {
+                    kind = "read"
+                } else if ((after ~ /^=/ && after != "==") || after == "+=") {
+                    if (prefix ~ cmdpos) {
+                        kind = "assign"
+                    }
+                }
+                if (pass == 1 && kind == "assign") {
+                    assigned[name] = 1
+                }
+                if (pass == 2 && kind == "read" && !(name in assigned)) {
+                    printf "    %s:%d: bare read of %s\n", FILENAME, FNR, name
+                }
+                consumed += RSTART + RLENGTH - 1
+                rest = substr(rest, RSTART + RLENGTH)
+            }
+        }
+    ' pass=1 "${files[@]}" pass=2 "${files[@]}")
+    if [[ -n "$violations" ]]; then
+        echo "$violations"
+        test_fail "environment knob read without a default"
+        return
+    fi
+    test_pass
+}
+
 test_migrated_scripts_keep_strict_mode
 test_sourced_lib_arrays_survive_strict_callers
 test_find_script_before_bashinit_under_set_u
 test_final_statement_is_exit_safe
+test_env_knob_reads_are_defaulted
 
 test_summary

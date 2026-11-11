@@ -791,10 +791,11 @@ _detect_is_zvol_leaf() {
 # Offsite-candidate pool names from the GUI config — the same authority
 # the Dashboard's identity warnings exempt. A pool marked for offsite
 # rotation is routinely disconnected by design, so the "expected pool
-# ... is not imported" shape skips it; the GUID and unexpected-import
-# shapes still apply (they only fire when the pool IS imported). Empty
-# when no config exists, it is unreadable, or none are marked — the
-# pre-exemption behavior.
+# ... is not imported" shape skips it, and so does the unexpected-import
+# shape while it is attached (a registry-known rotation pool is never an
+# unexpected pool); the GUID shape still applies. Empty when no config
+# exists, it is unreadable, or none are marked — the pre-exemption
+# behavior.
 _offsite_candidate_names() {
     local config_file="${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}"
     [[ -f "$config_file" ]] || return 0
@@ -829,7 +830,8 @@ detect_pool_identity() {
     fi
 
     # (a) expected vs imported. Offsite rotation pools are exempt from
-    # the not-imported shape only (routinely disconnected by design).
+    # both shapes (routinely detached by design; attached is still a
+    # known pool — the GUID shape below fences its identity).
     local -A expected=() imported_set=() offsite=()
     while IFS= read -r name; do
         [[ -n "$name" ]] && imported_set["$name"]=1
@@ -858,8 +860,9 @@ detect_pool_identity() {
         done
         for name in "${!imported_set[@]}"; do
             if [[ -z "${expected[$name]:-}" ]]; then
+                [[ -n "${offsite[$name]:-}" ]] && continue
                 msg="imported pool ${name} is not in the node config"
-                msg+=" — an unexpected pool is serving data here"
+                msg+=" — add it to the node config or export it"
                 _detect_lines+=("$msg")
             fi
         done

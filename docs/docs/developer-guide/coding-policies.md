@@ -40,6 +40,16 @@ Key foundational practices:
   optional: a declare executed in `source_helper`'s function frame
   leaves an element-less array that `set -u` callers cannot length-check
   (`${#name[@]}` aborts with "unbound variable").
+- **Default every read behind a terminal check.** A branch gated on
+  `[[ -t 0 ]]` runs in terminal and GUI sessions only; the test suites
+  feed stdin from a pipe, so they never execute it. An unset read there
+  (`[[ -t 0 && "$VAR" != "Y" ]]`) therefore passes every suite and aborts
+  a strict caller in production. Two fences cover the case:
+    - `tests/pty_run.py` runs a test child with a pseudo-terminal on stdin,
+      so a suite can exercise the branch.
+    - `test-strict-mode` rejects any bare read of a `ZFSUTILITIES_*` or
+      `ZFSLOCK_*` variable that no bash file assigns. Read such a variable
+      as `${VAR:-}`.
 - **Prefer `[[ ]]` over `[ ]`** for conditionals — more reliable and supports
   pattern matching.
 - **Use `$(...)` for command substitution**, never backticks, for better nesting
