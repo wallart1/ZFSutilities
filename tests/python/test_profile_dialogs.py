@@ -2399,7 +2399,11 @@ class TestProfileDialogStaticTooltips(unittest.TestCase):
 
         with dialog_patch:
             with patch.object(pd, "get_user", return_value="tester"):
-                pd.show_add_profile_dialog(app, "backup", {})
+                # The overwrite picker reads the profiles dir before the
+                # dialog exists; keep the test off the real state dir
+                # (clean runners cannot create /var/lib/zfsutilities).
+                with patch.object(pd, "list_profiles", return_value=[]):
+                    pd.show_add_profile_dialog(app, "backup", {})
 
         entry_texts = [c.args[0] for c in pd.Gtk.Entry.return_value.set_tooltip_text.call_args_list]
         self.assertTrue(
