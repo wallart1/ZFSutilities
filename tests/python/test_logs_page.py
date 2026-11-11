@@ -1337,6 +1337,47 @@ class TestCreateLogsPage(unittest.TestCase):
 
     @patch("logs_page._sync_log_list")
     @patch("logs_page._update_success_rate_label")
+    def test_viewer_toolbar_packs_below_text_view(self, _mock_update, _mock_sync):
+        """The Level/Short-prefix/Search/dock toolbar is the viewer's bottom bar."""
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+        # Isolate from any earlier test's one-shot Gtk mock side effects
+        # (e.g. the viewer-frame sentinel list).
+        lp.Gtk.Frame.side_effect = None
+        # mock_gtk hands every Gtk.Box() call the same shared instance, so
+        # viewer_box and its toolbar would be indistinguishable; give each
+        # construction a fresh mock instead.
+        boxes = []
+
+        def fresh_box(*_args, **_kwargs):
+            boxes.append(MagicMock())
+            return boxes[-1]
+
+        lp.Gtk.Box.side_effect = fresh_box
+        self.addCleanup(setattr, lp.Gtk.Box, "side_effect", None)
+
+        lp.create_logs_page(app)
+
+        viewer_box = lp.Gtk.Frame.return_value.add.call_args[0][0]
+        # The toolbar is the box that received the level combo.
+        toolbar = next(
+            box
+            for box in boxes
+            if any(
+                packed is app.logs_level_combo
+                for packed in (c[0][0] for c in box.pack_start.call_args_list)
+            )
+        )
+        packed = [c[0][0] for c in viewer_box.pack_start.call_args_list]
+        # Toolbar last: below the text view, the status line, and the
+        # chunk buttons, forming the bottom bar of the viewer pane.
+        self.assertIs(packed[-1], toolbar)
+        self.assertLess(packed.index(app.logs_text_scroll), packed.index(toolbar))
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
     def test_column_headers_use_label_tooltips(self, _mock_update, _mock_sync):
         """TreeViewColumn tooltips must live on the header label widget."""
         app = MagicMock()
@@ -1767,6 +1808,24 @@ class TestLogViewerPathLabel(unittest.TestCase):
         app.logs_path_label.set_tooltip_text.assert_called_once_with("")
         app.logs_path_label.hide.assert_called_once()
         app.logs_popout_window.set_title.assert_called_once_with("ZFS Utilities — Log Viewer")
+
+
+class TestCopyLogPathToClipboard(unittest.TestCase):
+    """The viewer context-menu copy reports itself at VERB, not INFO."""
+
+    def test_copies_path_and_logs_verb(self):
+        clipboard = MagicMock()
+        with (
+            patch.object(lp.Gtk.Clipboard, "get", return_value=clipboard) as mock_get,
+            patch("logs_page.log_msg") as mock_log_msg,
+        ):
+            lp._copy_log_path_to_clipboard("/var/log/zfsutilities/cron.log")
+        mock_get.assert_called_once_with(lp.Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text.assert_called_once_with("/var/log/zfsutilities/cron.log", -1)
+        clipboard.store.assert_called_once()
+        mock_log_msg.assert_called_once_with(
+            "VERB: Copied log path to clipboard: /var/log/zfsutilities/cron.log"
+        )
 
 
 if __name__ == "__main__":

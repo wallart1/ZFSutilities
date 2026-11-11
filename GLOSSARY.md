@@ -122,6 +122,15 @@ the 2026-10-27 incident class — the node silently coming up with 3 of 33
 LUNs mapped while every gate passed — is dead: nothing silent, nothing
 destroyed, one clean recovery.
 
+## conveyance self-test
+
+A SMART self-test mode (`smartctl -t conveyance`) that checks for damage
+incurred while a drive was being transported — meant for newly received
+or recently moved drives, and typically minutes long. A drive supports
+it only when its firmware implements the test: `smartctl -c` prints the
+conveyance recommended polling time only for supporting drives, so the
+Disk Inventory's Surface Test dialog offers the option only then.
+
 ## dataset action
 
 A GUI operation that mutates pools or datasets — destroy, sever clone,
@@ -368,6 +377,20 @@ with guest records is a lab that may still exist is exactly what
 teardown deletes records only together with their guests), "the
 distinction is load-bearing" (ACL entry: mapped-LUN grants vs TPG
 mappings). Spotting one is a wrap-up finding in itself.
+
+## linked clone
+
+A Proxmox clone that shares the template's disk blocks instead of
+copying them: `qm clone` (without `--full`) creates an LVM-thin snapshot
+of the template's `base-` volume, so the clone is metadata-only and
+instant, and writes go to new thin blocks while reads fall through to
+the shared blocks. The itf harness uses linked clones for journey
+guests (`ITF_CLONE_MODE=full` in the site config opts back into copies
+for storages without linked-clone support). On LVM-thin the link is not
+recorded in volume IDs, and a thin snapshot keeps its blocks even after
+the origin volume is destroyed — so rebuilding a template never breaks
+guests already cloned from it. Compare a full clone, which copies every
+allocated block (minutes for a large template).
 
 ## loop device
 

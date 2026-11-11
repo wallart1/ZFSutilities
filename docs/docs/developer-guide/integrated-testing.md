@@ -292,8 +292,9 @@ Journeys whose scenario begins *after* installation start from a
 **baseline template**: a guest built once through the real first-time
 user path (OS install → product install → OS package updates → boot
 health gate) and converted to a Proxmox template (`itf template build`).
-`itf_journey_stage_from_template` full-clones it, so the journey is at
-the post-install point in a minute or two instead of repeating the
+`itf_journey_stage_from_template` clones it — linked by default (see the
+bullet below), which is metadata-only and instant — so the journey is at
+the post-install point in seconds instead of repeating the
 ~15–20-minute install.
 
 Three profiles share the build machinery. **storage** (the default) is
@@ -308,11 +309,14 @@ with freshness keyed on the ISO name like the compute profile. Journeys
 that support profile selection take it at run time
 (`itf journey run j21-zfs-probes --template ubuntu`).
 
-- **Full clones, by design.** The itf guest storage is LVM-thin, which
-  does not support Proxmox linked clones — and full clones are the
-  safer shape anyway: each clone is independent of the template, so a
-  template rebuild can never break a running journey's guest. A
-  thin-pool full clone copies only allocated blocks, so it stays fast.
+- **Linked clones, by design.** The itf guest storage is LVM-thin, which
+  supports Proxmox linked clones: each guest clones from the template's
+  base- volume as an LVM thin snapshot — metadata-only and instant
+  instead of an allocated-block copy. The link is not tracked in volume
+  IDs, and a thin snapshot keeps its blocks when the origin is destroyed,
+  so a template rebuild can never break a running journey's guest.
+  `ITF_CLONE_MODE=full` in the site config opts back into full copies
+  for guest storages without linked-clone support.
 - **Rebuilds are from scratch, never in-place upgrades.** The baseline
   must keep first-time-user fidelity — no version-dir drift, no
   upgrade-path contamination. `itf template build` refuses when the

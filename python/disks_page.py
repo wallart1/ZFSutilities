@@ -737,7 +737,7 @@ def refresh_surface_test_status(app):
 
 
 def on_disks_surface_test(app):
-    """Surface Test action: start (fast/slow) or cancel a test on the selected HDD."""
+    """Surface Test action: start (fast/slow/conveyance) or cancel a test on the selected HDD."""
     from disk_surface_test import (
         cancel_surface_test,
         load_surface_test_state,
@@ -759,7 +759,7 @@ def on_disks_surface_test(app):
     )
     entry = load_surface_test_state()["tests"].get(disk_path)
     action = show_surface_test_dialog(app, disk, entry, app.ctx.disk_repository)
-    if action in ("short", "long"):
+    if action in ("short", "long", "conveyance"):
         start_surface_test(app, disk, action)
     elif action == "abort":
         cancel_surface_test(app, disk_path)
@@ -798,6 +798,10 @@ _ENCLOSURE_RATE_SYNTAX = (
     "accepted) multiplies by 1024-based units — 100m = 100 MiB/s, "
     "64KiB = 64 KiB/s. A rate of zero is refused; leave blank for unlimited."
 )
+
+# Wrap width (characters) for the dialog's wrapping labels; keeps the dialog
+# narrow whatever the text length (mirrors disk_surface_test's cap).
+_RATE_DIALOG_MAX_WIDTH_CHARS = 56
 
 
 def _enclosure_rate_problem(text: str) -> str | None:
@@ -843,6 +847,7 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
         parent,
         [("Cancel", Gtk.ResponseType.CANCEL), ("Save", Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
+        size=(560, -1),
     )
     save_btn = dialog.get_widget_for_response(Gtk.ResponseType.OK)
     if save_btn is not None:
@@ -860,6 +865,7 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
     )
     caption.set_halign(Gtk.Align.START)
     caption.set_line_wrap(True)
+    caption.set_max_width_chars(_RATE_DIALOG_MAX_WIDTH_CHARS)
     content.pack_start(caption, False, False, 0)
 
     name_label = Gtk.Label(label="Enclosure name (shown in the disk list)")
@@ -890,11 +896,13 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
     syntax_label = Gtk.Label(label=_ENCLOSURE_RATE_SYNTAX)
     syntax_label.set_halign(Gtk.Align.START)
     syntax_label.set_line_wrap(True)
+    syntax_label.set_max_width_chars(_RATE_DIALOG_MAX_WIDTH_CHARS)
     content.pack_start(syntax_label, False, False, 0)
 
     problem_label = Gtk.Label(label="")
     problem_label.set_halign(Gtk.Align.START)
     problem_label.set_line_wrap(True)
+    problem_label.set_max_width_chars(_RATE_DIALOG_MAX_WIDTH_CHARS)
     content.pack_start(problem_label, False, False, 0)
 
     while True:

@@ -77,7 +77,7 @@ The Dashboard **Tasks** list shows a waiting profile with the status
 
 Every finished profile run — scheduled by cron, launched with **Run Now**,
 or started from a tab's run button — can notify you through the channels
-configured in the GUI's File → **Notifications…** dialog (see
+configured in the GUI's Settings → **Notifications…** dialog (see
 [the GTK GUI guide](gtk-gui.md#notifications-dialog)): a desktop bubble on
 the host's logged-in session and/or an email, each independently set to
 failures-only or all runs, with per-run-type on/off toggles. Failed runs

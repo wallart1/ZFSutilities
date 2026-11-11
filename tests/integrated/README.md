@@ -122,8 +122,12 @@ Every run (journey or preflight) writes a progressive report under
 - The **baseline template** is durable infrastructure: the guard refuses
   everyday mutating verbs against the VMID carrying the template's name
   (`itf template build`/`destroy` manage it, clone is exempt).  Journeys
-  get post-install guests as **full clones** — independent of the
-  template, so a rebuild can never break a running journey's guest.
+  get post-install guests as **linked clones** — LVM-thin snapshots of
+  the template's base- volume, metadata-only and instant
+  (`ITF_CLONE_MODE=full` in the site config opts back into copies).
+  The link is not tracked in volume IDs, and a thin snapshot holds its
+  blocks even after the template's base volume is destroyed, so a
+  rebuild can never break a running journey's guest.
 - Base changes beyond that (creating the itf storages, the reserved VMID
   policy, the audit log) are *manual steps the orchestrator emits
   instructions for* — a human applies them, `itf preflight` verifies.

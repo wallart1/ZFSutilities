@@ -10,7 +10,7 @@
 # Usage:
 #   itf preflight                     verify dev + base-host readiness
 #   itf guest create NAME [opts]      create (and optionally start) a guest
-#   itf guest clone NAME [opts]       full-clone a guest from a baseline
+#   itf guest clone NAME [opts]       linked-clone a guest from a baseline
 #                                     template (post-install starting
 #                                     point; --template picks the profile)
 #   itf guest start|stop BASE VMID

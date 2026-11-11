@@ -71,11 +71,9 @@ middle, and the log panel at the bottom.
 
 ### Menu bar
 
-The menu bar runs across the top of the window and contains three menus:
+The menu bar runs across the top of the window and contains four menus:
 
 - **File**
-  - **Notifications...** — opens the [Notifications dialog](#notifications-dialog),
-    where you configure desktop and email notifications for finished runs.
   - **Quit** — closes the application.
 - **View**
   - **Minimize Width...** — resets every resizable table column to its narrowest
@@ -84,17 +82,20 @@ The menu bar runs across the top of the window and contains three menus:
     bottom log panel's text.
   - **Log Viewer Font** — enlarges, shrinks, or restores the default size of
     the Logs tab log viewer's text.
+- **Settings**
+  - **Notifications...** — opens the [Notifications dialog](#notifications-dialog),
+    where you configure desktop and email notifications for finished runs.
+  - **Documentation Editor...** — chooses the external editor used when you
+    click the pencil icon in the documentation viewer.
 - **Help**
   - **Documentation** — opens the built-in documentation viewer.
   - **Help with this page** — opens the viewer at the section for the currently
     selected tab.
-  - **Set Documentation Editor...** — chooses the external editor used when you
-    click the pencil icon in the documentation viewer.
   - **About** — shows the version, license, and credits.
 
 ### Notifications dialog
 
-**File → Notifications...** configures what you hear about when runs finish.
+**Settings → Notifications...** configures what you hear about when runs finish.
 A *run* is any operation that lands in the run history — backups, offsite
 copies, restores, retention prunes, scrubs started by a scheduled profile,
 and dataset actions — whether it was started by the scheduler, the
@@ -168,8 +169,14 @@ The sidebar tabs are:
 
 ### Bottom panel
 
-The bottom panel shows live messages from the application and from any running
-job.
+The bottom panel shows a scrollable log of live messages from the application
+and from any running job. Every line is prefixed with a `YYYY-MM-DD HH:MM:SS`
+timestamp in the system's local time. Numbered input prompts
+(`INFO: [Input N][label] …` questions the GUI is waiting on you to answer) are
+tinted bright blue so they stand out while reviewing the log. The divider
+between the main content area and the log panel can be dragged to resize the
+log. The text size can be changed with **View → GUI Log Font**
+(see [View Menu](#view-menu)) and is remembered across GUI restarts.
 
 - **Log/output area** — the large read-only text area where progress messages,
   warnings, and errors appear while a job runs.
@@ -198,26 +205,10 @@ job.
 - **Clear** button — empties the visible log text. Held input requests are not
   part of the log, so **Clear** never dismisses a question that still needs an
   answer.
-- **Pop-out button** — the window-icon button at the far right detaches the
-  bottom panel into its own separate window; click it again to put the panel
-  back.
-
-### Log Panel
-
-The bottom panel shows a scrollable log of all operations. Every line is
-prefixed with a `YYYY-MM-DD HH:MM:SS` timestamp in the system's local time.
-Numbered input prompts (`INFO: [Input N][label] …` questions the GUI is
-waiting on you to answer) are tinted bright blue so they stand out while
-reviewing the log. The divider between the main content area and the log
-panel can be dragged to
-resize the log. The text size can be changed with
-**View → GUI Log Font** (see [View Menu](#view-menu)) and is remembered across
-GUI restarts.
-
-A **Pop Out** button (window icon) next to the **Log** level dropdown detaches the
-log viewer into an independent window.
-While popped out, the viewer pane is removed from the Logs tab; it is restored
-when the pop-out window is closed or docked again. 
+- **Pop-out button** — the window-icon button at the far right, next to the
+  **Log** level dropdown, detaches the bottom panel into its own separate
+  window. Click it again, or close the pop-out window, to put the panel back.
+  The pop-out window's size and position are remembered across GUI restarts.
 
 ### Search and Clear
 
@@ -1353,13 +1344,13 @@ daily self-truncation (`rsync`), like the cron log.
   be changed with **View → Log Viewer Font** (see [View Menu](#view-menu)) and
   is remembered across GUI restarts.
 
-- **Path line** — a line above the viewer toolbar shows the full path of the
+- **Path line** — a line above the text view shows the full path of the
   loaded log. Long paths are shortened from the left so the file name stays
   visible; hovering shows the full path, and the text is selectable for
   copying. While the viewer is popped out, the window title carries the
   file name as well.
 
-- **Level filter** — a dropdown above the text view lets you show only messages
+- **Level filter** — a dropdown below the text view lets you show only messages
   at the selected priority or higher. It works the same way as the bottom-panel
   **Log** level filter and does not affect what is stored in the log file.
 
@@ -1385,7 +1376,7 @@ daily self-truncation (`rsync`), like the cron log.
   pop-out window is closed or docked again. The pop-out window's size and
   position are remembered across GUI restarts.
 
-- **Search bar** — above the text view:
+- **Search bar** — below the text view:
   
   - **Search entry** — type some search text and press Enter (or click **Search**)
   - **Search** button — finds and highlights every occurrence. The current
@@ -2426,9 +2417,17 @@ Things to know before wiping:
 
 ### Surface Test
 
-A surface test is a SMART self-test run by the drive's own firmware. **Fast**
-(`smartctl -t short`, ~2 minutes) reads a sample of the surface; **Slow**
-(`smartctl -t long`, typically hours) reads the entire disk. The test:
+A surface test is a SMART self-test run by the drive's own firmware. The
+Surface Test… dialog offers three types:
+
+- **Fast** (`smartctl -t short`) reads a sample of the surface — minutes;
+- **Slow** (`smartctl -t long`) reads the entire disk — typically hours;
+- **Conveyance** (`smartctl -t conveyance`), offered only when the drive
+  supports it, checks for damage incurred in transport — meant for newly
+  received or moved drives.
+
+Each option shows the **estimated run time the drive itself reports** (its
+recommended self-test polling time). The test:
 
 - runs **independently** — it continues on the disk even if the GUI closes or
   the machine reboots, and multiple disks can be tested at the same time;
@@ -3015,16 +3014,24 @@ for details on the priority tokens.
     For how the single-writer log mechanism works, see
     [Architecture — Session logging](../developer-guide/architecture.md#session-logging).
 
+## Settings Menu
+
+The GUI's **Settings** menu collects the application's configuration dialogs.
+
+| Item                        | Purpose                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| **Notifications...**       | Open the [Notifications dialog](#notifications-dialog) to configure desktop and email alerts   |
+| **Documentation Editor...** | Choose the external editor for the pencil (edit) icon inside the documentation viewer          |
+
 ## Help Menu
 
 The **Help** menu contains:
 
-| Item                            | Purpose                                                                 |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| **Documentation**               | Open the embedded documentation viewer                                  |
-| **Help with this page**         | Open the viewer scrolled to the section for the currently visible tab   |
-| **Set Documentation Editor...** | Choose the external editor for the pencil (edit) icon inside the viewer |
-| **About**                       | Version, license, and credits                                           |
+| Item                    | Purpose                                                               |
+| ----------------------- | --------------------------------------------------------------------- |
+| **Documentation**       | Open the embedded documentation viewer                                |
+| **Help with this page** | Open the viewer scrolled to the section for the currently visible tab |
+| **About**               | Version, license, and credits                                         |
 
 ### Documentation Viewer
 
@@ -3085,7 +3092,7 @@ next time the documentation window opens.
 #### Editing Pages
 
 Every documentation page has a pencil icon at the upper-right. Clicking it opens
-the source `.md` (markdown) file in the editor configured via **Help → Set Documentation Editor...**
+the source `.md` (markdown) file in the editor configured via **Settings → Documentation Editor...**
 
 - **Default** — if no editor is configured, the system default application for
   markdown files is used (`xdg-open`).

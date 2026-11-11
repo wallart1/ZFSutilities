@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.141.0
+
+*Released 2026-11-11*
+
+### Added
+
+- **Conveyance self-test (Disk Inventory → Surface Test).** A third
+  surface-test type, offered only when the drive's firmware supports
+  it: `smartctl -c` prints the conveyance recommended polling time only
+  for supporting drives, so its presence doubles as the support check.
+  The rebuilt dialog shows each type's description together with the
+  drive's own estimated run time (from those recommended polling
+  times), wraps its text at a fixed width, and caps the dialog at
+  560 px.
+- **GUI Settings menu.** The menu bar now runs File, View, Settings,
+  Help. Settings holds **Notifications…** (moved from File) and
+  **Documentation Editor...** (moved from Help, where it was "Set
+  Documentation Editor..."); File is Quit only. Handlers are unchanged.
+- **ITF linked clones.** Journey guests clone from the post-install
+  baseline template as LVM-thin snapshots — metadata-only and instant
+  instead of an allocated-block copy. `ITF_CLONE_MODE=full` in the site
+  config opts back into copies for guest storages without linked-clone
+  support. The link is not tracked in volume IDs, and a thin snapshot
+  keeps its blocks after the template's base volume is destroyed, so
+  template rebuilds still cannot break a running journey's guest.
+
+### Fixed
+
+- **A running surface test read as "Aborted" (or "Failed") moments
+  after it started.** The poll read only the self-test log, but the
+  running-progress text was parsed from the capabilities section the
+  log never contains; every poll concluded no test was running, and the
+  first poll finalized the entry from the stale newest log row while
+  the firmware kept testing. The poll is now one
+  `smartctl -c -l selftest` call — the capabilities section carries the
+  live execution status (updated the moment a test starts, closing the
+  start-gap) and the log rows carry the final statuses — and the
+  log-row running form is parsed as a fallback.
+- **Surface-test estimates showed "~unknown".** smartctl prints each
+  routine's name and its recommended polling time on two lines; the
+  parsers matched only the one-line form, so every estimate was unknown
+  since 0.103.0.
+- **The Set Max I/O Rate modal opened far too wide.** A wrapping
+  label's natural width is its full unwrapped line, so the long
+  rate-syntax text pinned the dialog at that width. The dialog is
+  capped at 560 px and its wrapping labels at 56 characters — the same
+  treatment the surface-test dialog received.
+- **`sever-vm-clone` left its transfer scratch in /tmp.** The scratch
+  file moves to the family run dir (`ZFSUTILITIES_RUN_DIR`, created on
+  demand): a crash-leaked file vanishes at reboot instead of littering
+  /tmp, and a host running concurrent sever invocations never counts a
+  sibling's in-flight scratch as its own.
+- **`upgrade-zfsutilities` printed activation commands that failed over
+  ssh.** The hints now print absolute `switch-version` paths — the ssh
+  command runs in a non-login shell without the profile PATH, where the
+  bare name is not found. A failed baseline capture also degrades to
+  the historical no-baseline warning instead of aborting the scan.
+- **ITF journey robustness.** j05's lease re-acquire rewrites the role
+  record; j13 reads the 4-field records; the stage-B dev-tarball fetch
+  retries a transient listener loss.
+
+### Changed
+
+- **Prune Snapshots lists real pool names only.** The `<offsite>`
+  placeholder row duplicated the real offsite pool's own row (two rows,
+  one pool); it is gone. The `<offsite>` **policy** is untouched — an
+  online offsite-candidate pool picks it up automatically at prune
+  time, and stored profiles keep full `<offsite>` support. Recalling a
+  profile whose saved prune list names a pool with no current row (an
+  `<offsite>` entry, a detached pool) now WARNs, so a recall→re-save
+  cannot silently drop a pool.
+- **The prune lock refusal names its holders.** "cannot prune …: pool
+  is locked by another operation" now carries the blocking lock holders
+  in parentheses, per the holder-naming convention.
+- **Log Viewer toolbar moved to the bottom.** The Level dropdown,
+  Short-prefix toggle, Search bar, and Pop Out/dock button form the
+  bottom bar of the viewer pane — embedded in the Logs tab and popped
+  out alike; the path line stays on top.
+- **"Copied log path to clipboard" demoted INFO → VERB** (Logs tab
+  context menu) — a confirmation, not an event.
+
 ## 0.140.0
 
 *Released 2026-11-10*

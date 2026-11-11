@@ -560,8 +560,10 @@ itf_template_build() {
 
 # itf_template_destroy [--base B] [--profile storage|compute|ubuntu]
 #
-# Removes the template.  Clones are independent (full clones), so no guest
-# is affected; the override is scoped to this one guarded call.
+# Removes the template.  No guest is affected: full clones are copies,
+# and linked clones (LVM thin snapshots) hold their blocks independently
+# of the destroyed base- volume — PVE does not track the link in lvmthin
+# volids.  The override is scoped to this one guarded call.
 itf_template_destroy() {
     local profile=storage base=""
     while (( $# > 0 )); do

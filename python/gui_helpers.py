@@ -2340,13 +2340,6 @@ def create_menu_bar(app):
     file_item.set_submenu(file_menu)
     menu_bar.append(file_item)
 
-    notifications_item = Gtk.MenuItem(label="Notifications…")
-    notifications_item.connect("activate", app.on_notifications)
-    file_menu.append(notifications_item)
-
-    file_sep = Gtk.SeparatorMenuItem()
-    file_menu.append(file_sep)
-
     quit_item = Gtk.MenuItem(label="Quit")
     quit_item.connect("activate", app.on_quit)
     file_menu.append(quit_item)
@@ -2380,6 +2373,19 @@ def create_menu_bar(app):
             item.connect("activate", handler, state_key)
             font_menu.append(item)
 
+    settings_menu = Gtk.Menu()
+    settings_item = Gtk.MenuItem(label="Settings")
+    settings_item.set_submenu(settings_menu)
+    menu_bar.append(settings_item)
+
+    notifications_item = Gtk.MenuItem(label="Notifications…")
+    notifications_item.connect("activate", app.on_notifications)
+    settings_menu.append(notifications_item)
+
+    editor_item = Gtk.MenuItem(label="Documentation Editor...")
+    editor_item.connect("activate", app.on_set_docs_editor)
+    settings_menu.append(editor_item)
+
     help_menu = Gtk.Menu()
     help_item = Gtk.MenuItem(label="Help")
     help_item.set_submenu(help_menu)
@@ -2395,10 +2401,6 @@ def create_menu_bar(app):
 
     sep = Gtk.SeparatorMenuItem()
     help_menu.append(sep)
-
-    editor_item = Gtk.MenuItem(label="Set Documentation Editor...")
-    editor_item.connect("activate", app.on_set_docs_editor)
-    help_menu.append(editor_item)
 
     about_item = Gtk.MenuItem(label="About")
     about_item.connect("activate", app.on_about)

@@ -1722,6 +1722,43 @@ class TestEnclosureRateDialog(unittest.TestCase):
             )
         )
 
+    def test_dialog_width_capped_and_text_wraps(self):
+        dp = _import_disks_page()
+        # A wrapping label's natural width is its full unwrapped line, so the
+        # long rate-syntax text would open the dialog at that width. The
+        # dialog gets a fixed width and every wrapping label a char cap.
+        dialog = MagicMock()
+        dialog.run.return_value = dp.Gtk.ResponseType.CANCEL
+        labels = []
+
+        def fake_label(label=""):
+            widget = MagicMock()
+            widget.created_text = label
+            labels.append(widget)
+            return widget
+
+        app = MagicMock()
+        with (
+            patch.object(dp, "create_dialog", return_value=dialog) as create,
+            patch.object(dp.Gtk, "Entry", side_effect=lambda *_a, **_k: MagicMock()),
+            patch.object(dp.Gtk, "Label", side_effect=fake_label),
+        ):
+            dp._show_enclosure_rate_dialog(app, _enclosure(), {"name": "", "max_rate": ""})
+
+        self.assertEqual(create.call_args.kwargs.get("size"), (560, -1))
+        syntax = next(label for label in labels if "Rate syntax" in label.created_text)
+        syntax.set_line_wrap.assert_called_with(True)
+        syntax.set_max_width_chars.assert_called_once_with(56)
+        wrapping = [
+            label
+            for label in labels
+            if label.set_line_wrap.call_args and label.set_line_wrap.call_args.args == (True,)
+        ]
+        self.assertTrue(wrapping)
+        for label in wrapping:
+            caps = [c.args[0] for c in label.set_max_width_chars.call_args_list if c.args]
+            self.assertEqual(caps, [56])
+
     def test_cancel_returns_none(self):
         dp = _import_disks_page()
         result, dialog, _labels = self._run_dialog(dp, [dp.Gtk.ResponseType.CANCEL], [""], [""])

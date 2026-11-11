@@ -1,4 +1,4 @@
-"""Tests for notifications_dialog.py — the File → Notifications… dialog."""
+"""Tests for notifications_dialog.py — the Settings → Notifications… dialog."""
 
 import os
 import sys

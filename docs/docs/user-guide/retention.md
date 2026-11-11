@@ -73,10 +73,11 @@ keyed as `<offsite>` instead of adding a separate policy for each pool. At prune
 time, the `<offsite>` entry expands to every offsite-candidate pool that is
 currently online, and each online pool is pruned using the same buckets.
 
-The `<offsite>` row appears in the GUI Retention tab's **Prune** pool list with
-its health column showing the resolved pool names (or `not online` when none are
-attached). It is also supported by scheduled retention profiles and by the
-batch `profile_runner.py`.
+The GUI Retention tab's **Prune** pool list shows each online pool by name, with
+no `<offsite>` row. Pruning an online offsite-candidate pool automatically
+applies the `<offsite>` policy. Scheduled retention profiles and the batch
+`profile_runner.py` keep full `<offsite>` support: a profile saved earlier may
+still list it, and it expands to the online offsite pools at run time.
 
 This avoids keeping separate per-pool policies for removable pools that are frequently
 offline and ensures pruning still runs against whichever offsite pool happens to

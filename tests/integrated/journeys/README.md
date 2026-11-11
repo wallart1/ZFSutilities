@@ -41,7 +41,7 @@ guest (ZFS state, wiring files, session logs, exit codes, GUI rendering).
 
 Scenarios that begin *after* installation skip all of the above:
 
-1. `itf_journey_stage_from_template <gname>` full-clones the post-install
+1. `itf_journey_stage_from_template <gname>` linked-clones the post-install
    baseline template (`itf template build`), starts the clone, discovers
    its IP, waits for SSH, and snapshots `as-cloned` as the journey's
    rollback checkpoint.
@@ -147,7 +147,7 @@ missing — the same starting state a fresh install produces.
   test, which is the point of a re-verify.
 - Refusals are explicit: no prior run, a still-active source, destroyed
   guests, or a missing checkpoint snapshot each fail fast with the fix
-  (run fresh, no --rerun) — never a surprise full clone or reinstall.
+  (run fresh, no --rerun) — never a surprise re-clone or reinstall.
 - A dev-host restart kills the run but not its guests: the next
   `journey run`/`template build` refuses to start over the leftovers
   (the acquire-time orphan fence) until they are reused — `--rerun` of

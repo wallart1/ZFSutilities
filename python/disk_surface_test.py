@@ -1,9 +1,10 @@
 """Disk surface tester — SMART self-test orchestration for HDDs.
 
 A surface test is a SMART self-test driven by the drive firmware:
-`smartctl -t short|long` starts it and returns immediately, the test keeps
-running on the disk regardless of GUI state (so it survives GUI restarts),
-`smartctl -l selftest` reports live progress, and `smartctl -X` aborts it.
+`smartctl -t short|long|conveyance` starts it and returns immediately, the
+test keeps running on the disk regardless of GUI state (so it survives GUI
+restarts), `smartctl -c -l selftest` reports live progress, and `smartctl -X`
+aborts it.
 This module holds the state machine, the JSON state file, the cell-text
 formatting for the Disk Inventory, and the start/cancel dialog. The smartctl
 subprocess wrappers live in `disk_repository.py`.
@@ -222,18 +223,59 @@ def cancel_surface_test(app, path: str) -> bool:
 # Dialog
 # ---------------------------------------------------------------------------
 
+# Wrap width (characters) for dialog text; keeps the dialog narrow whatever
+# the text length.
+_DIALOG_MAX_WIDTH_CHARS = 56
 
-def _estimated_label(repo, path: str, mode: str) -> str:
-    minutes = repo.estimate_test_minutes(path, mode)
-    return format_minutes(minutes) if minutes is not None else "unknown"
+
+def _wrapped_label(text: str) -> Gtk.Label:
+    """A start-aligned label that wraps instead of widening the dialog."""
+    label = Gtk.Label(label=text)
+    label.set_line_wrap(True)
+    label.set_max_width_chars(_DIALOG_MAX_WIDTH_CHARS)
+    label.set_halign(Gtk.Align.START)
+    return label
+
+
+def _estimate_sentence(minutes) -> str:
+    """The "Estimated run time" clause from the drive's recommended polling time."""
+    if not isinstance(minutes, (int, float)):
+        return ""
+    return f" Estimated run time: ~{format_minutes(minutes)}."
+
+
+# Dialog options: mode, radio label, description (estimate appended at build
+# time), tooltip.
+_TEST_OPTIONS = (
+    (
+        "short",
+        "Fast — short self-test",
+        "A quick sweep of mainly-adjacent regions — catches gross faults.",
+        "Short self-test: a quick sweep of mainly-adjacent regions — minutes, catches gross faults",
+    ),
+    (
+        "long",
+        "Slow — extended self-test",
+        "Reads the whole disk surface — adds I/O load but is safe on pooled disks.",
+        "Extended self-test: reads the whole disk surface — hours, adds I/O load but is safe on pooled disks",
+    ),
+    (
+        "conveyance",
+        "Conveyance — handling-damage self-test",
+        "Checks for damage incurred in transport — meant for newly received or moved drives.",
+        "Conveyance self-test: identifies damage incurred in transport of the device",
+    ),
+)
 
 
 def show_surface_test_dialog(app, disk, entry, repo):
     """Show the surface-test dialog for *disk*.
 
     When a test is already running on the disk, the dialog shows live status
-    with a Cancel Test button. Otherwise it offers Fast (short) and Slow
-    (long) options. Returns "short", "long", "abort", or None (closed).
+    with a Cancel Test button. Otherwise it offers Fast (short), Slow (long),
+    and — when the drive supports it — Conveyance options, each with the
+    estimated run time the drive itself reports. Returns "short", "long",
+    "conveyance", "abort", or None (closed).
     """
     parent = getattr(app, "window", None)
     if entry and entry.get("status") == "running":
@@ -246,13 +288,10 @@ def show_surface_test_dialog(app, disk, entry, repo):
         if cancel_btn is not None:
             cancel_btn.set_tooltip_text("Ask the drive's firmware to abort the running self-test")
         content = dialog.get_content_area()
-        status = Gtk.Label(
-            label=(
-                f"A {entry.get('mode', 'short')} surface test is running on {disk.path}.\n"
-                f"Status: {surface_cell_text(entry)}"
-            )
+        status = _wrapped_label(
+            f"A {entry.get('mode', 'short')} surface test is running on {disk.path}.\n"
+            f"Status: {surface_cell_text(entry)}"
         )
-        status.set_halign(Gtk.Align.START)
         content.pack_start(status, False, False, 0)
         dialog.show_all()
         response = dialog.run()
@@ -261,13 +300,13 @@ def show_surface_test_dialog(app, disk, entry, repo):
             return "abort"
         return None
 
-    short_label = f"Fast — short self-test (~{_estimated_label(repo, disk.path, 'short')})"
-    long_label = f"Slow — extended self-test (~{_estimated_label(repo, disk.path, 'long')})"
+    estimates = repo.self_test_estimates(disk.path)
     dialog = create_dialog(
         f"Surface Test on {disk.path}",
         parent,
         [("Cancel", Gtk.ResponseType.CANCEL), ("Start", Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
+        size=(560, -1),
     )
     start_btn = dialog.get_widget_for_response(Gtk.ResponseType.OK)
     if start_btn is not None:
@@ -277,31 +316,39 @@ def show_surface_test_dialog(app, disk, entry, repo):
         )
     content = dialog.get_content_area()
     content.pack_start(bold_label("Test type"), False, False, 0)
-    fast_radio = Gtk.RadioButton(label=short_label)
-    slow_radio = Gtk.RadioButton(label=long_label)
-    fast_radio.set_tooltip_text(
-        "Short self-test: a quick sweep of mainly-adjacent regions — minutes, catches gross faults"
+    radio_by_mode = {}
+    group_source = None
+    for mode, label, description, tooltip in _TEST_OPTIONS:
+        if mode == "conveyance" and estimates.get("conveyance") is None:
+            # smartctl prints the conveyance polling-time pair only when the
+            # device supports it, so no estimate means no support.
+            continue
+        radio = Gtk.RadioButton(label=label)
+        radio.set_tooltip_text(tooltip)
+        if group_source is None:
+            group_source = radio
+        else:
+            radio.join_group(group_source)
+        content.pack_start(radio, False, False, 0)
+        desc = Gtk.Label(label=description + _estimate_sentence(estimates.get(mode)))
+        desc.set_line_wrap(True)
+        desc.set_max_width_chars(_DIALOG_MAX_WIDTH_CHARS - 4)
+        desc.set_halign(Gtk.Align.START)
+        content.pack_start(desc, False, False, 0)
+        radio_by_mode[mode] = radio
+    warning = _wrapped_label(
+        "The test runs in the drive firmware and keeps going if the GUI "
+        "closes. It reads disk surface and adds load, so I/O will slow while "
+        "it runs. Safe on pooled disks."
     )
-    slow_radio.set_tooltip_text(
-        "Extended self-test: reads the whole disk surface — hours, adds I/O "
-        "load but is safe on pooled disks"
-    )
-    slow_radio.join_group(fast_radio)
-    content.pack_start(fast_radio, False, False, 0)
-    content.pack_start(slow_radio, False, False, 0)
-    warning = Gtk.Label(
-        label=(
-            "The test runs in the drive firmware and keeps going if the GUI "
-            "closes. It reads the whole disk surface and adds load, so I/O "
-            "will slow while it runs. Safe on pooled disks."
-        )
-    )
-    warning.set_line_wrap(True)
-    warning.set_halign(Gtk.Align.START)
     content.pack_start(warning, False, False, 0)
     dialog.show_all()
     response = dialog.run()
-    selected = "long" if slow_radio.get_active() else "short"
+    selected = None
+    for mode, radio in radio_by_mode.items():
+        if radio.get_active():
+            selected = mode
+            break
     dialog.destroy()
     if response == Gtk.ResponseType.OK:
         return selected

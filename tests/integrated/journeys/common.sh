@@ -29,7 +29,7 @@
 #       download tooling, the user's download, the prerequisite check —
 #       for failure-path journeys that drive the installer themselves.
 #   itf_journey_stage_from_template <gname> [--base B] [--template T] [--role R]
-#       Clone start: full-clone a post-install baseline template
+#       Clone start: linked-clone a post-install baseline template
 #       (itf template build) instead of installing — the fast path for
 #       journeys whose scenario begins after installation.
 #       Under --rerun: roll the previous run's guest back to its
@@ -3001,7 +3001,7 @@ itf_rerun_guest() {
 
 # itf_journey_stage_from_template <gname> [--base B] [--template T] [--role R]
 #
-# Clone start: full-clone a post-install baseline template (default: the
+# Clone start: linked-clone a post-install baseline template (default: the
 # storage profile's ITF_TEMPLATE_NAME) and snapshot `as-cloned` as the
 # journey's rollback checkpoint.  Fails fast with a PREP hint when the
 # template is missing or carries no stamp — per the journey contract,

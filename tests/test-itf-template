@@ -254,7 +254,7 @@ test_template_vmid_resolves_by_name() {
 # ------------------------------------------------------------------------------
 
 test_guest_clone_command_shape() {
-    test_start "itf_guest_clone full-clones the template into a fresh VMID"
+    test_start "itf_guest_clone linked-clones the template into a fresh VMID"
     reset_exec_calls
     # Redirect, not command substitution: the call capture must land in
     # this shell's _itf_exec_calls, not a subshell copy (same pattern as
@@ -265,13 +265,31 @@ test_guest_clone_command_shape() {
     assert_rc 0 "$rc"
     # First free VMID in the range (8001 template and 8002 guest are used).
     assert_equals "8000" "$(cat "$tmp_dir/clone.out")"
-    assert_contains "$_itf_exec_calls" \
-        "testbase :: qm clone 8001 8000 --name gc1 --full 1"
+    # Exact-line pin: linked is the absence of --full (PVE has no --linked
+    # flag), so a prefix match would stay green if --full crept back.
+    assert_equals "testbase :: qm clone 8001 8000 --name gc1" \
+        "$(printf '%s\n' "$_itf_exec_calls" \
+            | sed -n 's/^\(testbase :: qm clone .*\)$/\1/p')"
     # The installer-time CPU freeze must never ride into a clone: a
     # started-but-frozen clone sits in prelaunch forever (observed live:
     # j04's 600s IP wait expired against a never-booting guest).
     assert_contains "$_itf_exec_calls" \
         "testbase :: qm set 8000 --freeze 0"
+}
+
+test_guest_clone_full_mode_escape_hatch() {
+    test_start "ITF_CLONE_MODE=full restores the allocated-block copy"
+    reset_exec_calls
+    local rc
+    ITF_CLONE_MODE=full
+    itf_guest_clone gc3 > "$tmp_dir/clone3.out" 2>/dev/null
+    rc=$?
+    unset ITF_CLONE_MODE
+    assert_rc 0 "$rc"
+    assert_equals "8000" "$(cat "$tmp_dir/clone3.out")"
+    assert_equals "testbase :: qm clone 8001 8000 --name gc3 --full 1" \
+        "$(printf '%s\n' "$_itf_exec_calls" \
+            | sed -n 's/^\(testbase :: qm clone .*\)$/\1/p')"
 }
 
 test_guest_clone_without_template_fails() {
@@ -393,8 +411,9 @@ test_guest_clone_named_template() {
     rc=$?
     assert_rc 0 "$rc"
     assert_equals "8000" "$(cat "$tmp_dir/clone2.out")"
-    assert_contains "$_itf_exec_calls" \
-        "testbase :: qm clone 8004 8000 --name gc2 --full 1"
+    assert_equals "testbase :: qm clone 8004 8000 --name gc2" \
+        "$(printf '%s\n' "$_itf_exec_calls" \
+            | sed -n 's/^\(testbase :: qm clone .*\)$/\1/p')"
 }
 
 test_os_upgrade_compute_gate() {
@@ -555,6 +574,7 @@ test_stamp_read_from_qm_config
 test_autoinstall_render_content
 test_template_vmid_resolves_by_name
 test_guest_clone_command_shape
+test_guest_clone_full_mode_escape_hatch
 test_guest_clone_without_template_fails
 test_guest_clone_named_template
 test_clear_snapshots_deletes_all_but_current

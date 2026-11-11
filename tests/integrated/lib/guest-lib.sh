@@ -151,13 +151,19 @@ itf_guest_start() { itf_qm "$1" start "$2"; }
 
 # itf_guest_clone <name> [--base B] [--template T] [--vmid V] [--mem MB] [--cores N]
 #
-# Full-clones a post-install baseline template (template-lib; default
+# Clones a post-install baseline template (template-lib; default
 # ITF_TEMPLATE_NAME, or the compute profile's name via --template) and
 # echoes the new VMID on stdout (everything else to stderr, like
-# itf_guest_create).  Full clone by design: block storages such as the
-# lvmthin itfguests have no linked clones, a thin-pool full clone copies
-# only allocated blocks, and the clone is independent of the template —
-# later template rebuilds cannot break a running journey's guest.
+# itf_guest_create).  Linked clone by default (ITF_CLONE_MODE=linked):
+# `qm clone` without --full links to the template's base- volume — the
+# lvmthin itfguests supports this (LvmThinPlugin clone_image = LVM thin
+# snapshot; live-proven 2026-11-11), and the clone shares the template's
+# allocated blocks instead of copying them (instant vs minutes).  The
+# link is not tracked in volids: the clone's disk keeps a normal vm-
+# name and holds its blocks even after the template base is destroyed
+# (LVM thin snapshot semantics), so template rebuilds still cannot
+# break a running journey's guest.  ITF_CLONE_MODE=full opts back into
+# the allocated-block copy for storages without linked-clone support.
 itf_guest_clone() {
     local name="$1"
     shift
@@ -191,7 +197,11 @@ itf_guest_clone() {
         return 2
     fi
 
-    itf_qm "$base" clone "$tmpl_vmid" "$vmid" --name "$name" --full 1 >&2 || return 1
+    # Linked is PVE's clone default for templates (there is no --linked
+    # flag); ITF_CLONE_MODE=full restores the allocated-block copy.
+    local -a clone_args=(clone "$tmpl_vmid" "$vmid" --name "$name")
+    [[ "${ITF_CLONE_MODE:-linked}" == "full" ]] && clone_args+=(--full 1)
+    itf_qm "$base" "${clone_args[@]}" >&2 || return 1
     # Templates built from install journeys carry the installer-time CPU
     # freeze (stage_os pairs freeze with an explicit resume so the serial
     # console catches the first boot byte); a clone has no such pairing

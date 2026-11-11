@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -42,22 +43,46 @@ class TestSelftestParsers(unittest.TestCase):
 
     def test_progress_in_progress(self):
         out = (
-            "SMART Self-test log structure revision number 1\n"
-            "Self-test routine in progress...  40% of test remaining\n"
+            "Self-test execution status:      (249)\tSelf-test routine in progress...\n"
+            "\t\t\t\t\t90% of test remaining.\n"
         )
-        self.assertEqual(self.dr._parse_selftest_progress(out), 40)
+        self.assertEqual(self.dr._parse_selftest_progress(out), 90)
+
+    def test_progress_log_row_form(self):
+        # smartmontools prints "#%2u  %-19s %-29s %1d0%%  %8u         %s":
+        # the 29-character status column leaves a single space before the
+        # remaining percent, so the two glue into one column.
+        out = "# 1  Short offline       Self-test routine in progress 90%      1234         -\n"
+        self.assertEqual(self.dr._parse_selftest_progress(out), 90)
 
     def test_progress_idle(self):
         out = "# 1  Short offline  Completed without error  00%  1234  -\n"
         self.assertIsNone(self.dr._parse_selftest_progress(out))
 
-    def test_test_minutes_short_and_extended(self):
+    def test_test_minutes_short_extended_and_conveyance(self):
+        # Real smartctl -c output: the routine name and the polling time
+        # sit on two lines (the Short line even carries a trailing space).
         out = (
-            "Short self-test routine recommended polling time:        (   2) minutes.\n"
-            "Extended self-test routine recommended polling time:     ( 240) minutes.\n"
+            "Short self-test routine \n"
+            "recommended polling time: \t (   2) minutes.\n"
+            "Extended self-test routine\n"
+            "recommended polling time: \t ( 240) minutes.\n"
+            "Conveyance self-test routine\n"
+            "recommended polling time: \t (   5) minutes.\n"
         )
         self.assertEqual(self.dr._parse_test_minutes(out, "short"), 2)
         self.assertEqual(self.dr._parse_test_minutes(out, "long"), 240)
+        self.assertEqual(self.dr._parse_test_minutes(out, "conveyance"), 5)
+
+    def test_test_minutes_no_conveyance_block(self):
+        # smartctl omits the conveyance pair entirely when unsupported.
+        out = (
+            "Short self-test routine \n"
+            "recommended polling time: \t (   2) minutes.\n"
+            "Extended self-test routine\n"
+            "recommended polling time: \t ( 240) minutes.\n"
+        )
+        self.assertIsNone(self.dr._parse_test_minutes(out, "conveyance"))
 
     def test_test_minutes_missing(self):
         self.assertIsNone(self.dr._parse_test_minutes("no data here", "short"))
@@ -107,6 +132,18 @@ class TestRepositorySelfTestWrappers(unittest.TestCase):
         self.assertIn("long", calls[0])
         self.assertIn("/dev/sdb", calls[0])
 
+    def test_start_self_test_conveyance(self):
+        calls = []
+
+        def handler(cmd, **_kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=" begun")
+
+        with mock_subprocess() as m:
+            m.set_command_handler(r"smartctl -t", handler)
+            self.assertTrue(self._repo().start_self_test("/dev/sdb", "conveyance"))
+        self.assertIn("conveyance", calls[0])
+
     def test_start_self_test_bad_mode(self):
         self.assertFalse(self._repo().start_self_test("/dev/sdb", "sideways"))
 
@@ -127,7 +164,7 @@ class TestRepositorySelfTestWrappers(unittest.TestCase):
             self.assertTrue(self._repo().abort_self_test("/dev/sdb"))
 
     def test_estimate_test_minutes(self):
-        out = "Extended self-test routine recommended polling time:     ( 240) minutes.\n"
+        out = "Extended self-test routine\nrecommended polling time: \t ( 240) minutes.\n"
         with mock_subprocess() as m:
             m.set_command_handler(
                 r"smartctl -c",
@@ -135,21 +172,77 @@ class TestRepositorySelfTestWrappers(unittest.TestCase):
             )
             self.assertEqual(self._repo().estimate_test_minutes("/dev/sdb", "long"), 240)
 
-    def test_poll_running(self):
-        out = "Self-test routine in progress...  40% of test remaining\n"
+    def test_self_test_estimates_one_call(self):
+        out = (
+            "Short self-test routine \n"
+            "recommended polling time: \t (   2) minutes.\n"
+            "Extended self-test routine\n"
+            "recommended polling time: \t ( 518) minutes.\n"
+            "Conveyance self-test routine\n"
+            "recommended polling time: \t (   5) minutes.\n"
+        )
         with mock_subprocess() as m:
             m.set_command_handler(
-                r"smartctl -l selftest",
+                r"smartctl -c",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(args=[], returncode=0, stdout=out),
+            )
+            estimates = self._repo().self_test_estimates("/dev/sdb")
+            smartctl_calls = [cmd for cmd, _kw in m.calls if cmd and cmd[0] == "smartctl"]
+        self.assertEqual(estimates, {"short": 2, "long": 518, "conveyance": 5})
+        self.assertEqual(len(smartctl_calls), 1)
+
+    def test_self_test_estimates_without_conveyance(self):
+        out = (
+            "Short self-test routine \n"
+            "recommended polling time: \t (   2) minutes.\n"
+            "Extended self-test routine\n"
+            "recommended polling time: \t ( 518) minutes.\n"
+        )
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -c",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(args=[], returncode=0, stdout=out),
+            )
+            estimates = self._repo().self_test_estimates("/dev/sdb")
+        self.assertEqual(estimates, {"short": 2, "long": 518, "conveyance": None})
+
+    def test_poll_running_from_exec_status(self):
+        out = (
+            "Self-test execution status:      (249)\tSelf-test routine in progress...\n"
+            "\t\t\t\t\t40% of test remaining.\n"
+        )
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -c -l selftest",
                 lambda _cmd, **_kw: subprocess.CompletedProcess(args=[], returncode=0, stdout=out),
             )
             poll = self._repo().poll_self_test("/dev/sdb")
+            cmd = m.calls[0][0]
         self.assertEqual(poll, {"running": True, "remaining_percent": 40})
+        self.assertIn("-c", cmd)
+        self.assertIn("selftest", cmd)
+
+    def test_poll_running_from_log_row(self):
+        out = (
+            "SMART Self-test log structure revision number 1\n"
+            "Num  Test_Description    Status                  Remaining  "
+            "LifeTime(hours)  LBA_of_first_error\n"
+            "# 1  Short offline       Self-test routine in progress 90%      "
+            "1234         -\n"
+        )
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -c -l selftest",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(args=[], returncode=0, stdout=out),
+            )
+            poll = self._repo().poll_self_test("/dev/sdb")
+        self.assertEqual(poll, {"running": True, "remaining_percent": 90})
 
     def test_poll_finished(self):
         out = "# 1  Extended offline  Completed without error  00%  100  -\n"
         with mock_subprocess() as m:
             m.set_command_handler(
-                r"smartctl -l selftest",
+                r"smartctl -c -l selftest",
                 lambda _cmd, **_kw: subprocess.CompletedProcess(args=[], returncode=0, stdout=out),
             )
             poll = self._repo().poll_self_test("/dev/sdb")
@@ -158,7 +251,7 @@ class TestRepositorySelfTestWrappers(unittest.TestCase):
     def test_poll_error_never_raises(self):
         with mock_subprocess() as m:
             m.set_command_handler(
-                r"smartctl -l selftest",
+                r"smartctl -c -l selftest",
                 lambda _cmd, **_kw: (_ for _ in ()).throw(FileNotFoundError("smartctl")),
             )
             self.assertEqual(
@@ -409,103 +502,140 @@ class TestSurfaceTestDialog(unittest.TestCase):
         app.window = MagicMock()
         return app
 
-    def _repo(self, short_minutes=2, long_minutes=240):
+    def _repo(self, short_minutes=2, long_minutes=240, conveyance_minutes=5):
         repo = MagicMock()
-        repo.estimate_test_minutes.side_effect = lambda _p, mode: (
-            short_minutes if mode == "short" else long_minutes
-        )
+        repo.self_test_estimates.return_value = {
+            "short": short_minutes,
+            "long": long_minutes,
+            "conveyance": conveyance_minutes,
+        }
         return repo
+
+    def _radio_factory(self, radios, active_index):
+        def fake_radio(label=None):
+            btn = MagicMock()
+            btn.get_active.return_value = len(radios) == active_index
+            radios.append(btn)
+            return btn
+
+        return fake_radio
+
+    def _run_start_dialog(self, dst, repo, active_index=-1, response=None):
+        """Run the start-mode dialog fully mocked.
+
+        Returns (result, dialog, label_cls, radios). *label_cls* is the held
+        mock for Gtk.Label so constructor texts stay assertable after the
+        patches exit.
+        """
+        dialog = MagicMock()
+        dialog.run.return_value = response if response is not None else dst.Gtk.ResponseType.CANCEL
+        label_cls = MagicMock()
+        radios = []
+        disk = SimpleNamespace(path="/dev/sdb", model="WD")
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(dst, "create_dialog", return_value=dialog))
+            stack.enter_context(
+                patch.object(
+                    dst.Gtk, "RadioButton", side_effect=self._radio_factory(radios, active_index)
+                )
+            )
+            stack.enter_context(patch.object(dst.Gtk, "Label", label_cls))
+            result = dst.show_surface_test_dialog(self._app(), disk, None, repo)
+        return result, dialog, label_cls, radios
+
+    @staticmethod
+    def _label_texts(label_cls):
+        return [c.kwargs.get("label", "") for c in label_cls.call_args_list]
 
     def test_start_short(self):
         dst = _import_surface_module()
-        dialogs = []
-
-        def fake_create_dialog(title, parent, buttons, default_response=None, size=None):
-            dialog = MagicMock()
-            dialog.run.return_value = dst.Gtk.ResponseType.OK
-            dialogs.append(dialog)
-            return dialog
-
-        radios = []
-
-        def fake_radio(label=None):
-            btn = MagicMock()
-            btn.get_active.return_value = len(radios) == 0  # first radio active
-            radios.append(btn)
-            return btn
-
-        disk = SimpleNamespace(path="/dev/sdb", model="WD")
-        with (
-            patch.object(dst, "create_dialog", side_effect=fake_create_dialog),
-            patch.object(dst.Gtk, "RadioButton", side_effect=fake_radio),
-            patch.object(dst.Gtk, "Label", MagicMock()),
-        ):
-            result = dst.show_surface_test_dialog(self._app(), disk, None, self._repo())
+        result, _dialog, _label_cls, _radios = self._run_start_dialog(
+            dst, self._repo(), active_index=0, response=dst.Gtk.ResponseType.OK
+        )
         self.assertEqual(result, "short")
 
     def test_dialog_controls_carry_tooltips(self):
-        """Fast/Slow radios and the Start button explain themselves."""
+        """Fast/Slow/Conveyance radios and the Start button explain themselves."""
         dst = _import_surface_module()
-        dialog = MagicMock()
-        dialog.run.return_value = dst.Gtk.ResponseType.CANCEL
-        radios = []
-
-        def fake_radio(label=None):
-            btn = MagicMock()
-            btn.get_active.return_value = True
-            radios.append(btn)
-            return btn
-
-        disk = SimpleNamespace(path="/dev/sdb", model="WD")
-        with (
-            patch.object(dst, "create_dialog", return_value=dialog),
-            patch.object(dst.Gtk, "RadioButton", side_effect=fake_radio),
-            patch.object(dst.Gtk, "Label", MagicMock()),
-        ):
-            dst.show_surface_test_dialog(self._app(), disk, None, self._repo())
-
-        self.assertEqual(len(radios), 2)
+        result, dialog, _label_cls, radios = self._run_start_dialog(dst, self._repo())
+        self.assertIsNone(result)
+        self.assertEqual(len(radios), 3)
         fast_tip = radios[0].set_tooltip_text.call_args.args[0]
         self.assertIn("Short self-test", fast_tip)
         slow_tip = radios[1].set_tooltip_text.call_args.args[0]
         self.assertIn("Extended self-test", slow_tip)
+        conveyance_tip = radios[2].set_tooltip_text.call_args.args[0]
+        self.assertIn("Conveyance self-test", conveyance_tip)
 
         start_tip = dialog.get_widget_for_response.return_value.set_tooltip_text.call_args
         self.assertTrue(start_tip.args[0].strip())
 
     def test_start_long_when_second_radio_active(self):
         dst = _import_surface_module()
-        dialog = MagicMock()
-        dialog.run.return_value = dst.Gtk.ResponseType.OK
-        radios = []
-
-        def fake_radio(label=None):
-            btn = MagicMock()
-            btn.get_active.return_value = len(radios) == 1  # second radio active
-            radios.append(btn)
-            return btn
-
-        disk = SimpleNamespace(path="/dev/sdb", model="WD")
-        with (
-            patch.object(dst, "create_dialog", return_value=dialog),
-            patch.object(dst.Gtk, "RadioButton", side_effect=fake_radio),
-            patch.object(dst.Gtk, "Label", MagicMock()),
-        ):
-            result = dst.show_surface_test_dialog(self._app(), disk, None, self._repo())
+        result, _dialog, _label_cls, _radios = self._run_start_dialog(
+            dst, self._repo(), active_index=1, response=dst.Gtk.ResponseType.OK
+        )
         self.assertEqual(result, "long")
+
+    def test_start_conveyance_when_third_radio_active(self):
+        dst = _import_surface_module()
+        result, _dialog, _label_cls, _radios = self._run_start_dialog(
+            dst, self._repo(), active_index=2, response=dst.Gtk.ResponseType.OK
+        )
+        self.assertEqual(result, "conveyance")
+
+    def test_conveyance_option_absent_when_unsupported(self):
+        dst = _import_surface_module()
+        _result, _dialog, label_cls, radios = self._run_start_dialog(
+            dst, self._repo(conveyance_minutes=None)
+        )
+        self.assertEqual(len(radios), 2)
+        self.assertNotIn("Conveyance", " ".join(self._label_texts(label_cls)))
+
+    def test_descriptions_carry_estimates(self):
+        """Each option shows the drive-reported estimated run time."""
+        dst = _import_surface_module()
+        _result, _dialog, label_cls, _radios = self._run_start_dialog(
+            dst, self._repo(short_minutes=2, long_minutes=240)
+        )
+        texts = " ".join(self._label_texts(label_cls))
+        self.assertIn("Estimated run time: ~2m", texts)
+        self.assertIn("Estimated run time: ~4h 00m", texts)
+        self.assertIn("Estimated run time: ~5m", texts)
+
+    def test_estimates_omitted_when_unknown(self):
+        dst = _import_surface_module()
+        _result, _dialog, label_cls, _radios = self._run_start_dialog(
+            dst, self._repo(short_minutes=None, long_minutes=None, conveyance_minutes=None)
+        )
+        texts = " ".join(self._label_texts(label_cls))
+        self.assertNotIn("Estimated run time", texts)
+        self.assertNotIn("Conveyance", texts)
+
+    def test_dialog_width_capped_and_text_wraps(self):
+        """The start dialog gets a fixed width and its labels wrap."""
+        dst = _import_surface_module()
+        with patch.object(dst, "create_dialog", return_value=MagicMock()) as create:
+            dialog = create.return_value
+            dialog.run.return_value = dst.Gtk.ResponseType.CANCEL
+            label_cls = MagicMock()
+            radios = []
+            disk = SimpleNamespace(path="/dev/sdb", model="WD")
+            with (
+                patch.object(dst.Gtk, "RadioButton", side_effect=self._radio_factory(radios, -1)),
+                patch.object(dst.Gtk, "Label", label_cls),
+            ):
+                dst.show_surface_test_dialog(self._app(), disk, None, self._repo())
+        self.assertEqual(create.call_args.kwargs.get("size"), (560, -1))
+        label = label_cls.return_value
+        label.set_line_wrap.assert_called_with(True)
+        max_chars = [c.args[0] for c in label.set_max_width_chars.call_args_list if c.args]
+        self.assertTrue(max_chars)
+        self.assertTrue(all(chars <= 56 for chars in max_chars))
 
     def test_cancel_response_returns_none(self):
         dst = _import_surface_module()
-        dialog = MagicMock()
-        dialog.run.return_value = dst.Gtk.ResponseType.CANCEL
-        with (
-            patch.object(dst, "create_dialog", return_value=dialog),
-            patch.object(dst.Gtk, "RadioButton", MagicMock()),
-            patch.object(dst.Gtk, "Label", MagicMock()),
-        ):
-            result = dst.show_surface_test_dialog(
-                self._app(), SimpleNamespace(path="/dev/sdb", model="WD"), None, self._repo()
-            )
+        result, _dialog, _label_cls, _radios = self._run_start_dialog(dst, self._repo())
         self.assertIsNone(result)
 
     def test_running_entry_abort(self):
@@ -669,6 +799,21 @@ class TestDisksPageSurfaceIntegration(unittest.TestCase):
         dialog.assert_called_once()
         starter.assert_called_once()
         self.assertEqual(starter.call_args[0][1].path, "/dev/sdb")
+
+    def test_handler_starts_conveyance_test(self):
+        dp = _import_disks_page()
+        dst = _import_surface_module()
+        store = _FakeStore([_store_row("/dev/sdb", "HDD", model="WD10EZEX")])
+        app = _app_with_selection(store, [0])
+        with (
+            patch.object(dst, "show_surface_test_dialog", return_value="conveyance"),
+            patch.object(dst, "start_surface_test") as starter,
+            patch.object(dst, "load_surface_test_state", return_value={"tests": {}}),
+            patch.object(dp, "refresh_surface_test_status"),
+        ):
+            dp.on_disks_surface_test(app)
+        starter.assert_called_once()
+        self.assertEqual(starter.call_args[0][2], "conveyance")
 
     def test_handler_ignores_non_hdd(self):
         dp = _import_disks_page()

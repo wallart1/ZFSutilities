@@ -14,7 +14,6 @@ from feature_config import (
     DEFAULT_RETENTION,
     MASS_DELETE_DEFAULTS,
     get_all_retention,
-    get_offsite_candidate_names,
     get_pool_names,
     get_prune_label,
     get_prune_pools_order,
@@ -44,7 +43,6 @@ from gui_helpers import (
     style_widget_value_nondefault,
 )
 from logging_config import log_msg
-from offsite_runner import detect_offsite_pools
 
 # Advanced prune dataset criteria shown in the Advanced expander
 MASS_DELETE_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
@@ -97,6 +95,10 @@ def load_retention_profile_config(app, config):
         for i, row in enumerate(app._ret_prune_store):
             if row[0] in prune_pools:
                 selection.select_path(Gtk.TreePath.new_from_indices([i]))
+        listed = {row[0] for row in app._ret_prune_store}
+        missing = [p for p in prune_pools if p not in listed]
+        if missing:
+            log_msg(f"WARN: profile pools missing from prune list: {', '.join(missing)}")
 
 
 # ── Online pool helpers ───────────────────────
@@ -367,8 +369,7 @@ def create_retention_page(app, ctx):
     set_column_header_tooltip(
         cp0,
         "Pool",
-        "Online pool with a retention policy; select one or more, then "
-        "click Prune. <offsite> stands for every offsite-candidate pool.",
+        "Online pool with a retention policy; select one or more, then click Prune.",
     )
     pv.append_column(cp0)
     rp1 = Gtk.CellRendererText()
@@ -377,8 +378,7 @@ def create_retention_page(app, ctx):
     set_column_header_tooltip(
         cp1,
         "Health",
-        "ONLINE for direct pools; for <offsite>, the currently online "
-        "offsite pools or 'not online'.",
+        "Pool health from zpool list; offline pools are omitted from the list.",
     )
     pv.append_column(cp1)
 
@@ -552,19 +552,14 @@ def refresh_prune_pools(app):
     The current multi-selection is preserved for pools that remain in the
     refreshed list.
 
-    A policy keyed as ``<offsite>`` is treated as a placeholder for all
-    currently-online offsite-candidate pools and is shown as a single row
-    whose health column lists the resolved pools (or "not online").
+    Only real pool names are listed. An offsite-candidate pool picks up the
+    ``<offsite>`` retention policy automatically at prune time, so it never
+    needs a placeholder row of its own.
     """
     if not hasattr(app, "_ret_prune_store") or not hasattr(app, "ctx"):
         return
-    retention = get_all_retention(app.ctx.config)
     online = set(_get_online_pool_names())
     configured = set(get_pool_names(app.ctx.config))
-    has_offsite_policy = "<offsite>" in retention
-    offsite_pools = []
-    if has_offsite_policy:
-        offsite_pools = detect_offsite_pools(get_offsite_candidate_names(app.ctx.config))
 
     # Match zfscleanup semantics: configured pools when available, otherwise
     # all online pools. Skip any configured pool that is currently offline.
@@ -572,11 +567,6 @@ def refresh_prune_pools(app):
         candidates = configured & online
     else:
         candidates = set(online)
-
-    # The <offsite> placeholder is eligible if it has a policy, regardless of
-    # whether any offsite pool is online right now.
-    if has_offsite_policy:
-        candidates.add("<offsite>")
 
     saved_order = get_prune_pools_order(app.ctx.config)
     current_order = [row[0] for row in app._ret_prune_store if row[0] in candidates]
@@ -613,11 +603,7 @@ def refresh_prune_pools(app):
 
     app._ret_prune_store.clear()
     for pool in new_order:
-        if pool == "<offsite>":
-            health = ", ".join(offsite_pools) if offsite_pools else "not online"
-        else:
-            health = "ONLINE"
-        app._ret_prune_store.append([pool, health])
+        app._ret_prune_store.append([pool, "ONLINE"])
 
     # Restore selection for any pools that are still present after the refresh.
     if selected_pools and hasattr(app, "_ret_prune_view"):

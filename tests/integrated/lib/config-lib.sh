@@ -55,6 +55,11 @@ to run without a site configuration (fail-closed by design)."
     ITF_HTTP_PORT="${ITF_HTTP_PORT:-8000}"
     ITF_GUEST_NET_MODEL="${ITF_GUEST_NET_MODEL:-virtio}"
     ITF_GUEST_OSTYPE="${ITF_GUEST_OSTYPE:-l26}"
+    # Guest-clone mode: "linked" (default — thin-snapshot clone of the
+    # template's base- volume, metadata-only and instant) or "full"
+    # (allocated-block copy — escape hatch for guest storages without
+    # linked-clone support).
+    ITF_CLONE_MODE="${ITF_CLONE_MODE:-linked}"
     ITF_SSH_KEY="${ITF_SSH_KEY:-$HOME/.ssh/id_ed25519.pub}"
     ITF_TEMPLATE_NAME="${ITF_TEMPLATE_NAME:-itf-template}"
     ITF_COMPUTE_TEMPLATE_NAME="${ITF_COMPUTE_TEMPLATE_NAME:-itf-template-pve}"
@@ -149,6 +154,14 @@ itf_config_validate() {
             problems=1
         fi
     done
+
+    case "${ITF_CLONE_MODE:-linked}" in
+        linked|full) ;;
+        *)
+            echo "itf-config: ITF_CLONE_MODE must be 'linked' or 'full'" >&2
+            problems=1
+            ;;
+    esac
 
     if [[ -n "${ITF_ISO_DIR:-}" && ! "${ITF_ISO_DIR}" =~ ^/ ]]; then
         echo "itf-config: ITF_ISO_DIR must be an absolute path" >&2

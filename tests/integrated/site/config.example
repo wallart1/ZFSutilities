@@ -21,8 +21,9 @@ ITF_VMID_FIRST=8000
 ITF_VMID_LAST=8099
 
 # Name of the post-install baseline template on the base hosts (built by
-# "itf template build").  Journeys full-clone it to start at the
-# post-install point instead of repeating the OS + product install.
+# "itf template build").  Journeys clone it (linked by default — see
+# ITF_CLONE_MODE) to start at the post-install point instead of repeating
+# the OS + product install.
 ITF_TEMPLATE_NAME=itf-template
 
 # PVE storages dedicated to the orchestrator (created manually on the base
@@ -90,6 +91,11 @@ ITF_GITHUB_REPO=REPLACE-ME-owner/REPLACE-ME-repo
 
 # Optional overrides:
 # ITF_HTTP_PORT=8000          # preseed HTTP server port on dev
+# ITF_CLONE_MODE=linked       # guest-clone mode: linked (default —
+#                             # metadata-only thin-snapshot clone of the
+#                             # template's base- volume, instant) or full
+#                             # (allocated-block copy — for guest storages
+#                             # without linked-clone support)
 # ITF_DEV_IP=10.0.0.1         # force the dev IP advertised to installers
 # ITF_SSH_KEY=~/.ssh/id_ed25519.pub   # key installed into guests
 # ITF_RUNS_DIR=/path/to/dir   # run reports (default: tests/integrated/results)

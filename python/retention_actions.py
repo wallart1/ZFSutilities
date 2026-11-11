@@ -16,10 +16,8 @@ from backup_config import (
     save_retention,
 )
 from command_builders import BashStep, _dryrun_assignments
-from feature_config import get_offsite_candidate_names
 from gi.repository import Gtk
 from gui_helpers import show_error
-from offsite_runner import detect_offsite_pools
 from retention_page import (
     BUCKET_LABELS,
     _get_online_pool_names,
@@ -196,24 +194,6 @@ def on_retention_prune(app, ctx):
     # Walk the model in visual order so execution order matches the list.
     pools = [row[0] for row in model if row[0] in selected]
 
-    # Expand the <offsite> placeholder to all online offsite-candidate pools.
-    if "<offsite>" in selected:
-        offsite_pools = detect_offsite_pools(get_offsite_candidate_names(ctx.config))
-        if not offsite_pools:
-            log_msg("WARN: No offsite pool online; skipping <offsite> prune")
-        expanded = []
-        seen = set()
-        for pool in pools:
-            if pool == "<offsite>":
-                for op in offsite_pools:
-                    if op not in seen:
-                        expanded.append(op)
-                        seen.add(op)
-            elif pool not in seen:
-                expanded.append(pool)
-                seen.add(pool)
-        pools = expanded
-
     if not pools:
         log_msg("WARN: No online pools selected for pruning")
         return
@@ -233,7 +213,9 @@ def on_retention_prune(app, ctx):
 
     for pool in pools:
         if not zlm.check(pool, "w"):
-            log_msg(f"WARN: cannot prune {pool}: pool is locked by another operation")
+            holders = zlm.conflicting_lock_holders(pool, "w")
+            detail = f" ({zlm.format_lock_holders(holders)})" if holders else ""
+            log_msg(f"WARN: cannot prune {pool}: pool is locked by another operation{detail}")
             return
 
     ignore_check = getattr(app, "_ret_ignore_retention_check", None)

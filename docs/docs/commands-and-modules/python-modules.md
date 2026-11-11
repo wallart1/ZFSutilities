@@ -1302,11 +1302,11 @@ pool.
 ### `disk_surface_test.py`
 
 Disk surface tester for HDDs. A surface test is a SMART self-test run by the
-drive firmware (`smartctl -t short|long`), so it runs independently of the
-GUI, survives restarts, and supports concurrent tests on different disks.
-Holds the state machine, the JSON state file (`surface_test_state.json`,
-flock-protected like scrub state), Disk Inventory cell-text formatting, and
-the start/cancel dialog.
+drive firmware (`smartctl -t short|long|conveyance`), so it runs
+independently of the GUI, survives restarts, and supports concurrent tests
+on different disks. Holds the state machine, the JSON state file
+(`surface_test_state.json`, flock-protected like scrub state), Disk Inventory
+cell-text formatting, and the start/cancel dialog.
 
 **Key functions:**
 
@@ -1316,7 +1316,7 @@ the start/cancel dialog.
 | `build_entry()` / `update_entry_from_poll()` / `update_entries_from_polls()` | State machine: running → passed/failed/aborted, with progress and ETA |
 | `surface_cell_text()` / `format_minutes()`                                   | Disk Inventory cell rendering (`42% (1h 23m)`, `Passed`, …)           |
 | `start_surface_test()` / `cancel_surface_test()`                             | Start (`smartctl -t`) / cancel (`smartctl -X`) plus state updates     |
-| `show_surface_test_dialog()`                                                 | Fast/Slow picker, or live status + Cancel Test when already running   |
+| `show_surface_test_dialog()`                                                 | Fast/Slow/Conveyance picker with per-mode estimated run times, or live status + Cancel Test when already running |
 
 **Called modules / imported helpers:**
 
@@ -1327,10 +1327,17 @@ the start/cancel dialog.
 | `paths`           | State-file path                                                   |
 
 The smartctl wrappers (`start_self_test`, `abort_self_test`,
-`estimate_test_minutes`, `poll_self_test`) live on `DiskRepository` next to
-the other smartctl methods; the text parsers (`_parse_selftest_progress`,
-`_parse_test_minutes`, `_parse_selftest_status`) are module-level pure
-functions in `disk_repository.py`.
+`estimate_test_minutes`, `self_test_estimates`, `poll_self_test`) live on
+`DiskRepository` next to the other smartctl methods. `poll_self_test` reads
+`smartctl -c -l selftest` — the capabilities section reports the live
+self-test execution status (the firmware updates it the moment a test
+starts, before the log row appears), and the log section carries the final
+statuses. The estimated run times come from the recommended polling times
+`smartctl -c` prints; smartctl prints the conveyance pair only when the
+device supports it, so its presence doubles as the support check. The text
+parsers (`_parse_selftest_progress`, `_parse_test_minutes`,
+`_parse_selftest_status`) are module-level pure functions in
+`disk_repository.py`.
 
 ---
 
@@ -2342,7 +2349,7 @@ test suite's GUI-module closure.
 
 ### `notifications_dialog.py`
 
-The File → **Notifications…** dialog: per-channel mode combo (Off / Failures
+The Settings → **Notifications…** dialog: per-channel mode combo (Off / Failures
 only / All runs), six run-type toggles per channel, SMTP connection fields
 with a masked password entry, and **Show test notification** / **Send test
 email** buttons that exercise the delivery code with the dialog's current

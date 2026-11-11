@@ -704,6 +704,7 @@ GUI Retention tab: per-pool bucket tables, prune-pool list, and the new-install/
 | `INFO: Imported legacy retention policies into JSON: ...` | Legacy retention was imported into the config at page build | Informational |
 | `WARN: Could not save imported retention policies: ...` | OSError saving the import | Import not persisted |
 | `WARN: Could not save prune pool order: ...` | Drag-and-drop reorder of prune pools failed to persist | Order kept in the UI only |
+| `WARN: profile pools missing from prune list: ...` | A recalled profile's saved prune-pool entries match no current row (an `<offsite>` entry or a detached pool) | Entries left unselected; re-saving the profile drops them — re-add the pool first if it should stay |
 | `INFO: Created new retention policy for pool: ...` | User answered Yes to the create-missing-policy dialog when switching pools | Default retention saved for the pool |
 | `VERB: Retention policy saved for pool: ...` / `Retention policies saved for pools: ..., ...` | Save persisted one pool's (or several pools') buckets | Informational |
 
@@ -718,12 +719,11 @@ GUI Retention tab actions: policy add/remove and the prune run (launched through
 | `INFO: Removed retention policy for pool: ...` | Policy deleted after Yes/No confirm (the pool falls back to `default`) | Prune list refreshed |
 | `WARN: Retention page not initialized` | Prune view widget missing | Prune aborted |
 | `WARN: Select one or more pools in the Prune list` | Empty prune selection | Prune aborted |
-| `WARN: No offsite pool online; skipping <offsite> prune` | The `<offsite>` placeholder expanded to zero pools | Placeholder skipped; other pools continue |
-| `WARN: No online pools selected for pruning` | Expansion left no pools | Prune aborted |
+| `WARN: No online pools selected for pruning` | Selection left no online pools | Prune aborted |
 | `WARN: Retention runner not available` | No retention runner on the app | Prune aborted |
 | `WARN: A prune operation is already running` | Runner busy guard | Prune aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Dry-run toggle active for the prune run | Continue in no-change mode |
-| `WARN: cannot prune ...: pool is locked by another operation` | Pre-flight write-lock check on the pool failed | Whole prune aborted |
+| `WARN: cannot prune ...: pool is locked by another operation (...)` | Pre-flight write-lock check on the pool failed; the parenthesised detail names every blocking holder when known | Whole prune aborted |
 | `WARN: Bucket '...' already exists` | Add-bucket duplicate gate | Add aborted |
 | `INFO: Added bucket '...' (unsaved)` | Bucket row appended, not yet saved | Save persists |
 | `WARN: Select a bucket to remove` | No bucket row selected (or page widget missing) | Remove aborted |
@@ -2762,7 +2762,7 @@ Logs tab: session-log viewer, live tail, deletion, and retention setting.
 | -------------- | ------- | -------- |
 | `WARN: Could not tail log file: ...` | The incremental live-tail read failed | Tail timer stays alive; retries next tick |
 | `WARN: Log viewer buffer truncated to prevent excessive memory use` | Safety cap — the live tail buffer exceeded its maximum; the older half was dropped | Tailing continues |
-| `INFO: Copied log path to clipboard: ...` | Context-menu copy of the log path | Path on the clipboard |
+| `VERB: Copied log path to clipboard: ...` | Context-menu copy of the log path | Path on the clipboard |
 | `WARN: Could not seek log file: ...` | Tail-only mode seek for a huge file failed | Viewer load aborted |
 | `WARN: Could not read log file: ...` | A chunked "Show More" read failed | Chunk load aborted |
 | `WARN: No log selected` | Delete Selected with empty selection | Delete aborted |
@@ -3015,14 +3015,14 @@ Desktop and email delivery for finished runs (scheduled profiles, Run Now, and i
 | `WARN: Desktop notification failed: ...` | The delivery command could not be run or timed out | Run continues; the bubble was not shown |
 | `WARN: Desktop notification failed (rc=...): ...` | The delivery tool exited non-zero (e.g. no notification daemon) | Check the named error; the run itself is unaffected |
 | `INFO: Desktop notification sent: ...` | The bubble was handed to the session's notification daemon | Informational |
-| `WARN: Email notification skipped: SMTP host or recipient is not configured` | The email channel is enabled but `smtp_host` or the recipient list is empty | Configure SMTP settings in File → Notifications… |
+| `WARN: Email notification skipped: SMTP host or recipient is not configured` | The email channel is enabled but `smtp_host` or the recipient list is empty | Configure SMTP settings in Settings → Notifications… |
 | `WARN: Email notification failed: ...` | SMTP connection/login/send raised (timeout, auth failure, relay refused) | The error names the cause; the run itself is unaffected |
 | `INFO: Email notification sent to ...: ...` | The message was accepted by the SMTP server | Informational |
 | `WARN: Notification dispatch failed: ...` | An unexpected exception escaped inside the dispatch wrapper (a bug) | Swallowed; the run's own status is untouched. Please report if seen |
 
 ### [notifications_dialog](../commands-and-modules/python-modules.md#notifications_dialogpy)
 
-The File → **Notifications…** configuration dialog.
+The Settings → **Notifications…** configuration dialog.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |

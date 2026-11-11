@@ -1,4 +1,4 @@
-"""Notifications configuration dialog (File → Notifications…).
+"""Notifications configuration dialog (Settings → Notifications…).
 
 Configures the desktop and email notification channels: per-channel mode
 (off / failures only / all runs), per-run-type toggles, SMTP connection

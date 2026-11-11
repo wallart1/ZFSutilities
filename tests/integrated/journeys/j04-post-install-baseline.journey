@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # j04-post-install-baseline.journey — baseline-template validation journey.
 #
-# Proves the post-install baseline template end to end: a full clone
+# Proves the post-install baseline template end to end: a linked clone
 # comes up as a working installed system (wiring, login PATH, product
 # surface), takes the documented test pools, and performs real work
 # through the installed product.  This is also the starting pattern for

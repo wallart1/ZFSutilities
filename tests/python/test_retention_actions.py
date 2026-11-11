@@ -71,10 +71,52 @@ class TestOnRetentionPruneLocking(unittest.TestCase):
             patch.object(ra, "zlm") as zlm_mock,
         ):
             zlm_mock.check.side_effect = [True, False]
+            zlm_mock.conflicting_lock_holders.return_value = [
+                {
+                    "dataset": "tank/vm-212-disk-2",
+                    "type": "write",
+                    "pid": 4321,
+                    "script": "zfs-send-receive",
+                    "acquired": "",
+                    "description": "send-receive dest",
+                }
+            ]
+            zlm_mock.format_lock_holders.return_value = (
+                "held by dataset='tank/vm-212-disk-2' type=write pid=4321 "
+                "script='zfs-send-receive' description='send-receive dest'"
+            )
             ra.on_retention_prune(app, ctx)
 
         mock_error.assert_not_called()
         zlm_mock.check.assert_called_with("tank", "w")
+        zlm_mock.conflicting_lock_holders.assert_called_with("tank", "w")
+        mock_log.assert_any_call(
+            "WARN: cannot prune tank: pool is locked by another operation "
+            "(held by dataset='tank/vm-212-disk-2' type=write pid=4321 "
+            "script='zfs-send-receive' description='send-receive dest')"
+        )
+        app.retention_runner.set_steps.assert_not_called()
+        app.retention_runner.start.assert_not_called()
+
+    def test_aborts_when_pool_locked_without_holder_detail(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+
+        with (
+            patch.object(ra, "show_error") as mock_error,
+            patch.object(ra, "log_msg") as mock_log,
+            patch.object(ra, "zlm") as zlm_mock,
+        ):
+            zlm_mock.check.return_value = False
+            zlm_mock.conflicting_lock_holders.return_value = []
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
         mock_log.assert_any_call("WARN: cannot prune tank: pool is locked by another operation")
         app.retention_runner.set_steps.assert_not_called()
         app.retention_runner.start.assert_not_called()
@@ -411,7 +453,7 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
         app._ret_combo.set_active = MagicMock()
         return app
 
-    def _run_with_entry_text(self, app, text, retention, online=None, offsite_candidates=None):
+    def _run_with_entry_text(self, app, text, retention, online=None):
         ra = _import_retention_actions()
         combo_mock = MagicMock()
         combo_instance = combo_mock.new_with_entry.return_value
@@ -425,7 +467,6 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
         with (
             patch.object(ra, "get_all_retention", return_value=retention),
             patch.object(ra, "_get_online_pool_names", return_value=online or []),
-            patch.object(ra, "get_offsite_candidate_names", return_value=offsite_candidates or []),
             patch.object(ra, "save_retention") as mock_save,
             patch.object(ra, "refresh_prune_pools") as mock_refresh,
             patch.object(ra, "show_error") as mock_error,
@@ -578,64 +619,6 @@ class TestOnRetentionPruneReleaseHolds(unittest.TestCase):
         self.assertIn('releaseholds="N"', cmd)
         self.assertNotIn('releaseholds_tags=("offsite-*")', cmd)
         self.assertIn('ignore_retention_policies="Y"', cmd)
-
-
-class TestOnRetentionPruneOffsite(unittest.TestCase):
-    """<offsite> in the prune list expands to all online offsite pools."""
-
-    def test_prune_expands_offsite_to_all_online_candidates(self):
-        ra = _import_retention_actions()
-        app, _model = _make_prune_app(
-            [["<offsite>", "z22tb, z40tb"], ["tank", "ONLINE"]],
-            selected_paths=[0],
-        )
-        ctx = MagicMock()
-        ctx.config = {
-            "pools": [
-                {"name": "z22tb", "offsite_candidate": True},
-                {"name": "z40tb", "offsite_candidate": True},
-            ]
-        }
-        ctx.parent_dir = "/bin"
-
-        with (
-            patch.object(ra, "show_error") as mock_error,
-            patch.object(ra, "log_msg"),
-            patch.object(ra, "detect_offsite_pools", return_value=["z22tb", "z40tb"]),
-        ):
-            ra.on_retention_prune(app, ctx)
-
-        mock_error.assert_not_called()
-        steps = app.retention_runner.set_steps.call_args[0][0]
-        descriptions = [step.description for step in steps]
-        self.assertEqual(
-            descriptions,
-            [
-                "Prune z22tb (label=dailybackup)",
-                "Prune z40tb (label=dailybackup)",
-            ],
-        )
-
-    def test_prune_skips_offsite_when_none_online(self):
-        ra = _import_retention_actions()
-        app, _model = _make_prune_app(
-            [["<offsite>", "not online"], ["tank", "ONLINE"]],
-            selected_paths=[0],
-        )
-        ctx = MagicMock()
-        ctx.config = {"pools": [{"name": "z22tb", "offsite_candidate": True}]}
-        ctx.parent_dir = "/bin"
-
-        with (
-            patch.object(ra, "show_error") as mock_error,
-            patch.object(ra, "log_msg") as mock_log,
-            patch.object(ra, "detect_offsite_pools", return_value=[]),
-        ):
-            ra.on_retention_prune(app, ctx)
-
-        mock_error.assert_not_called()
-        app.retention_runner.set_steps.assert_not_called()
-        mock_log.assert_any_call("WARN: No offsite pool online; skipping <offsite> prune")
 
 
 class TestOnRetentionRemovePolicy(unittest.TestCase):
