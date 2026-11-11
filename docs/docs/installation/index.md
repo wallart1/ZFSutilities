@@ -299,8 +299,10 @@ It performs a guarded, full-site upgrade:
    there — nothing is activated**. The running system keeps its current
    version until you run switch-version yourself; the exact activation
    command is printed for every host, including the local one
-   (`sudo switch-version <version>`, and
-   `ssh root@<host> switch-version <version>` for each remote). On
+   (`/usr/local/lib/zfsutilities/bin/switch-version <version>`, and
+   `ssh root@<host> /usr/local/lib/zfsutilities/bin/switch-version <version>`
+   for each remote — absolute paths, because a command handed to ssh runs
+   in a non-login shell that never loads the product's PATH wiring). On
    two-node sites, run `sudo upgrade-zfsutilities` on each node.
    Activation also refreshes the `rtslib-fb-targetctl` systemd drop-ins on
    the storage host from the newly deployed version, so a release carrying

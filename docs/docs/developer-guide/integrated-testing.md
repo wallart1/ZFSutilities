@@ -413,8 +413,8 @@ that support profile selection take it at run time
   are captured on the local tree *and* over ssh on the compute host,
   the new version deploys to every target without activation — proven
   by that manifest being rewritten on both hosts — and both printed
-  switch-version commands are then run through a login shell (the
-  product PATH is profile.d wiring). Pass 2
+  switch-version commands are then run unmodified (the printed form is
+  the absolute path, which needs no login-shell PATH wiring). Pass 2
   re-labels the served release one patch newer (the VERSION/tag
   mismatch WARN asserted as honest) and injects per-host modifications
   — storage modified+added, compute modified+added+removed. The scan

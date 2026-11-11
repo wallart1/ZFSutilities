@@ -94,7 +94,7 @@ require_command() {
 # Per-host scan state. The local host is stored under the sentinel key
 # "LOCAL"; remote hosts under their hostname.
 declare -A host_active=()
-declare -A host_verifiable=()   # ok | no-active | no-baseline
+declare -A host_verifiable=()   # ok | no-active | no-baseline | baseline-captured
 declare -A host_mod=()          # newline-joined relative paths
 declare -A host_add=()
 declare -A host_del=()
@@ -286,11 +286,16 @@ process_host() {
         # capture degrades to the historical no-baseline warning — a
         # fence may not abort the upgrade.
         if [[ "$host" == "LOCAL" ]]; then
-            upgrade_lib_write_manifest "$version_base/versions/$scan_active" \
-                && host_verifiable["$host"]="baseline-captured"
+            if upgrade_lib_write_manifest "$version_base/versions/$scan_active"; then
+                host_verifiable["$host"]="baseline-captured"
+            else
+                host_verifiable["$host"]="no-baseline"
+            fi
         elif remote_ssh "$host" bash -s -- __baseline "$remote_version_base" \
                 "$scan_active" < "$upgrade_lib_file" > /dev/null; then
             host_verifiable["$host"]="baseline-captured"
+        else
+            host_verifiable["$host"]="no-baseline"
         fi
         host_mod["$host"]=""
         host_add["$host"]=""
@@ -628,10 +633,14 @@ upgrade_main() {
         log_msg "INFO:   Local modifications were archived under salvaged-changes/ on each"
         log_msg "INFO:   affected host. Re-apply any change you still want, then re-deploy."
     fi
+    # Absolute paths: the reader is root (the deploy above required it),
+    # and a command handed to ssh runs in a non-login shell that never
+    # loads the profile.d PATH wiring — the bare name would not be found.
     log_msg "INFO:   Activate when ready:"
-    log_msg "INFO:     this host:  sudo switch-version $latest_version"
+    log_msg "INFO:     this host:  $version_base/bin/switch-version $latest_version"
     for host in "${targets[@]}"; do
-        log_msg "INFO:     $host:  ssh root@$host switch-version $latest_version"
+        log_msg "INFO:     $host:  ssh root@$host \
+$remote_version_base/bin/switch-version $latest_version"
     done
 }
 

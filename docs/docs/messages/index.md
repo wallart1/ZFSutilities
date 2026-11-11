@@ -2560,7 +2560,7 @@ Each listed version is removed via `uninstall-version -y`; per-version messages 
 | `FATAL: Salvage failed on <host> — aborting before deployment.` | Archiving failed mid-consent | Nothing was deployed; re-run after investigating |
 | `INFO:   Salvaged on <host>: N file(s) -> salvaged-changes/<v>/<ts>/` / `INFO:   Combined diff saved: ...` | Where the archived edits and their diff live | Re-apply any change you still want, then re-deploy |
 | `FATAL: deploy-version failed. The deployment is incomplete — investigate before activating anything.` | The deployment step failed after salvage | Run deploy-version manually and investigate |
-| `INFO: === upgrade-zfsutilities complete ===` ... `INFO:   Deployed version: <v> — NOT activated` ... `INFO:     this host:  sudo switch-version <v>` / `INFO:     <host>:  ssh root@<host> switch-version <v>` | Final report: deployed version, unchanged active version, salvage locations, and the per-host activation commands | Run the printed commands when you are ready to activate |
+| `INFO: === upgrade-zfsutilities complete ===` ... `INFO:   Deployed version: <v> — NOT activated` ... `INFO:     this host:  /usr/local/lib/zfsutilities/bin/switch-version <v>` / `INFO:     <host>:  ssh root@<host> /usr/local/lib/zfsutilities/bin/switch-version <v>` | Final report: deployed version, unchanged active version, salvage locations, and the per-host activation commands | Run the printed commands when you are ready to activate |
 | `INFO: Configuration, logs, and history were preserved. / Run with --purge to remove them as well.` | Software-only mode outcome | Rerun with `--purge` to remove them |
 
 ### [startdocserver](../commands-and-modules/commands.md#startdocserver)

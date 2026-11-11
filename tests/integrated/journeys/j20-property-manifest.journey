@@ -154,7 +154,8 @@ EOF
 
     local b1_log="$ITF_RUN_DIR/guest-backup1.log"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
-        "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;destfs=zfstest2;nextsnap=$g1snap;autoproceed=Y'" \
+        "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;\
+destfs=zfstest2;nextsnap=$g1snap;autoproceed=Y'" \
         > "$b1_log" 2>&1
     local b1_rc=$?
     itf_artifact "backup1-transcript" "$b1_log"
@@ -203,7 +204,9 @@ set -e
 # Report the failing line's context and never leak the store mount on a
 # failed assertion (the run's own unmount discipline is being pinned
 # here too).  The bodies are tiny — dump them all for diagnosis.
-trap 'rc=\$?; if [[ \$rc -ne 0 ]]; then echo "b1state-failed rc=\$rc"; for f in /$store2/*; do echo "== \$f"; cat "\$f"; done; fi; cd /; zfs unmount $store2 2>/dev/null || true' EXIT
+trap 'rc=\$?; if [[ \$rc -ne 0 ]]; then echo "b1state-failed rc=\$rc"; \
+for f in /$store2/*; do echo "== \$f"; cat "\$f"; done; fi; \
+cd /; zfs unmount $store2 2>/dev/null || true' EXIT
 # Manifest file names: escaped dataset + generation snap, bare (the
 # script cds into the store's mountpoint).
 f1='zfstest1%2Fj20src$g1snap'
@@ -259,7 +262,8 @@ EOF
         return 1
     fi
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
+sourcefsremovequalifiers=2;destfs=zfstest1;autoproceed=Y'" \
         > "$r1_log" 2>&1
     local r1_rc=$?
     itf_artifact "restore1-transcript" "$r1_log"
@@ -359,7 +363,8 @@ EOF
     itf_guest_exec "$guest_ip" \
         "echo g2-data > /zfstest1/j20src/file-b.txt" > /dev/null 2>&1
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
-        "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;destfs=zfstest2;nextsnap=$g2snap;property_manifest=N;autoproceed=Y'" \
+        "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;\
+destfs=zfstest2;nextsnap=$g2snap;property_manifest=N;autoproceed=Y'" \
         > "$b2_log" 2>&1
     local b2_rc=$?
     itf_artifact "backup2-transcript" "$b2_log"
@@ -401,7 +406,8 @@ EOF
 
     local r2_log="$ITF_RUN_DIR/guest-restore2.log"
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20fb;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
+sourcefsremovequalifiers=2;destfs=zfstest1/j20fb;autoproceed=Y'" \
         > "$r2_log" 2>&1
     local r2_rc=$?
     itf_artifact "restore2-transcript" "$r2_log"
@@ -466,11 +472,13 @@ EOF
 
     local pf_log="$ITF_RUN_DIR/guest-prefeature.log"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
-        "$tree/bin/zfssend 'sourcefs=zfstest1/j20old;sourcefsremovequalifiers=0;destfs=zfstest3;nextsnap=$oldsnap;property_manifest=N;autoproceed=Y'" \
+        "$tree/bin/zfssend 'sourcefs=zfstest1/j20old;sourcefsremovequalifiers=0;\
+destfs=zfstest3;nextsnap=$oldsnap;property_manifest=N;autoproceed=Y'" \
         > "$ITF_RUN_DIR/guest-pf-backup.log" 2>&1
     local pfb_rc=$?
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/zfstest1/j20old;sourcefsremovequalifiers=2;destfs=zfstest1/j20pre;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/zfstest1/j20old;\
+sourcefsremovequalifiers=2;destfs=zfstest1/j20pre;autoproceed=Y'" \
         > "$pf_log" 2>&1
     local pf_rc=$?
     itf_artifact "prefeature-restore-transcript" "$pf_log"
@@ -480,7 +488,8 @@ EOF
         return 1
     fi
     local -a want_pf=(
-        "WARN: No property-manifest store zfstest3/zfstest1/zfsutilities-manifests — zfstest1/j20pre/j20old keeps its inherited defaults (backup predates property manifests)."
+        "WARN: No property-manifest store zfstest3/zfstest1/zfsutilities-manifests \
+— zfstest1/j20pre/j20old keeps its inherited defaults (backup predates property manifests)."
         )
     bad_markers=""
     for marker in "${want_pf[@]}"; do
@@ -528,7 +537,9 @@ EOF
     # (qualifiers=1), so the backup root's children land directly under
     # the offsite destination — one component deeper than the source-side
     # store, exactly the depth the replay's deeper candidate probes.
-    local hop_cmd="sourcefs=zfstest2;sourcefsremovequalifiers=1;destfs=zfstest3/j20hop;includes=(zfstest1/j20src zfstest1/zfsutilities-manifests);property_manifest=N;autoproceed=Y"
+    local hop_cmd="sourcefs=zfstest2;sourcefsremovequalifiers=1;destfs=zfstest3/j20hop"
+    hop_cmd+=";includes=(zfstest1/j20src zfstest1/zfsutilities-manifests)"
+    hop_cmd+=";property_manifest=N;autoproceed=Y"
     local o1_log="$ITF_RUN_DIR/guest-onward1.log"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
         "$tree/bin/zfssend '$hop_cmd;nextsnap=$o1snap'" \
@@ -590,7 +601,8 @@ EOF
 
     local r3_log="$ITF_RUN_DIR/guest-restore3.log"
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src;sourcefsremovequalifiers=3;destfs=zfstest1/j20offsite;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src;\
+sourcefsremovequalifiers=3;destfs=zfstest1/j20offsite;autoproceed=Y'" \
         > "$r3_log" 2>&1
     local r3_rc=$?
     itf_artifact "restore3-transcript" "$r3_log"
@@ -656,7 +668,8 @@ EOF
     itf_guest_exec "$guest_ip" "mv /root/j20.key /root/j20.key.hidden" \
         > /dev/null 2>&1
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src/enc;sourcefsremovequalifiers=4;destfs=zfstest1/j20kl;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src/enc;\
+sourcefsremovequalifiers=4;destfs=zfstest1/j20kl;autoproceed=Y'" \
         > "$kl_log" 2>&1
     local kl_rc=$?
     itf_artifact "keylost-transcript" "$kl_log"
@@ -826,7 +839,8 @@ EOF
 
     local rp1_log="$ITF_RUN_DIR/guest-rp-restore.log"
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20rp;replay_properties=N;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
+sourcefsremovequalifiers=2;destfs=zfstest1/j20rp;replay_properties=N;autoproceed=Y'" \
         > "$rp1_log" 2>&1
     local rp1_rc=$?
     itf_artifact "rp-restore-transcript" "$rp1_log"
@@ -857,7 +871,8 @@ EOF
 
     local rp2_log="$ITF_RUN_DIR/guest-rp-replay.log"
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsreplayprops 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20rp'" \
+        "$tree/bin/zfsreplayprops 'restoresourcefs=zfstest2/zfstest1/j20src;\
+sourcefsremovequalifiers=2;destfs=zfstest1/j20rp'" \
         > "$rp2_log" 2>&1
     local rp2_rc=$?
     itf_artifact "rp-replay-transcript" "$rp2_log"
@@ -921,7 +936,9 @@ EOF
         > /dev/null 2>&1
     local ee_log="$ITF_RUN_DIR/guest-encrecv.log"
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20enc;receive_encryption=Y;receive_keylocation=file:///root/j20enc.key;propmanifest_skip_keylocation=Y;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;\
+destfs=zfstest1/j20enc;receive_encryption=Y;receive_keylocation=file:///root/j20enc.key;\
+propmanifest_skip_keylocation=Y;autoproceed=Y'" \
         > "$ee_log" 2>&1
     local ee_rc=$?
     itf_artifact "encrecv-transcript" "$ee_log"
@@ -936,11 +953,15 @@ EOF
     # the overrides).  Every step-2 catch-up stays plain (the
     # initial-receive-only rule, live).
     local enc_receives
-    enc_receives=$(grep -cF -- "-o encryption=on -o keyformat=raw -o keylocation=file:///root/j20enc.key" "$ee_log")
+    enc_receives=$(grep -cF -- "-o encryption=on -o keyformat=raw \
+-o keylocation=file:///root/j20enc.key" "$ee_log")
     local -a want_ee=(
-        "will be created by the receive itself as an encrypted dataset (receive_encryption='Y' — no destination pre-create)."
-        "(source zfstest2/zfstest1/j20src/vol is a volume or encrypted — no destination pre-create)."
-        "(source zfstest2/zfstest1/j20src/enc is a volume or encrypted — no destination pre-create)."
+        "will be created by the receive itself as an encrypted dataset \
+(receive_encryption='Y' — no destination pre-create)."
+        "(source zfstest2/zfstest1/j20src/vol is a volume or encrypted \
+— no destination pre-create)."
+        "(source zfstest2/zfstest1/j20src/enc is a volume or encrypted \
+— no destination pre-create)."
         "WARN: keylocation on zfstest1/j20enc/j20src/enc skipped"
         )
     local -a forbid_ee=(
@@ -957,7 +978,8 @@ EOF
         grep -qF "$marker" "$ee_log" && bad_markers+=" [unexpected: $marker]"
     done
     if [[ "$enc_receives" -ne 3 ]]; then
-        bad_markers+=" [encrypted receive count: $enc_receives (wanted 3 — one step-1 per plain dataset)]"
+        bad_markers+=" [encrypted receive count: $enc_receives"
+        bad_markers+=" (wanted 3 — one step-1 per plain dataset)]"
     fi
     if [[ -n "$bad_markers" ]]; then
         itf_step fail "receive-as-encrypted restore" \
@@ -1032,12 +1054,15 @@ EOF
 
     local ef_log="$ITF_RUN_DIR/guest-encfatal.log"
     itf_guest_exec "$guest_ip" \
-        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20enc2;receive_encryption=Y;receive_keylocation=prompt;autoproceed=Y'" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
+sourcefsremovequalifiers=2;destfs=zfstest1/j20enc2;receive_encryption=Y;\
+receive_keylocation=prompt;autoproceed=Y'" \
         > "$ef_log" 2>&1
     local ef_rc=$?
     itf_artifact "encfatal-transcript" "$ef_log"
     local -a want_ef=(
-        "FATAL: receive_encryption='Y' requires receive_keylocation to be a file:// path to a 32-byte raw key file (got 'prompt')."
+        "FATAL: receive_encryption='Y' requires receive_keylocation to be a file:// \
+path to a 32-byte raw key file (got 'prompt')."
         )
     local -a forbid_ef=(
         "VERB: zfs receive"
@@ -1150,7 +1175,8 @@ EOF
 
     local e2e_log="$ITF_RUN_DIR/guest-payload-e2e.log"
     if itf_guest_exec "$guest_ip" \
-            "cd /root/ZFSutilities && python3 tests/integrated/e2e/payload-e2e-driver.py --scenarios offsite-onward-,restore-" \
+            "cd /root/ZFSutilities && python3 tests/integrated/e2e/payload-e2e-driver.py \
+--scenarios offsite-onward-,restore-" \
             > "$e2e_log" 2>&1; then
         if grep -qE 'payload e2e: [0-9]+ passed, 0 failed, [0-9]+ total' "$e2e_log" \
                 && grep -q 'offsite-onward-leg-manifest-travel' "$e2e_log" \

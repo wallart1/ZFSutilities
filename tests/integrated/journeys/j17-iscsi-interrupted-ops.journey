@@ -98,7 +98,8 @@ j17_lun_inventory() {
 j17_live_bs_count() {
     local s_ip="$1"
     itf_guest_exec "$s_ip" \
-        "targetcli /backstores/block ls 2>/dev/null | grep -oE 'vm-[0-9]+-disk-[0-9]+' | sort -u | wc -l" \
+        "targetcli /backstores/block ls 2>/dev/null | grep -oE \
+'vm-[0-9]+-disk-[0-9]+' | sort -u | wc -l" \
         2>/dev/null | tr -d '[:space:]'
 }
 
@@ -361,7 +362,8 @@ j17_iscsi_interrupted_ops_main() {
         " > "$log" 2>&1 && grep -q half-state-ok "$log"; then
         itf_step pass "half state: zvol without a completed flow [s13]" \
             "zvol exists; no manifest line, nothing saved — the flow died" \
-            "mid-storage-steps$(grep -q 'backstore existed' "$log" && echo ' (backstore half-created)')"
+            "mid-storage-steps$(grep -q 'backstore existed' "$log" \
+&& echo ' (backstore half-created)')"
     else
         itf_step fail "half state: zvol without LUN [s13]" "see s13-half-state.log"
         itf_artifact "s13-half-state" "$log"
@@ -1204,7 +1206,8 @@ reconcile-iscsi-state (pid"* ]] \
                 && echo check-rc: 0 || echo check-rc: nonzero
         " > "$log" 2>&1; then
         itf_step info "post-race tree state [s12]" \
-            "$(grep -oE 'saveconfig-parseable|live-backstores: [0-9]+|check-rc: [a-z0]+' "$log" | paste -sd' ' -)"
+            "$(grep -oE \
+'saveconfig-parseable|live-backstores: [0-9]+|check-rc: [a-z0]+' "$log" | paste -sd' ' -)"
     else
         itf_step info "post-race tree state [s12]" "see s12-aftermath.log"
     fi

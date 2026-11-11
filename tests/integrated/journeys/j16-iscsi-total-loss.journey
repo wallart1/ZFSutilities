@@ -955,7 +955,8 @@ j16_iscsi_total_loss_main() {
                 > /etc/rtslib-fb-target/saveconfig.json.corrupt
             cp /etc/rtslib-fb-target/saveconfig.json.corrupt \\
                 /etc/rtslib-fb-target/saveconfig.json
-            if python3 -c 'import json; json.load(open(\"/etc/rtslib-fb-target/saveconfig.json\"))' \\
+            if python3 -c 'import json; json.load(open(\"/etc/rtslib-fb-target/\
+saveconfig.json\"))' \\
                     >/dev/null 2>&1; then exit 1; fi
             md5sum /etc/rtslib-fb-target/saveconfig.json
         " > "$ITF_RUN_DIR/s8-corrupt.log" 2>&1 \

@@ -78,8 +78,12 @@ _j05_storage_lease_reacquire() {
             "storage re-leased to $new_ip but ssh never came back"
         return 1
     fi
+    # The ROLE record (guest-storage.txt) is the file every consumer
+    # reads — itf_journey_stage_from_template wrote it with --role
+    # storage; the gname record (guest-j05-storage.txt) exists nowhere
+    # else and would leave the collided address in place.
     echo "$base $vmid $new_ip $(itf_guest_qname "$gname")" \
-        > "$ITF_RUN_DIR/guest-${gname}.txt"
+        > "$ITF_RUN_DIR/guest-storage.txt"
     itf_step info "guest hostnames" \
         "storage re-leased to $new_ip — guest record rewritten"
     echo "$new_ip"

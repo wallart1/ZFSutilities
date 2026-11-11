@@ -566,7 +566,8 @@ j15_iscsi_boot_keys_main() {
             && grep -q "✓ Configuration saved" \
                 "$ITF_RUN_DIR/new-vm-disk-enc-202-1.log" \
             && itf_guest_exec "$s_ip" \
-                "grep -q '^${J15_LUN_POOL_B}:/dev/zvol/${J15_POOL_B}/proxmox/${J15_LUN_POOL_B}:${J15_POOL_B}\$' \
+                "grep -q '^${J15_LUN_POOL_B}:/dev/zvol/${J15_POOL_B}/\
+proxmox/${J15_LUN_POOL_B}:${J15_POOL_B}\$' \
                     /etc/zfsutilities/iscsi-encrypted-luns.conf"; then
         itf_step pass "pool-B encrypted LUN created [m4]" \
             "${J15_LUN_POOL_B} on ${J15_POOL_B} through the product"
@@ -697,7 +698,8 @@ j15_iscsi_boot_keys_main() {
     log="$ITF_RUN_DIR/m1-no-zvol.log"
     # shellcheck disable=SC2029  # expansions run on the storage guest
     if itf_guest_exec "$s_ip" \
-            "test \"\$(zfs list -H -t volume -o name | grep -c '^${J15_POOL_A}/proxmox/vm-301-disk-')\" -eq 0" \
+            "test \"\$(zfs list -H -t volume -o name | \
+grep -c '^${J15_POOL_A}/proxmox/vm-301-disk-')\" -eq 0" \
             > "$log" 2>&1; then
         itf_step pass "no zvol on bad input [m1]" \
             "none of the three attempts created vm-301-disk-*"
@@ -735,7 +737,8 @@ j15_iscsi_boot_keys_main() {
             && grep -q "✓ Configuration saved" \
                 "$ITF_RUN_DIR/new-vm-disk-enc-303-0.log" \
             && itf_guest_exec "$s_ip" \
-                "grep -q '^${J15_LUN_S5}:/dev/zvol/${J15_POOL_C}/proxmox/${J15_LUN_S5}:${J15_POOL_C}\$' \
+                "grep -q '^${J15_LUN_S5}:/dev/zvol/${J15_POOL_C}/\
+proxmox/${J15_LUN_S5}:${J15_POOL_C}\$' \
                     /etc/zfsutilities/iscsi-encrypted-luns.conf"; then
         itf_step pass "file:// encrypted LUN created [s5a]" \
             "${J15_LUN_S5} keyed at /root/keys — off the LUKS store entirely"

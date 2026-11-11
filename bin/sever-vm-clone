@@ -2743,6 +2743,9 @@ sever_storage_transfer_script() {
     cat << 'SSHEOF'
 mydir="$1"; shift
 results="$1"; shift
+# The results path arrives from the calling host (its run dir): make sure
+# the receiving side can create it before anything writes to it.
+mkdir -p "$(dirname "$results")"
 source "$mydir/bashinit"
 bashinit
 
@@ -2900,7 +2903,15 @@ sever_transfer() {
     done
 
     local results rc=0
-    results=$(mktemp /tmp/sever-vm-clone-results.XXXXXX)
+    # Scratch lives under the family run dir, not /tmp: root-owned,
+    # per-host private, and reboot-tmpfs, so a crash-leaked scratch file
+    # vanishes at boot instead of littering /tmp — and a host running
+    # concurrent sever invocations (parallel test gates) never counts a
+    # sibling's in-flight scratch as its own. mkdir -p: /run is tmpfs and
+    # the installer creates the dir only at install time, so a rebooted
+    # host has no dir until the first writer makes one.
+    mkdir -p "$ZFSUTILITIES_RUN_DIR"
+    results=$(mktemp "${ZFSUTILITIES_RUN_DIR}/sever-vm-clone-results.XXXXXX")
     # Scratch file only (the state file stays for --continue): remove it on
     # every exit path, including the crash window before the rc handler.
     append_exit_trap "rm -f '$results'"

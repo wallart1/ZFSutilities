@@ -894,18 +894,18 @@ EOF
     local act_since
     act_since="$(itf_guest_exec "$c_ip" 'date "+%F %T"' 2>/dev/null)" || act_since=""
 
-    # The commands the upgrade printed, run through a login shell: the
-    # product PATH is profile.d wiring, which a plain non-login ssh
-    # command never loads (j12's note).
+    # The commands the upgrade printed, run unmodified: the printed
+    # form is the absolute path, which needs no login-shell PATH
+    # wiring.
     local act_log="$ITF_RUN_DIR/guest-activate.log"
     # shellcheck disable=SC2029  # hostnames expand on the client side
     if itf_guest_exec "$s_ip" "
             set -e
-            bash -lc 'switch-version $target_version'
-            ssh root@$c_hostname \"bash -lc 'switch-version $target_version'\"
+            /usr/local/lib/zfsutilities/bin/switch-version $target_version
+            ssh root@$c_hostname /usr/local/lib/zfsutilities/bin/switch-version $target_version
         " > "$act_log" 2>&1; then
         itf_step pass "activation on both hosts" \
-            "the printed commands, run through a login shell (see guest-activate.log)"
+            "the printed commands, run unmodified (see guest-activate.log)"
         itf_artifact "activate-transcript" "$act_log"
     else
         itf_step fail "activation on both hosts" "see guest-activate.log"

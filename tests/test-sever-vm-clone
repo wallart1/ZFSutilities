@@ -1098,7 +1098,7 @@ SEVER_ENV_SEQ=0
 sever_env_new() {
     ((SEVER_ENV_SEQ++))
     local env="$_mock_zfs_state_dir/env$SEVER_ENV_SEQ"
-    mkdir -p "$env/state" "$env/lock" "$env/devtree" "$env/etcz"
+    mkdir -p "$env/state" "$env/lock" "$env/devtree" "$env/etcz" "$env/run"
     # State files embed the creating process's pid, and the recovery tests
     # take the exact state-file path from the product's own --continue
     # guidance (sever_state_path_from_output) instead of globbing /tmp, so
@@ -1307,6 +1307,12 @@ sever_run() {
     (
         export PATH="$SEVER_MOCKBIN:$PATH"
         export MOCK_ZFS_STATE_DIR="$env/state"
+        # Scratch (sever-vm-clone-results.*) is created under the family
+        # run dir; scoping it per-env keeps the leak assertions below
+        # immune to concurrent suites/gates on the same host (the
+        # 2026-11-10 one-off: a sibling gate's in-flight scratch landed
+        # in Test 16's global /tmp count).
+        export ZFSUTILITIES_RUN_DIR="$env/run"
         export SEVER_ZVOL_DEV_PREFIX="$env/devtree"
         export ZFSLOCK_DIR="$env/lock"
         export ZFSUTILITIES_LOCK_DIR="$env/lock"
@@ -1879,8 +1885,11 @@ test_transfer_failure_resume_guidance() {
     # under set -e), print the FATAL resume guidance, and remove its scratch
     # results file on the way out.
     printf 'full\n' > "$env/state/engine_fail"
-    before=$(find /tmp -maxdepth 1 -name 'sever-vm-clone-results.*' 2>/dev/null \
-        | wc -l | tr -d ' ')
+    # Scratch lives under this env's run dir (sever_run scopes
+    # ZFSUTILITIES_RUN_DIR), so the leak count sees only THIS run's file —
+    # a concurrent gate's in-flight scratch can never land in it.
+    before=$(find "$env/run" -maxdepth 1 -name 'sever-vm-clone-results.*' \
+        2>/dev/null | wc -l | tr -d ' ')
 
     SEVER_STDIN="y
 "
@@ -1899,8 +1908,8 @@ test_transfer_failure_resume_guidance() {
     assert_equals "0" "$(sever_op_count "$env" DESTROY)"
     assert_equals "0" "$(sever_op_count "$env" RENAME)"
     # ...and the failed run leaves no scratch results file behind.
-    after=$(find /tmp -maxdepth 1 -name 'sever-vm-clone-results.*' 2>/dev/null \
-        | wc -l | tr -d ' ')
+    after=$(find "$env/run" -maxdepth 1 -name 'sever-vm-clone-results.*' \
+        2>/dev/null | wc -l | tr -d ' ')
     assert_equals "$before" "$after"
     sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }

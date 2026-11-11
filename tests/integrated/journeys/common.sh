@@ -774,7 +774,16 @@ itf_journey_stage_download() {
 set -e
 cd /root
 echo "downloading: dev tarball from orchestrator"
-curl -fsSL "http://${dev_ip}:${ITF_HTTP_PORT}/zfsutilities-dev.tar.gz" -o dev.tar.gz
+# Bounded transient-listener retry (2026-11-09 one-off: the stage-B
+# server died silently between its readiness probe and this fetch — empty
+# log, no journal trace, unreproduced). Ten tries over ~30 s heal the
+# one-off death class; a real reachability problem still fails the stage
+# loudly after the full window.
+n=0
+until curl -fsSL "http://${dev_ip}:${ITF_HTTP_PORT}/zfsutilities-dev.tar.gz" -o dev.tar.gz; do
+    n=\$((n+1)); [ "\$n" -ge 10 ] && exit 1
+    sleep 3
+done
 mkdir -p /root/ZFSutilities
 tar -xzf dev.tar.gz -C /root/ZFSutilities
 rm -f dev.tar.gz
@@ -1932,7 +1941,8 @@ itf_keystore_provision() {
 
     local tool_log="$ITF_RUN_DIR/keystore-cryptsetup.log"
     if itf_guest_exec "$s_ip" \
-            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cryptsetup" \
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+cryptsetup" \
             > "$tool_log" 2>&1; then
         itf_step pass "cryptsetup installed" "storage guest (LUKS tooling)"
     else
@@ -1991,7 +2001,8 @@ itf_keystore_provision() {
             dd if=/dev/urandom of=${key_path} bs=32 count=1 status=none
             chmod 400 ${key_path}
             grep -q 'LABEL=ZFSkeys /mnt/ZFSkeys' /etc/fstab \\
-                || echo 'LABEL=ZFSkeys /mnt/ZFSkeys auto nosuid,nodev,nofail,x-gvfs-show,noauto 0 0' >> /etc/fstab
+                || echo 'LABEL=ZFSkeys /mnt/ZFSkeys auto nosuid,nodev,nofail,x-gvfs-show,\
+noauto 0 0' >> /etc/fstab
             test -s ${key_path}
         " > "$ITF_RUN_DIR/keystore-mkfs.log" 2>&1; then
         itf_step pass "ZFSkeys store provisioned" \
@@ -2427,7 +2438,8 @@ itf_storage_boot_state() {
     itf_artifact "boot-journal-$label" "$journal"
     # shellcheck disable=SC2016  # expansions run in the guest
     if ! itf_guest_exec "$s_ip" \
-            'journalctl -b --no-pager | grep -nE "zfs-import-cache\.service|zfs-import\.target|targetctl:" || true' \
+            'journalctl -b --no-pager | grep -nE "zfs-import-cache\.service|'\
+'zfs-import\.target|targetctl:" || true' \
             > "$order" 2>/dev/null; then
         itf_step fail "boot order snapshot [$label]" "journalctl grep failed"
         return 1
@@ -2570,7 +2582,8 @@ itf_vm_disk_links_present() {
                 missing=1
                 continue
             fi
-            for dev in $(awk "/^scsi[0-9]+: .dev.disk.by-path./ {print \$2}" "$conf" | cut -d, -f1); do
+            for dev in $(awk "/^scsi[0-9]+: .dev.disk.by-path./ {print \$2}" "$conf" '\
+'| cut -d, -f1); do
                 if [[ ! -e "$dev" ]]; then
                     echo "missing: $dev"
                     missing=1

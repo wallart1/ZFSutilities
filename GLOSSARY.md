@@ -406,6 +406,16 @@ its helper scripts under a `WARN` gate, so an archive run prints its own
 step-by-step narrative and the helpers speak only when something is
 wrong. Unset (the default), every message prints.
 
+## mock
+
+A stand-in that imitates a real dependency during tests, so suites can
+run without root, real pools, real iSCSI, or a display. The project's
+principal mocks: `mock_gtk` (fake GTK widgets), `MockSubprocess`
+(scripted `zfs`/`zpool`/`targetcli` responses), and the node-lib mocks in
+the bash suites. The standing rule is mock fidelity: a mock must model
+the real tool's actual behavior, because an unfaithful mock lets tests
+pass vacuously — green while proving nothing.
+
 ## mount namespace
 
 Each process on Linux sees mounts through a namespace: containers
@@ -416,16 +426,6 @@ and every "who has this file open" tool run from it (`fuser`, `lsof`)
 busy" refusal with an empty `lsof`: the busy-resolver's report names
 the holding pid and its mountpoint (found by scanning
 `/proc/*/mounts`), and never touches the container itself.
-
-## mock
-
-A stand-in that imitates a real dependency during tests, so suites can
-run without root, real pools, real iSCSI, or a display. The project's
-principal mocks: `mock_gtk` (fake GTK widgets), `MockSubprocess`
-(scripted `zfs`/`zpool`/`targetcli` responses), and the node-lib mocks in
-the bash suites. The standing rule is mock fidelity: a mock must model
-the real tool's actual behavior, because an unfaithful mock lets tests
-pass vacuously — green while proving nothing.
 
 ## oracle
 
@@ -574,6 +574,16 @@ instead of restarting from scratch. While one is outstanding the
 dataset cannot be destroyed ("dataset is busy"); `zfs receive -A`
 discards the token together with the partial data. The busy resolver
 offers exactly that, as a destructive choice with a safe default.
+
+## run dir
+
+The product's runtime-state directory, `/run/zfsutilities` by default
+(override with `ZFSUTILITIES_RUN_DIR`). It lives on tmpfs, so its
+contents vanish at reboot: snapshot-name markers, the scrub state
+file, the GUI's pid file, and sever-vm-clone's transfer scratch all
+belong there precisely because a crash-leaked leftover disappears at
+the next boot instead of littering disk. Tools re-create the directory
+on demand; it is not configuration and never survives a reboot.
 
 ## salvage
 

@@ -2142,11 +2142,13 @@ n"
     # The engine's match line is gated off the terminal (WARN gate); the
     # paced read-back names the destination, and Step 3 reports the
     # verified disk with its method.
-    if [[ "$out" != *"PACE:100M -- /dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+    if [[ "$out" != *"PACE:100M -- \
+/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
         test_fail "Paced verify read-back missing; output:\n$out"
         return
     fi
-    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 (10G, device copy, volblocksize 1M)"* ]]; then
+    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 \
+(10G, device copy, volblocksize 1M)"* ]]; then
         test_fail "Copy verification missing; output:\n$out"
         return
     fi
@@ -2199,7 +2201,8 @@ n"
     fi
     # The engine's match line is gated off the terminal (WARN gate);
     # Step 3 reports the verified disk with its method.
-    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 (10G, device copy, volblocksize 1M)"* ]]; then
+    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 \
+(10G, device copy, volblocksize 1M)"* ]]; then
         test_fail "Copy verification missing; output:\n$out"
         return
     fi
@@ -2236,7 +2239,8 @@ n"
     fi
     # The engine's method line is gated off the terminal (WARN gate);
     # Step 3 names the method on the verification line.
-    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 (-, raw send/receive, volblocksize 8K)"* ]]; then
+    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 \
+(-, raw send/receive, volblocksize 8K)"* ]]; then
         test_fail "Raw method not reported; output:\n$out"
         return
     fi
@@ -2277,7 +2281,8 @@ n"
     fi
     # The engine's method line is gated off the terminal (WARN gate);
     # Step 3 names the method on the verification line.
-    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 (-, raw send/receive, volblocksize 8K)"* ]]; then
+    if [[ "$out" != *"✓ ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0 \
+(-, raw send/receive, volblocksize 8K)"* ]]; then
         test_fail "Raw method not reported; output:\n$out"
         return
     fi

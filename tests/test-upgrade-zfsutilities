@@ -570,7 +570,7 @@ test_happy_path_clean_tree() {
         || { failed=1; echo "    missing completion report"; }
     [[ "$output" == *"NOT activated"* ]] \
         || { failed=1; echo "    missing not-activated statement"; }
-    [[ "$output" == *"sudo switch-version 0.2.0"* ]] \
+    [[ "$output" == *"$ZFSUTILITIES_VERSION_BASE/bin/switch-version 0.2.0"* ]] \
         || { failed=1; echo "    missing local activation hint"; }
     _teardown_upgrade_env "$tmpdir"
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "clean-tree happy path failed"; fi
@@ -739,6 +739,40 @@ test_no_baseline_captures_manifest() {
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "baseline-capture flow failed"; fi
 }
 
+test_failed_baseline_capture_degrades_to_warning() {
+    test_start "a failed baseline capture degrades to the cannot-verify warning, not an abort"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir" 0
+    rm -f "$tmpdir/gh/tag-v0.1.0.tar.gz"
+    # A read-only active version dir: the tree still hashes (reads need
+    # no write bit), but MANIFEST.sha256.tmp cannot be created, so the
+    # trust-on-first-upgrade capture fails. The flow must degrade to the
+    # no-baseline warning and proceed — before the 2026-11-10 fix,
+    # host_verifiable stayed unset and the set -u read aborted the script
+    # instead of printing the warning.
+    chmod 500 "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0"
+
+    output=$(printf 'y\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    chmod 700 "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0"
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc (degradation must not abort)"; }
+    [[ "$output" == *"CANNOT be detected"* ]] \
+        || { failed=1; echo "    missing cannot-verify warning"; }
+    [[ "$output" != *"A baseline manifest was captured"* ]] \
+        || { failed=1; echo "    capture must not be claimed on failure"; }
+    [[ ! -e "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/MANIFEST.sha256" ]] \
+        || { failed=1; echo "    no manifest may exist"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "failed-capture degradation failed"; fi
+}
+
 test_no_baseline_remote_target_captures_manifest() {
     test_start "remote target without baseline gets its manifest captured on-host"
     local tmpdir output rc
@@ -839,9 +873,11 @@ test_multi_host_scan_salvage_and_hints() {
     [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
         || { failed=1; echo "    deploy-version not called"; }
     [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    nothing may be activated"; }
-    [[ "$output" == *"ssh root@fakehost1 switch-version 0.2.0"* ]] \
+    [[ "$output" == *"ssh root@fakehost1 \
+$ZFSUTILITIES_REMOTE_VERSION_BASE/bin/switch-version 0.2.0"* ]] \
         || { failed=1; echo "    activation hint for fakehost1 missing"; }
-    [[ "$output" == *"ssh root@fakehost2 switch-version 0.2.0"* ]] \
+    [[ "$output" == *"ssh root@fakehost2 \
+$ZFSUTILITIES_REMOTE_VERSION_BASE/bin/switch-version 0.2.0"* ]] \
         || { failed=1; echo "    activation hint for fakehost2 missing"; }
     _teardown_upgrade_env "$tmpdir"
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "multi-host flow failed"; fi
@@ -861,6 +897,7 @@ test_decline_at_salvage_prompt
 test_manifestless_tree_falls_back_to_tarball
 test_untagged_version_detects_without_diff
 test_no_baseline_captures_manifest
+test_failed_baseline_capture_degrades_to_warning
 test_no_baseline_remote_target_captures_manifest
 test_ssh_failure_aborts_before_changes
 test_two_node_node_conf_enumeration() {
@@ -895,9 +932,11 @@ test_two_node_node_conf_enumeration() {
         || { failed=1; echo "    fakehost2 (compute) never scanned"; }
     [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
         || { failed=1; echo "    deploy-version not called"; }
-    [[ "$output" == *"ssh root@fakehost1 switch-version 0.2.0"* ]] \
+    [[ "$output" == *"ssh root@fakehost1 \
+$ZFSUTILITIES_REMOTE_VERSION_BASE/bin/switch-version 0.2.0"* ]] \
         || { failed=1; echo "    storage-host activation hint missing"; }
-    [[ "$output" == *"ssh root@fakehost2 switch-version 0.2.0"* ]] \
+    [[ "$output" == *"ssh root@fakehost2 \
+$ZFSUTILITIES_REMOTE_VERSION_BASE/bin/switch-version 0.2.0"* ]] \
         || { failed=1; echo "    compute-host activation hint missing"; }
     _teardown_upgrade_env "$tmpdir"
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "node.conf enumeration failed"; fi

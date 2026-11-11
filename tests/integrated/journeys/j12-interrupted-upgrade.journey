@@ -355,7 +355,8 @@ EOF
     # ------------------------------------------------------------------
 
     local sw_log="$ITF_RUN_DIR/guest-switch.log"
-    itf_guest_exec "$guest_ip" "bash -lc 'switch-version $target_version'" \
+    itf_guest_exec "$guest_ip" \
+        "/usr/local/lib/zfsutilities/bin/switch-version $target_version" \
         > "$sw_log" 2>&1
     local sw_rc=$?
     itf_artifact "switch-transcript" "$sw_log"

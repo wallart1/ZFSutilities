@@ -1097,8 +1097,12 @@ test_j05_same_ip_collision_convergence() {
     # The bounce is the ifupdown lease cycle (dhcpcd underneath).
     assert_contains "$(cat "$work/calls")" "ifdown"
     assert_contains "$(cat "$work/calls")" "ifup"
-    assert_contains "$(cat "$work/run/guest-j05-storage.txt")" \
+    # The ROLE record (guest-storage.txt) is rewritten — the file every
+    # consumer reads; the gname-named guest-j05-storage.txt is never
+    # written (the 2026-11-10 wrong-record fix).
+    assert_contains "$(cat "$work/run/guest-storage.txt")" \
         "testbase 8005 10.0.0.77 j05-storage-20260101-010101"
+    [[ ! -e "$work/run/guest-j05-storage.txt" ]]
     # Bounded: the same address coming back is a refusal, not a retry.
     (
         # shellcheck disable=SC1090
@@ -1132,19 +1136,31 @@ test_j05_same_ip_collision_convergence() {
 }
 
 test_two_node_journeys_read_four_field_records() {
-    test_start "j06/j07/j14 consume the 4-field guest records"
+    test_start "every two-node journey consumes the 4-field guest records"
     # Guest records have carried a 4th field (the live qm name) since
     # the name-based fence; a 3-variable read bleeds the name into the
-    # IP and kills the first ssh (the j15 failure class).
+    # IP and kills the first ssh (the j15 failure class — and j13's own
+    # 3-field read, found 2026-11-10). The first slot is the base or a
+    # discard; the fourth slot is the name, named when used,
+    # underscore-prefixed when discarded.
+    # Regex: 'read -r ([_a-zA-Z]+ )?s_vmid s_ip _?s_name'
+    # Purpose: match the record read whatever the caller does with the
+    #          base and name slots, while still requiring all four
+    #          slots — a 3-field read (no fourth slot) must not match.
+    # Example: "read -r s_base s_vmid s_ip _s_name" matches;
+    #          "read -r _ s_vmid s_ip" does not.
     local j f
     for j in j06-guest-probe-validator j07-unarchive-iscsi-rebuild \
-            j14-iscsi-fence-recover; do
+            j13-iscsi-storage-restore j14-iscsi-fence-recover \
+            j15-iscsi-boot-keys j23-two-node-release-upgrade \
+            j24-two-node-uninstall-reinstall \
+            j25-two-node-interrupted-upgrade-keys; do
         f="$mydir/tests/integrated/journeys/$j.journey"
-        grep -q 'read -r _ s_vmid s_ip s_name' "$f" || {
+        grep -Eq 'read -r ([_a-zA-Z]+ )?s_vmid s_ip _?s_name' "$f" || {
             test_fail "$j lost the 4-field storage record read"
             return
         }
-        grep -q 'read -r _ c_vmid c_ip c_name' "$f" || {
+        grep -Eq 'read -r ([_a-zA-Z]+ )?c_vmid c_ip _?c_name' "$f" || {
             test_fail "$j lost the 4-field compute record read"
             return
         }
