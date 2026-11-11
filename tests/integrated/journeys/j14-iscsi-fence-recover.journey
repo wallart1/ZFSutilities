@@ -114,6 +114,7 @@ journey_main() {
     # ------------------------------------------------------------------
 
     local svc_log="$ITF_RUN_DIR/fence-service-start.log"
+    itf_step_start "fence service run" "check-vm-disk-paths --recover + ssh reconcile"
     if itf_guest_exec "$c_ip" "bash -lc 'systemctl start \
             zfsutilities-iscsi-fence.service'" > "$svc_log" 2>&1 \
         && itf_guest_exec "$c_ip" '

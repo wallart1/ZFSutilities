@@ -959,6 +959,7 @@ test_stage_from_template_rerun_rolls_back_not_clones() {
         itf_guest_clone() { _cloned=1; echo 8001; }
         itf_template_vmid() { _calls+="TEMPLATE_VMID "; echo 8000; }
         itf_step() { _calls+="step:$1 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_from_template j04
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -994,6 +995,7 @@ test_stage_from_template_fresh_run_still_clones() {
         itf_guest_snapshot() { return 0; }
         itf_guest_rollback() { _rolled=1; return 0; }
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_from_template j04
         echo "$?" > "$work/rc"
         printf '%s' "${_rolled:-0}" > "$work/rolled"
@@ -1040,6 +1042,7 @@ test_stage_os_rerun_rolls_back_not_installs() {
         itf_guest_create() { _installed=1; echo 8001; }
         itf_preseed_render() { _installed=1; return 0; }
         itf_step() { _calls+="step:$1 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_os j08 itfj08
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -1080,6 +1083,7 @@ test_stage_os_fresh_run_still_installs() {
         # stubs for curl, the serial driver, or sleeps.
         itf_preseed_render() { return 1; }
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_os j08 itfj08
         echo "$?" > "$work/rc"
         printf '%s' "${_rolled:-0}" > "$work/rolled"
@@ -1108,6 +1112,7 @@ test_run_installer_expected_rc_contract() {
             itf_artifact() { return 0; }
             _steps=""
             itf_step() { _steps+="$1:$3 "; return 0; }
+            itf_step_start() { :; }
             local -a args=(10.9.9.9 'y\n' "installer case $idx")
             if [[ "$exp_arg" != "-" ]]; then args+=("$exp_arg"); fi
             itf_journey_run_installer "${args[@]}"
@@ -1151,6 +1156,7 @@ test_prepare_install_tolerates_expected_prereq_failure() {
                 return "$download_rc"
             }
             itf_step() { return 0; }
+            itf_step_start() { :; }
             itf_artifact() { return 0; }
             itf_journey_stage_prepare_install 10.9.9.9
             echo "$?" > "$ITF_RUN_DIR/rc"

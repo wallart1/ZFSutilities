@@ -196,6 +196,56 @@ test_run_state_unknown_without_meta() {
     assert_equals "unknown" "$(itf_run_state "$ITF_RUNS_DIR/run-19990101-000000-bare")"
 }
 
+# ------------------------------------------------------------------------------
+# Timestamps and START entries
+# ------------------------------------------------------------------------------
+
+test_step_lines_carry_utc_timestamp() {
+    test_start "every report.md step line starts with a UTC timestamp"
+    itf_report_init stamps > /dev/null 2>&1
+    itf_step pass "stamped step" "with detail" > /dev/null 2>&1
+    local line
+    line="$(grep -F '**PASS** stamped step' "$ITF_RUN_DIR/report.md" | tail -1)"
+    [[ "$line" =~ ^-\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\ \*\*PASS\*\* ]]
+    assert_rc 0 $?
+}
+
+test_artifact_line_carries_utc_timestamp() {
+    test_start "report.md ARTIFACT lines start with a UTC timestamp"
+    echo "evidence" > "$tmp_dir/stamp-artifact.log"
+    itf_artifact "label" "$tmp_dir/stamp-artifact.log" > /dev/null 2>&1
+    local line
+    line="$(grep -F 'ARTIFACT [label] stamp-artifact.log' "$ITF_RUN_DIR/report.md" | tail -1)"
+    [[ "$line" =~ ^-\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\ ARTIFACT ]]
+    assert_rc 0 $?
+}
+
+test_step_start_writes_start_line() {
+    test_start "itf_step_start announces the activity in report.md only"
+    local tsv_rows_before total_before
+    tsv_rows_before="$(wc -l < "$ITF_RUN_DIR/steps.tsv")"
+    total_before="$ITF_STEPS_TOTAL"
+    # Redirect (not command substitution) so the counter assertion below sees
+    # increments from THIS shell, not a subshell copy.
+    itf_step_start "guest install watch" "serial console" > "$tmp_dir/start.out" 2>&1
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "**START** guest install watch — serial console"
+    assert_contains "$(cat "$tmp_dir/start.out")" "[start] guest install watch"
+    # A START is not a step: no steps.tsv row, no counter movement.
+    assert_equals "$tsv_rows_before" "$(wc -l < "$ITF_RUN_DIR/steps.tsv")"
+    assert_equals "$total_before" "$ITF_STEPS_TOTAL"
+}
+
+test_step_start_before_init_refused() {
+    test_start "itf_step_start before itf_report_init is refused"
+    local saved_run_dir="${ITF_RUN_DIR:-}" out rc
+    ITF_RUN_DIR=""
+    out="$(itf_step_start early-start 2>&1)"
+    rc=$?
+    ITF_RUN_DIR="$saved_run_dir"
+    assert_rc 1 "$rc"
+    assert_contains "$out" "before itf_report_init"
+}
+
 test_step_before_init_refused
 test_artifact_before_init_refused
 
@@ -205,7 +255,12 @@ test_step_writes_tsv_and_markdown
 test_step_invalid_status_coerced_to_info
 test_step_skip_and_info_recorded
 
+test_step_lines_carry_utc_timestamp
+test_step_start_writes_start_line
+test_step_start_before_init_refused
+
 test_artifact_copied_and_recorded
+test_artifact_line_carries_utc_timestamp
 test_artifact_missing_source_refused
 test_finish_fails_run_when_any_step_failed
 test_finish_passes_clean_run

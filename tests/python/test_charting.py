@@ -489,6 +489,33 @@ class TestMatplotlibRollingChart(unittest.TestCase):
         chart.append(115.0, [4, 4])
         self.assertEqual(fig.tight_layout.call_count, 1)
 
+    def test_resize_relayouts_at_the_allocated_size(self):
+        """The build-time layout re-solves when the canvas allocation size
+        changes — margins are figure fractions, so the build pass (solved
+        at the default figure size) would drift proportionally at the
+        page width. Deduped, so steady-state appends stay free."""
+        charting = _charting()
+        chart, _ax, canvas, _lines, _fills, _formatters, fig = self._built()
+        canvas.connect.assert_any_call("size-allocate", chart._on_size_allocate)
+        fig.tight_layout.reset_mock()
+        canvas.draw_idle.reset_mock()
+        widget = SimpleNamespace(draw_idle=canvas.draw_idle)
+
+        chart._on_size_allocate(
+            widget, SimpleNamespace(width=848, height=charting.ROLLING_CHART_HEIGHT)
+        )
+        fig.tight_layout.assert_called_once_with(pad=0.4)
+        canvas.draw_idle.assert_called_once()
+
+        # Same size again: no re-solve, no redraw churn.
+        fig.tight_layout.reset_mock()
+        canvas.draw_idle.reset_mock()
+        chart._on_size_allocate(
+            widget, SimpleNamespace(width=848, height=charting.ROLLING_CHART_HEIGHT)
+        )
+        fig.tight_layout.assert_not_called()
+        canvas.draw_idle.assert_not_called()
+
 
 def _rung(layer, label, size, state="OK"):
     return SimpleNamespace(layer=layer, label=label, size=size, state=state)
@@ -812,6 +839,52 @@ class TestMatplotlibBlocksizeLadder(unittest.TestCase):
         ladder.update([], unavailable=True)
         texts = [call.args[2] for call in ax.text.call_args_list]
         self.assertTrue(any("unavailable" in text for text in texts))
+
+    def test_resize_relayouts_at_the_allocated_size(self):
+        """The axes layout re-solves when the canvas allocation size
+        changes. tight_layout margins are figure-fraction coordinates, so
+        the one-shot row-set layout (solved at whatever stale pre-map size
+        the figure carried) scales into dead bands at the real page size —
+        the squeezed-ladder defect this handler exists to prevent."""
+        ladder, _ax, canvas, fig, _backend = self._built()
+        canvas.connect.assert_any_call("size-allocate", ladder._on_size_allocate)
+        ladder.update(_two_pool_ladder())
+        fig.tight_layout.reset_mock()
+        canvas.draw_idle.reset_mock()
+        widget = SimpleNamespace(draw_idle=canvas.draw_idle)
+
+        ladder._on_size_allocate(widget, SimpleNamespace(width=848, height=946))
+        fig.tight_layout.assert_called_once_with(pad=0.4)
+        canvas.draw_idle.assert_called_once()
+
+        # Same allocation again: deduped, no re-solve, no redraw churn.
+        fig.tight_layout.reset_mock()
+        canvas.draw_idle.reset_mock()
+        ladder._on_size_allocate(widget, SimpleNamespace(width=848, height=946))
+        fig.tight_layout.assert_not_called()
+        canvas.draw_idle.assert_not_called()
+
+        # Pre-map noise (a 1x1 allocation) is ignored, not recorded.
+        ladder._on_size_allocate(widget, SimpleNamespace(width=1, height=1))
+        fig.tight_layout.assert_not_called()
+
+        # A different size re-solves again.
+        ladder._on_size_allocate(widget, SimpleNamespace(width=1024, height=946))
+        fig.tight_layout.assert_called_once()
+
+    def test_resize_relayouts_the_empty_placeholder_too(self):
+        """The empty ladder re-solves on resize as well, so the waiting
+        placeholder stays centred when the canvas stretches to the page
+        width instead of riding stale build-time margins."""
+        ladder, _ax, canvas, fig, _backend = self._built()
+        fig.tight_layout.reset_mock()
+        canvas.draw_idle.reset_mock()
+        ladder._on_size_allocate(
+            SimpleNamespace(draw_idle=canvas.draw_idle),
+            SimpleNamespace(width=848, height=70),
+        )
+        fig.tight_layout.assert_called_once_with(pad=0.4)
+        canvas.draw_idle.assert_called_once()
 
 
 def _built_state_color(state):

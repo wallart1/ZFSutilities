@@ -52,6 +52,7 @@ _source_survey() {
             _steps+="$1:$2:$3;"
             return 0
         }
+        itf_step_start() { :; }
         itf_artifact() {
             _steps+="artifact:$2;"
             return 0

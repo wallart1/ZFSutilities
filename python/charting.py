@@ -501,9 +501,13 @@ class MatplotlibRollingChart:
         self._legend_labels = list(self.series_names)
         # One static layout at build time — never constrained_layout, which
         # re-solves on every draw and tripled the redraw cost in the spike.
+        # Canvas-size changes re-solve in _on_size_allocate (build-time
+        # margins are figure fractions; they would drift at other sizes).
         fig.tight_layout(pad=0.4)
+        self._laid_out_size = None
 
         self.widget.set_size_request(-1, height)
+        self.widget.connect("size-allocate", self._on_size_allocate)
         self.widget.connect("style-updated", self._on_style_updated)
 
     # -- theming -------------------------------------------------------------
@@ -545,6 +549,22 @@ class MatplotlibRollingChart:
         ax.tick_params(labelsize=7.5 * self._font_scale, colors=palette.foreground, length=3)
         ax.set_xticks([])
         ax.set_yticks([])
+
+    def _on_size_allocate(self, widget, allocation):
+        """Re-solve the axes layout when the canvas allocation size changes.
+
+        Same rule as the ladder: the GTK3 canvas resizes its figure on
+        every ``size-allocate``, while ``tight_layout`` margins are
+        figure-fraction coordinates solved at one size — re-solved here
+        (deduped, never per draw) so the tick-label margins stay sized to
+        the labels instead of scaling with the canvas.
+        """
+        width, height = allocation.width, allocation.height
+        if width <= 1 or height <= 1 or (width, height) == self._laid_out_size:
+            return
+        self._laid_out_size = (width, height)
+        self._fig.tight_layout(pad=0.4)
+        widget.draw_idle()
 
     def _on_style_updated(self, *_args):
         """Theme change: re-resolve the palette and schedule a repaint."""
@@ -718,7 +738,11 @@ class MatplotlibBlocksizeLadder:
     Alignment view refreshes at the page's 1-300 s cadence, where a warm
     full redraw is well within the budget measured in the charting spike
     — and re-requests the widget height from the shared row geometry, so
-    the ladder grows and shrinks with its row set only.
+    the ladder grows and shrinks with its row set only. The axes layout
+    is re-solved whenever the canvas allocation size changes (see
+    ``_on_size_allocate``): ``tight_layout`` margins are figure-fraction
+    coordinates, so a layout solved at one canvas size scales into large
+    dead bands at another.
     """
 
     def __init__(self, title="Blocksize ladder"):
@@ -751,8 +775,10 @@ class MatplotlibBlocksizeLadder:
             color=self._palette.muted,
         )
         fig.tight_layout(pad=0.4)
+        self._laid_out_size = None
 
         self._request_size()
+        self.widget.connect("size-allocate", self._on_size_allocate)
         self.widget.connect("style-updated", self._on_style_updated)
 
     # -- data management -----------------------------------------------------
@@ -784,6 +810,24 @@ class MatplotlibBlocksizeLadder:
             self.widget.set_size_request(width, self._height)
 
     # -- rendering -----------------------------------------------------------
+
+    def _on_size_allocate(self, widget, allocation):
+        """Re-solve the axes layout when the canvas allocation size changes.
+
+        The GTK3 canvas resizes its figure on every ``size-allocate``, but
+        ``tight_layout`` margins are figure-fraction coordinates solved at
+        one canvas size — left as one-shot they scale into large dead
+        bands at any other size (the plot squeezed into a corner of the
+        section). Re-solving here keeps the margins sized to the labels
+        at the allocated size; the dedupe keeps steady-state refreshes at
+        zero extra cost, unlike the banned per-draw ``constrained_layout``.
+        """
+        width, height = allocation.width, allocation.height
+        if width <= 1 or height <= 1 or (width, height) == self._laid_out_size:
+            return
+        self._laid_out_size = (width, height)
+        self._fig.tight_layout(pad=0.4)
+        widget.draw_idle()
 
     def _on_style_updated(self, *_args):
         """Theme change: re-resolve the palette and redraw the ladder."""
@@ -914,8 +958,9 @@ class MatplotlibBlocksizeLadder:
         rows = len(labels)
         if rows != self._rows_rendered:
             # Labels enter and leave with rows, so the left margin needs a
-            # fresh layout exactly when the row set changes — never per
-            # refresh (constrained_layout stays banned; see the spike).
+            # fresh layout when the row set changes — never per refresh
+            # (constrained_layout stays banned; see the spike). Canvas-size
+            # changes get their own re-solve in _on_size_allocate.
             self._fig.tight_layout(pad=0.4)
             self._rows_rendered = rows
             self._height = ladder_pixel_height(self._pools)

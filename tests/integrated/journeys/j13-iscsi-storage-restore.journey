@@ -242,6 +242,7 @@ journey_main() {
     local rfeed="$ITF_RUN_DIR/reconcile-answers.txt"
     printf 'y\n' > "$rfeed"
     local rec_log="$ITF_RUN_DIR/reconcile.log"
+    itf_step_start "reconcile-iscsi-state run" "LUN rebuild on the storage guest"
     itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
         > "$rec_log" 2>&1
     local rec_rc=$?
@@ -299,6 +300,7 @@ journey_main() {
     local boot_log="$ITF_RUN_DIR/boot-proof.log"
     # The lab's nested PVE guest has no /dev/kvm passthrough, so the VM
     # boots under TCG (kvm=0); the proof is disk attachability, not speed.
+    itf_step_start "VM boot proof" "qm start 101 under TCG against the rebuilt exports"
     # shellcheck disable=SC2029  # expansions run on the compute guest
     if itf_guest_exec "$c_ip" "
             bash -lc 'qm set 101 --kvm 0' || exit 1

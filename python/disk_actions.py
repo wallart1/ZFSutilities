@@ -5,6 +5,7 @@ import os
 import node_config
 import zfs_lock_manager as zlm
 from command_builders import BashStep
+from disk_repository import smartctl_rc_reasons
 from disk_wipe import build_wipe_command, show_wipe_dialog, wipe_block_reason, wipe_warnings
 from disks_page import COL_D_BYID, COL_D_NAME, refresh_disks_page, update_disks_button_sensitivity
 from logging_config import log_msg
@@ -32,11 +33,19 @@ def on_disks_smart_details(app):
         log_msg("WARN: Select a disk to view SMART details")
         return
 
-    details = app.ctx.disk_repository.smart_details(path)
+    details, rc = app.ctx.disk_repository.smart_details(path)
     if not details or details == "n/a":
-        log_msg(f"WARN: SMART details unavailable for {path}")
+        if rc is None:
+            why = "smartctl did not run"
+        elif rc == 0:
+            why = "smartctl printed no report"
+        else:
+            why = f"smartctl rc={rc}: {smartctl_rc_reasons(rc)}"
+        log_msg(f"WARN: SMART details unavailable for {path} ({why})")
         return
 
+    if rc:
+        log_msg(f"WARN: smartctl flags {path}: {smartctl_rc_reasons(rc) or 'problems'} (rc={rc})")
     log_msg(f"INFO: SMART details for {path}:")
     for line in details.splitlines():
         if line.strip():

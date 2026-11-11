@@ -153,6 +153,7 @@ EOF
     # ------------------------------------------------------------------
 
     local b1_log="$ITF_RUN_DIR/guest-backup1.log"
+    itf_step_start "j20 zfssend run" "property-manifest phase"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
         "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;\
 destfs=zfstest2;nextsnap=$g1snap;autoproceed=Y'" \
@@ -261,6 +262,7 @@ EOF
         itf_step fail "originals renamed away" "see guest-rename.log"
         return 1
     fi
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
 sourcefsremovequalifiers=2;destfs=zfstest1;autoproceed=Y'" \
@@ -362,6 +364,7 @@ EOF
     local b2_log="$ITF_RUN_DIR/guest-backup2.log"
     itf_guest_exec "$guest_ip" \
         "echo g2-data > /zfstest1/j20src/file-b.txt" > /dev/null 2>&1
+    itf_step_start "j20 zfssend run" "property-manifest phase"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
         "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;\
 destfs=zfstest2;nextsnap=$g2snap;property_manifest=N;autoproceed=Y'" \
@@ -405,6 +408,7 @@ EOF
     # ------------------------------------------------------------------
 
     local r2_log="$ITF_RUN_DIR/guest-restore2.log"
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
 sourcefsremovequalifiers=2;destfs=zfstest1/j20fb;autoproceed=Y'" \
@@ -471,11 +475,13 @@ EOF
     # ------------------------------------------------------------------
 
     local pf_log="$ITF_RUN_DIR/guest-prefeature.log"
+    itf_step_start "j20 zfssend run" "property-manifest phase"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
         "$tree/bin/zfssend 'sourcefs=zfstest1/j20old;sourcefsremovequalifiers=0;\
 destfs=zfstest3;nextsnap=$oldsnap;property_manifest=N;autoproceed=Y'" \
         > "$ITF_RUN_DIR/guest-pf-backup.log" 2>&1
     local pfb_rc=$?
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/zfstest1/j20old;\
 sourcefsremovequalifiers=2;destfs=zfstest1/j20pre;autoproceed=Y'" \
@@ -541,12 +547,14 @@ EOF
     hop_cmd+=";includes=(zfstest1/j20src zfstest1/zfsutilities-manifests)"
     hop_cmd+=";property_manifest=N;autoproceed=Y"
     local o1_log="$ITF_RUN_DIR/guest-onward1.log"
+    itf_step_start "j20 zfssend run" "property-manifest phase"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
         "$tree/bin/zfssend '$hop_cmd;nextsnap=$o1snap'" \
         > "$o1_log" 2>&1
     local o1_rc=$?
     itf_artifact "onward1-transcript" "$o1_log"
     local o2_log="$ITF_RUN_DIR/guest-onward2.log"
+    itf_step_start "j20 zfssend run" "property-manifest phase"
     itf_guest_exec_feed "$guest_ip" "$enter_feed" \
         "$tree/bin/zfssend '$hop_cmd;nextsnap=$o2snap'" \
         > "$o2_log" 2>&1
@@ -600,6 +608,7 @@ EOF
     # ------------------------------------------------------------------
 
     local r3_log="$ITF_RUN_DIR/guest-restore3.log"
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src;\
 sourcefsremovequalifiers=3;destfs=zfstest1/j20offsite;autoproceed=Y'" \
@@ -667,6 +676,7 @@ EOF
     local kl_log="$ITF_RUN_DIR/guest-keylost.log"
     itf_guest_exec "$guest_ip" "mv /root/j20.key /root/j20.key.hidden" \
         > /dev/null 2>&1
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src/enc;\
 sourcefsremovequalifiers=4;destfs=zfstest1/j20kl;autoproceed=Y'" \
@@ -757,6 +767,7 @@ test -s /root/j20-export/j20src-disk-0.props
 echo ss-prep-ok
 EOF
     itf_guest_put "$guest_ip" "$ssp_script" /root/itf-j20-ssprep.sh > /dev/null 2>&1
+    itf_step_start "j20 ssprep run" "two zfs sends to sibling files"
     if itf_guest_exec "$guest_ip" "bash /root/itf-j20-ssprep.sh" \
             > "$ITF_RUN_DIR/guest-ss-prep.log" 2>&1 \
             && grep -q ss-prep-ok "$ITF_RUN_DIR/guest-ss-prep.log"; then
@@ -770,6 +781,7 @@ EOF
     fi
 
     local ss_log="$ITF_RUN_DIR/guest-sendstream.log"
+    itf_step_start "j20 zfsrestoresendstream run" "property-manifest phase"
     itf_guest_exec "$guest_ip" "$tree/bin/zfsrestoresendstream" \
         > "$ss_log" 2>&1
     local ss_rc=$?
@@ -838,6 +850,7 @@ EOF
     # ------------------------------------------------------------------
 
     local rp1_log="$ITF_RUN_DIR/guest-rp-restore.log"
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
 sourcefsremovequalifiers=2;destfs=zfstest1/j20rp;replay_properties=N;autoproceed=Y'" \
@@ -870,6 +883,7 @@ EOF
     fi
 
     local rp2_log="$ITF_RUN_DIR/guest-rp-replay.log"
+    itf_step_start "j20 zfsreplayprops run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsreplayprops 'restoresourcefs=zfstest2/zfstest1/j20src;\
 sourcefsremovequalifiers=2;destfs=zfstest1/j20rp'" \
@@ -935,6 +949,7 @@ EOF
     itf_guest_exec "$guest_ip" "head -c 32 /dev/urandom > /root/j20enc.key" \
         > /dev/null 2>&1
     local ee_log="$ITF_RUN_DIR/guest-encrecv.log"
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;\
 destfs=zfstest1/j20enc;receive_encryption=Y;receive_keylocation=file:///root/j20enc.key;\
@@ -1053,6 +1068,7 @@ EOF
     # ------------------------------------------------------------------
 
     local ef_log="$ITF_RUN_DIR/guest-encfatal.log"
+    itf_step_start "j20 zfsrestore run" "property-manifest phase"
     itf_guest_exec "$guest_ip" \
         "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;\
 sourcefsremovequalifiers=2;destfs=zfstest1/j20enc2;receive_encryption=Y;\
@@ -1117,6 +1133,7 @@ EOF
     # defaults to N by design, the conservative cron default).
     local y_feed="$ITF_RUN_DIR/j20-prune-feed.txt"
     printf 'y\n%.0s' {1..40} > "$y_feed"
+    itf_step_start "j20 zfsoffsiteretain run" "property-manifest phase"
     itf_guest_exec_feed "$guest_ip" "$y_feed" "$tree/bin/zfsoffsiteretain" \
         > "$p_log" 2>&1
     local p_rc=$?

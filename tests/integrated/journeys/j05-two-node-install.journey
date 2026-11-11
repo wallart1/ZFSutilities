@@ -355,6 +355,7 @@ j05_two_node_lab_main() {
     feed+="y\ny\n"
     printf '%b' "$feed" > "$answers"
     local inst_log="$ITF_RUN_DIR/guest-install.log"
+    itf_step_start "install-two-node run" "storage + compute install with derived feed"
     itf_guest_exec_feed "$s_ip" "$answers" \
         "cd /root/ZFSutilities && ./bin/install-two-node" > "$inst_log" 2>&1
     local inst_rc=$?
@@ -460,6 +461,7 @@ j05_two_node_lab_main() {
     # failed and the VM config never gained its disk line — the step
     # must verify the end state, not just the exit status.
     local disk_log="$ITF_RUN_DIR/new-vm-disk.log"
+    itf_step_start "VM disk create" "new-vm-disk zfstest1 101 0 1G"
     if itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk zfstest1 101 0 1G'" \
             > "$disk_log" 2>&1 \
             && grep -q "✓ Configuration saved" "$disk_log" \

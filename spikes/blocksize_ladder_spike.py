@@ -14,7 +14,11 @@ Cairo fallback, from the same shared vocabulary:
    and state colours; the Agg buffer is non-blank.
 3. The Cairo ``BlocksizeLadder`` (alignment_page fallback) draws the
    same ``blocksize_ladder()`` data side by side, also non-blank.
-4. A window screenshot is written for visual review.
+4. The matplotlib ladder is filled only after the window is mapped (the
+   Alignment page's allocation order); its axes margins then stay sized
+   to the labels — the squeezed-ladder fence (dead bands top/bottom/left
+   around a squeezed plot fail here).
+5. A window screenshot is written for visual review.
 
 Run headless:
 
@@ -180,14 +184,6 @@ def main():
 
     mpl = create_blocksize_ladder()
     _check("factory selected matplotlib on this host", isinstance(mpl, MatplotlibBlocksizeLadder))
-    mpl.update(ladder_data)
-
-    # The Cairo fallback, fed the very same data, side by side.
-    from alignment_page import BlocksizeLadder
-
-    cairo_ladder = BlocksizeLadder()
-    cairo_ladder.update(ladder_data)
-
     win = Gtk.Window(title="Blocksize ladder spike")
     win.set_default_size(940, 760)
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -198,14 +194,55 @@ def main():
     box.pack_start(Gtk.Label(label="matplotlib renderer (selected)"), False, False, 0)
     box.pack_start(mpl.widget, False, False, 0)
     box.pack_start(Gtk.Label(label="Cairo fallback renderer"), False, False, 0)
-    box.pack_start(cairo_ladder.widget, False, False, 0)
     win.add(box)
     win.show_all()
     win.connect("destroy", Gtk.main_quit)
 
+    def _fill():
+        # Update AFTER the window is mapped, like the Alignment page: the
+        # canvas is first allocated at its empty height and only then
+        # grows to the row-set height — the allocation sequence that
+        # produced the squeezed-ladder defect the margins check fences.
+        mpl.update(ladder_data)
+
+        # The Cairo fallback, fed the very same data, side by side; it
+        # computes its geometry per draw, so it needs no such ordering.
+        from alignment_page import BlocksizeLadder
+
+        cairo_ladder = BlocksizeLadder()
+        cairo_ladder.update(ladder_data)
+        box.pack_start(cairo_ladder.widget, False, False, 0)
+        win.show_all()
+        return False
+
+    def _axes_margins():
+        """Fence the squeezed-ladder defect: tight_layout margins are
+        figure-fraction coordinates, so a layout solved at a stale canvas
+        size scales into dead bands (top/bottom/left) at the real one.
+        The fixed ladder re-solves on allocation changes, so the axes must
+        fill most of the canvas with the label gutter its only wide
+        margin."""
+        canvas_w = mpl.widget.get_allocated_width()
+        canvas_h = mpl.widget.get_allocated_height()
+        pos = mpl._ax.get_position()
+        left = pos.x0 * canvas_w
+        top = (1.0 - pos.y1) * canvas_h
+        bottom = pos.y0 * canvas_h
+        height = (pos.y1 - pos.y0) * canvas_h
+        print(
+            f"axes margins px of canvas {canvas_w}x{canvas_h}: "
+            f"left {left:.0f} top {top:.0f} bottom {bottom:.0f} height {height:.0f}"
+        )
+        _check("axes top margin within 20% of canvas", top <= 0.20 * canvas_h)
+        _check("axes bottom margin within 20% of canvas", bottom <= 0.20 * canvas_h)
+        _check("axes left edge within 45% of canvas", left <= 0.45 * canvas_w)
+        _check("axes height above 60% of canvas", height >= 0.60 * canvas_h)
+
     def _verify():
         _check("matplotlib ladder rendered non-blank", _nonblank(mpl.widget))
-        _check("cairo ladder rendered non-blank", _nonblank(cairo_ladder.widget))
+        cairo_widget = box.get_children()[-1]
+        _check("cairo ladder rendered non-blank", _nonblank(cairo_widget))
+        _axes_margins()
         win.get_window().process_updates(True)
         # Window screenshot for visual review.
         try:
@@ -223,6 +260,7 @@ def main():
         Gtk.main_quit()
         return False
 
+    GLib.timeout_add(300, _fill)
     GLib.timeout_add(800, _verify)
     GLib.timeout_add(4000, Gtk.main_quit)  # hard stop
     Gtk.main()

@@ -194,6 +194,7 @@ itf_survey_stage_tree() {
 
 itf_survey_stage_tree_compute() {
     local s_ip="$1" c_ip="$2"
+    itf_step_start "survey tree staging [compute]" "tar + cross-guest scp + extract"
     # Compute-node items run the tree's bin/ too — copy the already-staged
     # tree across the lab's root-SSH link (j05 admin pre-work) instead of
     # serving a second download.
@@ -312,6 +313,7 @@ PYEOF
 
 itf_survey_stage_gui_env() {
     local guest_ip="$1"
+    itf_step_start "survey GUI env" "apt install Xvfb + python3-cairo"
     # python3-cairo is documented as a product gap (F-047): the GUI's
     # memory/alignment pages import cairo at module level, but the gui
     # prerequisite set never installs a python cairo binding — the
@@ -402,6 +404,7 @@ itf_survey_run_cli_item() {
     # Bespoke recipes own the whole invocation.
     if [[ "$depth" == "bespoke" ]] \
             && declare -f "survey_recipe_$command" > /dev/null; then
+        itf_step_start "survey item $id" "bespoke $command [$profile]"
         "survey_recipe_$command" "$target_ip" "$id" "$profile" "$log" \
             && return 0 || return 1
     fi
@@ -418,6 +421,7 @@ itf_survey_run_cli_item() {
 cd /root/ZFSutilities
 export ZFSCONFIG_PATH=/root/survey-config.json
 timeout 300 ./bin/$resolved"
+    itf_step_start "survey item $id" "$resolved [$depth/$profile]"
     itf_guest_exec_feed "$target_ip" "$feed_file" "$guest_cmd" \
         > "$log" 2>&1
     local rc=$?
@@ -701,6 +705,7 @@ itf_survey_run_gui_items() {
         /root/survey-harness/gui_catalog.py > /dev/null 2>&1
 
     local attempt=0
+    itf_step_start "GUI probe run" "up to 3 attempts, timeout 5400s each"
     while (( attempt < 3 )); do
         attempt=$(( attempt + 1 ))
         local probe_log="$ITF_RUN_DIR/survey-gui-probe-$attempt.log"

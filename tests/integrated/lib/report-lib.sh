@@ -9,13 +9,20 @@
 #   results/run-<timestamp>-<tag>/
 #       meta.txt     tag, start time, caller, orchestrator pid (finished:
 #                    is stamped in by itf_report_finish)
-#       steps.tsv    one line per step: <utc-ts> <status> <name> <detail>
-#       report.md    human-readable report, written progressively
+#       steps.tsv    one line per COMPLETED step: <utc-ts> <status> <name>
+#                    <detail> (START entries are report.md-only)
+#       report.md    human-readable report, written progressively; every
+#                    line carries a UTC timestamp, and itf_step_start adds
+#                    a **START** line when a long activity BEGINS so the
+#                    reader can see what is running right now
 #       <artifact>   anything the journey saves alongside (logs, listings,
 #                    screenshots) — record with itf_artifact
 #
 # Steps are PASS/FAIL/SKIP/INFO; the summary counts failures and
-# itf_report_finish returns 1 when any step failed.
+# itf_report_finish returns 1 when any step failed. START lines are
+# annotations, not steps: they never land in steps.tsv and never move the
+# counters (steps.tsv feeds itf watch and the guest-sweep verdict/age
+# awk, which read one row per completed step).
 
 if [[ -n "${ITF_LIB_REPORT_LOADED:-}" ]]; then
     return 0 2>/dev/null || true
@@ -61,6 +68,27 @@ itf_report_init() {
     echo "itf: run directory $ITF_RUN_DIR"
 }
 
+# itf_step_start <name> [detail...]
+#
+# Announces the start of a long activity.  report.md-only: no steps.tsv
+# row, no counter movement — a START is an annotation, the completing
+# itf_step is the record.
+itf_step_start() {
+    local name="$1"
+    shift
+    local detail="${*:-}"
+
+    if [[ -z "${ITF_RUN_DIR:-}" ]]; then
+        echo "itf: itf_step_start called before itf_report_init (start '$name' dropped)" >&2
+        return 1
+    fi
+
+    echo "- $(date -u '+%Y-%m-%dT%H:%M:%SZ') **START** $name${detail:+ — $detail}" \
+        >> "$ITF_RUN_DIR/report.md"
+    echo "[start] ${name}${detail:+ — $detail}"
+    return 0
+}
+
 # itf_step <status> <name> [detail...]
 #
 # Records one step.  status: pass | fail | skip | info.
@@ -87,14 +115,16 @@ itf_step() {
     esac
     ITF_STEPS_TOTAL=$((ITF_STEPS_TOTAL + 1))
 
-    printf '%s\t%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$status" "$name" "$detail" \
+    local stamp
+    stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf '%s\t%s\t%s\t%s\n' "$stamp" "$status" "$name" "$detail" \
         >> "$ITF_RUN_DIR/steps.tsv"
     {
         case "$status" in
-            pass) echo "- **PASS** $name${detail:+ — $detail}" ;;
-            fail) echo "- **FAIL** $name${detail:+ — $detail}" ;;
-            skip) echo "- *SKIP* $name${detail:+ — $detail}" ;;
-            *) echo "- INFO $name${detail:+ — $detail}" ;;
+            pass) echo "- $stamp **PASS** $name${detail:+ — $detail}" ;;
+            fail) echo "- $stamp **FAIL** $name${detail:+ — $detail}" ;;
+            skip) echo "- $stamp *SKIP* $name${detail:+ — $detail}" ;;
+            *) echo "- $stamp INFO $name${detail:+ — $detail}" ;;
         esac
     } >> "$ITF_RUN_DIR/report.md"
 
@@ -123,7 +153,7 @@ itf_artifact() {
     if [[ "$src" != "$dst" ]]; then
         cp "$file" "$dst"
     fi
-    echo "- ARTIFACT [$label] $base" >> "$ITF_RUN_DIR/report.md"
+    echo "- $(date -u '+%Y-%m-%dT%H:%M:%SZ') ARTIFACT [$label] $base" >> "$ITF_RUN_DIR/report.md"
 }
 
 # itf_report_finish

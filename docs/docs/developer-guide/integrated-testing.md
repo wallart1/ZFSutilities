@@ -107,8 +107,11 @@ OpenZFS-version leg for the j21 probe matrix — no product install).
 Every run produces a progressive report under
 `tests/integrated/results/run-<timestamp>-<tag>/` (gitignored):
 `steps.tsv` for tooling, `report.md` for humans, plus artifacts (logs,
-`zfs list -t snapshot` listings, GUI screenshots). `itf journey run`
-exits non-zero when any step failed.
+`zfs list -t snapshot` listings, GUI screenshots). Every `report.md`
+line carries a UTC timestamp, and long activities (a guest install, a
+serial watch, a poll loop) open with a `**START**` line when they begin,
+so a run watched mid-flight shows what is running right now. `itf
+journey run` exits non-zero when any step failed.
 
 The driver itself runs under `set -euo pipefail`: its own plumbing —
 dispatch, preflight, status, watch — fails fast on any unhandled error.

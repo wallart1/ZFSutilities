@@ -397,10 +397,15 @@ SMART.
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `list_disks()`        | Return disks and their partitions, excluding loops, zvols, and the system boot disk (plus its partitions)                                                                                    |
 | `resolve_by_id()`     | Map kernel device paths to the best `/dev/disk/by-id` name                                                                                                                                   |
-| `smart_health(path)`  | Return `PASSED`, `FAILED`, or `n/a` for a device                                                                                                                                             |
+| `smart_health(path)`  | Return `PASSED`, `FAILED`, or `n/a` for a device (stdout is parsed even on a nonzero smartctl exit — the failing-disk bit accompanies the `FAILED!` verdict) |                                                                                                                                             |
 | `smart_wear(path)`    | Return SSD/NVMe wear percentage (0-100) from `smartctl -j -A` JSON, or `None`                                                                                                                |
-| `smart_details(path)` | Return raw `smartctl -a` text or `n/a`                                                                                                                                                       |
+| `smart_details(path)` | Return `(report, rc)` from `smartctl -a`: the report whenever one was printed (a nonzero exit often *flags problems* in it), `n/a` only when nothing printed; `rc` is the exit status, `None` when smartctl did not run |                                                                                                                                                       |
 | `disk_inventory()`    | Combine the above into a single inventory object; SSD/NVMe disks get one combined `smartctl -j -H -A` probe yielding both health and `DiskInfo.wear_percent`, HDDs keep the quick `-H` check. SMART data is probed only on physical devices — partition rows carry blank health and no wear |
+
+**Module-level helper:** `smartctl_rc_reasons(rc)` decodes a smartctl
+exit status into its set bits ("disk failing, error-log entries");
+unknown bits are named by mask value. `disk_actions` uses it to word
+the SMART Details warnings.
 
 **Called modules / imported helpers:**
 

@@ -109,7 +109,10 @@ only messages at or above one level (`DEBUG`, `VERB`, `INFO`, `WARN`,
 Bash and Python `log_msg` apply the same rule. In bash,
 `with_msg_level <LEVEL> <command...>` scopes the gate to one call and restores
 the caller's value afterward. The helper runs the command in the current
-shell, so shell state and exit traps stay with the caller.
+shell, so shell state and exit traps stay with the caller. Its single-message
+mirror is `log_verb <text...>`: the message is logged at `VERB` level, so it
+stays off the terminal unless the operator's gate allows `VERB`, while the
+session log keeps it either way.
 
 `archive-vm` sets the gate to `WARN` for the transfer engine and for
 `remove-vm-disk --from-archive`. An archive run therefore narrates its own

@@ -162,6 +162,7 @@ EOF
     local upgrade_feed="$ITF_RUN_DIR/upgrade-answers.txt"
     printf 'y\ny\ny\ny\ny\ny\n' > "$upgrade_feed"
     local up_log="$ITF_RUN_DIR/guest-upgrade.log"
+    itf_step_start "upgrade run" "full upgrade-zfsutilities (download, scan, deploy)"
     itf_guest_exec_feed "$guest_ip" "$upgrade_feed" "$upgrade_cmd" \
         > "$up_log" 2>&1
     local up_rc=$?
@@ -292,6 +293,7 @@ EOF
     local uptodate_feed="$ITF_RUN_DIR/upgrade-uptodate-answers.txt"
     printf '\n' > "$uptodate_feed"
     local upd_log="$ITF_RUN_DIR/guest-upgrade-uptodate.log"
+    itf_step_start "upgrade run" "up-to-date check (release check + scan)"
     itf_guest_exec_feed "$guest_ip" "$uptodate_feed" "$upgrade_cmd" \
         > "$upd_log" 2>&1
     local upd_rc=$?

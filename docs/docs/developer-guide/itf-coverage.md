@@ -41,7 +41,9 @@ pending — is j25.
 - **GUI automation** and the remaining **OS matrix** (template profiles
   beyond storage/compute/ubuntu) — parked by standing decision; reopened
   only by an explicit user trigger (the ubuntu profile is the one named
-  exception: the j21 probe matrix needed a 2.2-era OpenZFS leg).
+  exception: the j21 probe matrix needed a 2.2-era OpenZFS leg). The
+  GUI on the two-node compute host has no journey coverage; requirement
+  R-10 in `tests/integrated/REQUIREMENTS.md` records it.
 - The 17 test-exempt legacy `bin/` commands are permanently excluded
   from journey scope (closed list, user decision 2026-10-26).
 

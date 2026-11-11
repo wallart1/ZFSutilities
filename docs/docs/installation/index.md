@@ -164,16 +164,27 @@ directions** between the storage host and compute host **before** running
 the installer. The installer will verify this and fail early if either
 direction is not working.
 
+If root does not have an SSH key yet on a host, create one first. Accept
+the default file location, and leave the passphrase empty so unattended
+connections keep working:
+
+```bash
+sudo ssh-keygen -t ed25519
+```
+
+The `sudo` in these commands matters: the key that gets copied must be
+root's, because the ZFSutilities tooling runs as root.
+
 On the **storage host**:
 
 ```bash
-ssh-copy-id root@<compute-host>
+sudo ssh-copy-id root@<compute-host>
 ```
 
 On the **compute host**:
 
 ```bash
-ssh-copy-id root@<storage-host>
+sudo ssh-copy-id root@<storage-host>
 ```
 
 The storage and compute hosts also need a **high-speed IP network connection**

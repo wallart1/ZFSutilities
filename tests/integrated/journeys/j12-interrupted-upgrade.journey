@@ -140,6 +140,7 @@ echo kill1-done
 EOF
     itf_guest_put "$guest_ip" "$w1" /root/itf-j12-kill1.sh > /dev/null 2>&1
     local k1_log="$ITF_RUN_DIR/guest-kill1.log"
+    itf_step_start "kill1 run" "upgrade to the download marker, then SIGTERM"
     itf_guest_exec "$guest_ip" "bash /root/itf-j12-kill1.sh" > "$k1_log" 2>&1
     itf_artifact "kill1-transcript" "$k1_log"
     itf_guest_get "$guest_ip" /root/itf-j12-kill1-upgrade.log \
@@ -231,6 +232,7 @@ echo kill2-done
 EOF
     itf_guest_put "$guest_ip" "$w2" /root/itf-j12-kill2.sh > /dev/null 2>&1
     local k2_log="$ITF_RUN_DIR/guest-kill2.log"
+    itf_step_start "kill2 run" "upgrade to mid-deploy, then SIGKILL"
     itf_guest_exec "$guest_ip" "bash /root/itf-j12-kill2.sh" > "$k2_log" 2>&1
     itf_artifact "kill2-transcript" "$k2_log"
     itf_guest_get "$guest_ip" /root/itf-j12-kill2-upgrade.log \
@@ -291,6 +293,7 @@ EOF
     # ------------------------------------------------------------------
 
     local rec_log="$ITF_RUN_DIR/guest-upgrade-recovery.log"
+    itf_step_start "upgrade run" "recovery re-run after the interruptions"
     itf_guest_exec_feed "$guest_ip" "$up_feed" "$upgrade_cmd" \
         > "$rec_log" 2>&1
     local rec_rc=$?
@@ -409,6 +412,7 @@ EOF
     local uptodate_feed="$ITF_RUN_DIR/upgrade-uptodate-answers.txt"
     printf '\n' > "$uptodate_feed"
     local upd_log="$ITF_RUN_DIR/guest-upgrade-uptodate.log"
+    itf_step_start "upgrade run" "up-to-date check (release check + scan)"
     itf_guest_exec_feed "$guest_ip" "$uptodate_feed" "$upgrade_cmd" \
         > "$upd_log" 2>&1
     local upd_rc=$?

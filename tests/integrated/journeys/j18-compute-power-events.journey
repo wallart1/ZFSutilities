@@ -200,6 +200,7 @@ j18_reboot_compute_begin() {
 
 j18_reboot_compute_wait() {
     local label="$1"
+    itf_step_start "compute reboot wait [$label]" "ssh drop + return + IP re-discovery"
     local old_ip="$c_ip" new_ip new_boot gone=0 gone_start=$SECONDS
     while (( SECONDS - gone_start < "${ITF_REBOOT_GONE_WAIT:-180}" )); do
         itf_guest_exec "$old_ip" true > /dev/null 2>&1 || { gone=1; break; }
@@ -753,6 +754,7 @@ $(cat "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps")" \
     itf_storage_load_keys "$s_ip" || return 1
 
     log="$ITF_RUN_DIR/recover-encrypted-s16-first.log"
+    itf_step_start "encrypted-LUN recover run" "first attempt after the power event"
     itf_guest_exec "$s_ip" "bash -lc 'iscsi-recover-encrypted-luns'" \
         > "$log" 2>&1
     rc=$?
@@ -803,6 +805,7 @@ $(cat "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps")" \
     fi
 
     log="$ITF_RUN_DIR/recover-encrypted-s16-second.log"
+    itf_step_start "encrypted-LUN recover run" "re-run for the ACL-grant heal"
     if itf_guest_exec "$s_ip" "bash -lc 'iscsi-recover-encrypted-luns'" \
             > "$log" 2>&1 \
             && grep -q "already present" "$log" \

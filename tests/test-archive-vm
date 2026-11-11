@@ -121,8 +121,15 @@ EOF
 
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
-        # Redirect log_msg to stderr so warning assertions can see it.
-        log_msg() { echo "$*" >&2; }
+        # Redirect log_msg to stderr so warning assertions can see it —
+        # gate-faithful, exactly like the real log_msg: log_verb messages
+        # must vanish from default runs here the way they do in production
+        # (the real gate checker comes along with bashinit via test-lib).
+        log_msg() {
+            if ! __log_msg_gated_p "$*"; then
+                echo "$*" >&2
+            fi
+        }
         setup_test_env
         mock_date "$date_iso" "$date_dow" "$date_dom"
         setup_node_config "$mode"
@@ -980,7 +987,7 @@ n"
 
 test_single_node_warns_on_orphaned_zvol() {
     reset_mocks
-    test_start "Single-node: orphaned zvol not in config is skipped with warning"
+    test_start "Single-node: orphan notice is gated VERB — hidden by default, shown under VERB"
 
     local vmid="221"
     local pve_dir="$_mock_zfs_state_dir/pve7"
@@ -1014,9 +1021,20 @@ n"
         test_fail "Orphaned disk 9 was archived; output:\n$out"
         return
     fi
+    # Default run: the orphan notice narrates at gated VERB and stays off
+    # the terminal (the session log keeps it; log_verb's law).
+    if [[ "$out" == *"Orphaned zvol not referenced in config:"* ]]; then
+        test_fail "Orphan notice leaked into the default run; output:\n$out"
+        return
+    fi
+    # Operator opt-in (ZFSUTILITIES_MSG_LEVEL=VERB) reveals it. The
+    # discovery phase re-runs before the already-archived skip.
+    local out_verb
+    out_verb=$(ZFSUTILITIES_MSG_LEVEL=VERB \
+        run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     local _wrap_rhs="Orphaned zvol not referenced in config: threeamigos/proxmox/vm-${vmid}-disk-9"
-    if [[ "$out" != *"$_wrap_rhs"* ]]; then
-        test_fail "Orphan warning missing; output:\n$out"
+    if [[ "$out_verb" != *"$_wrap_rhs"* ]]; then
+        test_fail "Orphan notice missing under the VERB gate; output:\n$out_verb"
         return
     fi
 
@@ -1101,18 +1119,28 @@ n"
         test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    # The rendered warning names the zvol after the colon; the payload
+    # The rendered notice names the zvol after the colon; the payload
     # source (echoed by the harness's ssh capture) must not false-positive.
     if [[ "$out" == *"Orphaned zvol not referenced in config: fivebays/"* ]] \
             || [[ "$out" == *"Orphaned zvol not referenced in config: z40tb/"* ]]; then
         test_fail "Backup copies flagged as orphans; output:\n$out"
         return
     fi
-    # Positive control: the same-pool unreferenced disk still warns.
+    # Default run: even the real same-pool orphan stays off the terminal
+    # (gated VERB; the session log keeps it). Positive control under the
+    # operator's VERB gate: the discovery payload re-runs before the
+    # already-archived skip.
+    if [[ "$out" == *"Orphaned zvol not referenced in config:"* ]]; then
+        test_fail "Orphan notice leaked into the default run; output:\n$out"
+        return
+    fi
+    local out_verb
+    out_verb=$(ZFSUTILITIES_MSG_LEVEL=VERB \
+        run_archive two-node-local existing "$pve_dir" "$archive" "$mount" "$vmid")
     local _orphan_needle="Orphaned zvol not referenced in config:"
     _orphan_needle+=" threeamigos/proxmox/vm-${vmid}-disk-9"
-    if [[ "$out" != *"$_orphan_needle"* ]]; then
-        test_fail "Real orphan no longer warned; output:\n$out"
+    if [[ "$out_verb" != *"$_orphan_needle"* ]]; then
+        test_fail "Real orphan missing under the VERB gate; output:\n$out_verb"
         return
     fi
     if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@"* ]]; then
@@ -2771,6 +2799,83 @@ n"
     test_pass
 }
 
+# The resolver's own VERB chatter (enclosure_inventory's boot-disk-
+# controller note) must never reach archive-vm's terminal: the engine
+# call runs under with_msg_level WARN, and the resolver subprocess
+# inherits that gate and suppresses its below-gate lines itself — the
+# production mechanism this test fences. The fake mimics the real
+# python emitter's gate law (unset = ungated = show), so dropping the
+# with_msg_level wrap would let the line through and fail here.
+test_archive_resolver_verb_stays_gated() {
+    reset_mocks
+    test_start "Resolver VERB chatter never reaches archive-vm's terminal"
+
+    local vmid="268"
+    local pve_dir="$_mock_zfs_state_dir/pve48"
+    local archive="$_mock_zfs_state_dir/archive48"
+    local mount="$_mock_zfs_state_dir/mount48"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local fake="$_mock_zfs_state_dir/fake_resolver_verb"
+    cat > "$fake" << 'EOF'
+#!/usr/bin/bash
+# Fake resolver with the real emitter's gate law: a VERB line reaches
+# stderr only when this process's ZFSUTILITIES_MSG_LEVEL allows VERB
+# (unset/invalid gates never gate; WARN/INFO/FATAL do).
+case "${ZFSUTILITIES_MSG_LEVEL:-}" in
+    WARN|INFO|FATAL) ;;
+    *)
+        echo "VERB: excluding boot-disk controller 0000:00:17.0 from eSATA grouping" >&2
+        ;;
+esac
+if [[ "${1:-}" == "--min-with" ]]; then
+    printf '%s\n' "${2:-}"
+    exit 0
+fi
+printf '\n'
+exit 0
+EOF
+    chmod +x "$fake"
+    export ZFSUTILITIES_ENCLOSURE_RATE="$fake"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+    unset ZFSUTILITIES_ENCLOSURE_RATE
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # Sanity: the fake does speak when ungated (the fence is not vacuous).
+    local ungated
+    ungated=$(env -u ZFSUTILITIES_MSG_LEVEL "$fake" --min-with "" threeamigos 2>&1 >/dev/null)
+    if [[ "$ungated" != *"excluding boot-disk controller"* ]]; then
+        test_fail "Fake resolver never spoke ungated; fence is vacuous: '$ungated'"
+        return
+    fi
+    # The engine's WARN gate (with_msg_level around archive_one_zvol) must
+    # hide the fake's VERB line from archive-vm's output.
+    if [[ "$out" == *"excluding boot-disk controller"* ]]; then
+        test_fail "Resolver VERB line reached archive-vm's terminal; output:\n$out"
+        return
+    fi
+    local needle="DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Archive did not run; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 test_archive_resolver_failure_fails_open() {
     reset_mocks
     test_start "Enclosure resolver failure WARNs and archives at the prompted rate"
@@ -3016,6 +3121,7 @@ test_missing_pacer_fatals_instead_of_running_unlimited
 test_two_node_rate_forwarded_to_payload
 test_enclosure_cap_paces_archive_without_prompted_rate
 test_archive_resolver_consulted_with_source_pool
+test_archive_resolver_verb_stays_gated
 test_archive_resolver_failure_fails_open
 test_no_pv_rate_limit_remains
 test_unlimited_run_has_no_pacer

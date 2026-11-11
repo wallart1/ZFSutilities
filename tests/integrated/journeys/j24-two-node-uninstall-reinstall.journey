@@ -298,6 +298,7 @@ EOF
     # ------------------------------------------------------------------
 
     local un_log="$ITF_RUN_DIR/guest-uninstall.log"
+    itf_step_start "uninstall run" "--purge --all-nodes (both hosts over ssh)"
     itf_guest_exec "$s_ip" \
         "bash -lc 'uninstall-zfsutilities --purge --all-nodes --yes'" \
         > "$un_log" 2>&1
@@ -477,6 +478,7 @@ EOF
     rfeed+="y\ny\n"
     printf '%b' "$rfeed" > "$r_feed"
     local r_log="$ITF_RUN_DIR/guest-reinstall.log"
+    itf_step_start "install-two-node run" "reinstall with the fresh-config feed"
     itf_guest_exec_feed "$s_ip" "$r_feed" \
         "cd /root/ZFSutilities && ./bin/install-two-node" > "$r_log" 2>&1
     local r_rc=$?

@@ -102,6 +102,7 @@ journey_main() {
     local afeed="$ITF_RUN_DIR/archive-answers.txt"
     printf 'zfstest2/vm-archive\n\ny\ny\ny\ny\n' > "$afeed"
     local arc_log="$ITF_RUN_DIR/archive-vm.log"
+    itf_step_start "archive-vm run" "VM 101 -> zfstest2/vm-archive (zfs send)"
     itf_guest_exec_feed "$c_ip" "$afeed" "bash -lc 'archive-vm 101'" \
         > "$arc_log" 2>&1
     local arc_rc=$?
@@ -150,6 +151,7 @@ journey_main() {
     local ufeed="$ITF_RUN_DIR/unarchive-answers.txt"
     printf '\ny\n' > "$ufeed"
     local ua_log="$ITF_RUN_DIR/unarchive-drift.log"
+    itf_step_start "unarchive-vm run" "restore 1: drift convergence"
     itf_guest_exec_feed "$c_ip" "$ufeed" "bash -lc 'unarchive-vm 101'" \
         > "$ua_log" 2>&1
     local ua_rc=$?
@@ -214,6 +216,7 @@ journey_main() {
     fi
 
     local ub_log="$ITF_RUN_DIR/unarchive-rebuild.log"
+    itf_step_start "unarchive-vm run" "restore 2: full iSCSI rebuild"
     itf_guest_exec_feed "$c_ip" "$ufeed" "bash -lc 'unarchive-vm 101'" \
         > "$ub_log" 2>&1
     local ub_rc=$?
@@ -314,6 +317,7 @@ journey_main() {
     fi
 
     local uc_log="$ITF_RUN_DIR/unarchive-ambiguous.log"
+    itf_step_start "unarchive-vm run" "restore 3: ambiguity (duplicate short target)"
     itf_guest_exec_feed "$c_ip" "$ufeed" "bash -lc 'unarchive-vm 101'" \
         > "$uc_log" 2>&1
     local uc_rc=$?

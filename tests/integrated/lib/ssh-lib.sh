@@ -164,6 +164,11 @@ itf_guest_get() {
 # (a full OS install can take several minutes before sshd is up).
 itf_wait_ssh() {
     local ip="$1" timeout="${2:-900}"
+    # Live-report only inside a run (this helper also serves the plain
+    # `itf guest wait-ssh` CLI path, which has no report); stdout stays
+    # clean because callers may capture it.
+    [[ -n "${ITF_RUN_DIR:-}" ]] \
+        && itf_step_start "ssh wait" "root@${ip} — up to ${timeout}s" > /dev/null
     local deadline=$(( SECONDS + timeout ))
     while (( SECONDS < deadline )); do
         if ssh "${_ITF_GUEST_SSH_OPTS[@]}" -o ConnectTimeout=5 \

@@ -268,10 +268,14 @@ collect_referenced_zvols() {
             fi
         done < "$proxmoxconfig"
 
-        # Warn about VM zvols that are not referenced in the config. Only
-        # the exact <pool>/proxmox/vm-<vmid>-disk-<n> shape counts: deeper
-        # nesting is a replicated backup copy on another pool, not a live
-        # LUN candidate (the discover_zvols law in iscsi-lib.sh).
+        # Note VM zvols that are not referenced in the config — advisory
+        # detail (the run proceeds; the orphan is neither archived nor
+        # touched), so it narrates at gated VERB: off the terminal unless
+        # the operator opts in (ZFSUTILITIES_MSG_LEVEL=VERB), always in
+        # the session log. Only the exact <pool>/proxmox/vm-<vmid>-disk-<n>
+        # shape counts: deeper nesting is a replicated backup copy on
+        # another pool, not a live LUN candidate (the discover_zvols law
+        # in iscsi-lib.sh).
         while IFS= read -r vol; do
             vol_parent="${vol%/*}"
             vol_base="${vol##*/}"
@@ -280,7 +284,7 @@ collect_referenced_zvols() {
             [[ "$vol_base" == "vm-${vmid}-disk-${vol_tail}" \
                 && "$vol_tail" =~ ^[0-9]+$ ]] || continue
             if [[ -z "${referenced_zvols[$vol]:-}" ]]; then
-                log_msg "WARN: Orphaned zvol not referenced in config:" "$vol"
+                log_verb "Orphaned zvol not referenced in config:" "$vol"
             fi
         done < <(zfs list -H -t volume -o name 2>/dev/null)
         return 0
@@ -365,14 +369,17 @@ while [[ $# -ge 2 ]]; do
     referenced_zvols["$zvol"]=1
 done
 
-# Warn about VM zvols that are not referenced in the config. Only the exact
+# Note VM zvols that are not referenced in the config — advisory detail
+# (the run proceeds; the orphan is neither archived nor touched), so it
+# narrates at gated VERB: off the terminal unless the operator opts in
+# (ZFSUTILITIES_MSG_LEVEL=VERB), always in the session log. Only the exact
 # <pool>/proxmox/vm-<vmid>-disk-<n> shape counts: deeper nesting is a
 # replicated backup copy on another pool, not a live LUN candidate (the
 # discover_zvols law in iscsi-lib.sh).
 while IFS= read -r orphan_zvol; do
     [[ -n "$orphan_zvol" ]] || continue
     if [[ -z "${referenced_zvols[$orphan_zvol]:-}" ]]; then
-        log_msg "WARN: Orphaned zvol not referenced in config:" \
+        log_verb "Orphaned zvol not referenced in config:" \
             "${orphan_zvol}"
     fi
 done < <(zfs list -H -t volume -o name 2>/dev/null | while IFS= read -r vol; do

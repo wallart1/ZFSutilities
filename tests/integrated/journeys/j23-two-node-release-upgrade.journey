@@ -333,6 +333,7 @@ EOF
     local up1_feed="$ITF_RUN_DIR/upgrade1-answers.txt"
     printf 'y\ny\ny\ny\ny\ny\n' > "$up1_feed"
     local up1_log="$ITF_RUN_DIR/guest-upgrade1.log"
+    itf_step_start "upgrade run" "pass 1: two-host remote scan + salvage"
     itf_guest_exec_feed "$s_ip" "$up1_feed" "$upgrade_cmd" \
         > "$up1_log" 2>&1
     local up1_rc=$?
@@ -495,6 +496,7 @@ EOF
     local up2_feed="$ITF_RUN_DIR/upgrade2-answers.txt"
     printf 'y\ny\ny\ny\ny\ny\n' > "$up2_feed"
     local up2_log="$ITF_RUN_DIR/guest-upgrade2.log"
+    itf_step_start "upgrade run" "pass 2: deploy + activate both hosts"
     itf_guest_exec_feed "$s_ip" "$up2_feed" "$upgrade2_cmd" \
         > "$up2_log" 2>&1
     local up2_rc=$?

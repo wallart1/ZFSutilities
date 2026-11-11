@@ -35,6 +35,7 @@ journey_main() {
     un_log="$ITF_RUN_DIR/guest-uninstall.log"
     # --purge --yes skips the 1/2/c menu and the confirmation prompt, so
     # no answer feed is needed.
+    itf_step_start "uninstall run" "uninstall-zfsutilities --purge --yes"
     itf_guest_exec "$guest_ip" \
         "bash -lc 'uninstall-zfsutilities --purge --yes'" > "$un_log" 2>&1
     un_rc=$?

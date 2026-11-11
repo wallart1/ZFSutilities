@@ -196,6 +196,17 @@ an observation, not itself an error — each fence decides which drift is
 fatal, which warns, and which is by design (a one-sided pool name is
 deliberately not drift).
 
+## exit-status bits (smartctl)
+
+smartctl's exit status is a bitmask, not a single error code: each bit
+names one finding (8 = the disk is failing, 32 = the error log holds
+entries, 64 = self-test errors, and so on). A nonzero exit therefore
+often *accompanies* a full report rather than replacing it, so the
+project gates on whether smartctl printed output and uses the exit
+status only to explain it — the SMART Details warning names the set
+bits ("error-log entries (rc=32)") instead of hiding the report behind
+the nonzero code.
+
 ## fence
 
 In the iSCSI two-node setup, the fence is the systemd service and timer

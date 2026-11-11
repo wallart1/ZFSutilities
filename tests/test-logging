@@ -309,6 +309,61 @@ test_with_msg_level_scopes_and_restores() {
     fi
 }
 
+test_log_verb_hidden_by_default_but_logged() {
+    test_start "log_verb stays off stderr by default; the session log keeps it"
+    local logfile
+    logfile="$(mktemp)"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            bashinit
+            unset ZFSUTILITIES_MSG_LEVEL
+            export ZFSUTILITIES_LOG_FILE="$logfile"
+            export ZFSUTILITIES_LOG_INHERIT="N"
+            log_verb "Created property-manifest dataset" "tank/man"
+            echo "env=[${ZFSUTILITIES_MSG_LEVEL-unset}]" >&2
+        ) 2>&1 >/dev/null
+    )"
+    if [[ "$stderr" == *"property-manifest"* ]]; then
+        test_fail "log_verb leaked to stderr with no gate set: $stderr"
+        rm -f "$logfile"
+        return
+    fi
+    assert_contains "$stderr" "env=[unset]"
+    local content
+    content="$(cat "$logfile")"
+    assert_contains "$content" "VERB: Created property-manifest dataset tank/man"
+    rm -f "$logfile"
+    unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
+}
+
+test_log_verb_respects_an_explicit_gate() {
+    test_start "log_verb honors the caller's gate: VERB shows, WARN hides, invalid shows"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            bashinit
+            export ZFSUTILITIES_MSG_LEVEL="VERB"
+            log_verb "shown under verb"
+            export ZFSUTILITIES_MSG_LEVEL="WARN"
+            log_verb "hidden under warn"
+            export ZFSUTILITIES_MSG_LEVEL="BOGUS"
+            log_verb "shown under bogus"
+            echo "env-after=[${ZFSUTILITIES_MSG_LEVEL}]" >&2
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "VERB: shown under verb"
+    assert_contains "$stderr" "VERB: shown under bogus"
+    assert_contains "$stderr" "env-after=[BOGUS]"
+    if [[ "$stderr" == *"hidden under warn"* ]]; then
+        test_fail "explicit WARN gate did not hide log_verb: $stderr"
+    else
+        test_pass
+    fi
+}
+
 test_log_msg_writes_to_file_when_owned
 test_log_msg_writes_all_levels
 test_log_msg_prints_all_to_stderr
@@ -322,6 +377,8 @@ test_log_msg_msg_level_gate_hides_below_gate
 test_log_msg_msg_level_gate_invalid_is_noop
 test_log_msg_msg_level_gate_keeps_session_log
 test_with_msg_level_scopes_and_restores
+test_log_verb_hidden_by_default_but_logged
+test_log_verb_respects_an_explicit_gate
 
 test_warn_long_prefix_on_terminal() {
     test_start "warn --long-prefix uses long prefix on a terminal"

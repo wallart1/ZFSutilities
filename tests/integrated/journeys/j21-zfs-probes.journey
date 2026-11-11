@@ -61,6 +61,7 @@ _j21_probe() {
         return 1
     fi
     local log="$ITF_RUN_DIR/probe-p${n}.log"
+    itf_step_start "zfs probe p${n}" "$label"
     if itf_guest_exec "$ip" "bash /root/itf-p${n}.sh $expect" \
             > "$log" 2>&1; then
         itf_step pass "probe p${n}: $label" \

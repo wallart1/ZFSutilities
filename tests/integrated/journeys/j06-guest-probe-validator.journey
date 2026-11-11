@@ -88,6 +88,7 @@ journey_main() {
     fi
 
     local v_log="$ITF_RUN_DIR/validator-live.log"
+    itf_step_start "validator live run" "pool probes + PVE fetch over ssh"
     if itf_guest_exec "$s_ip" "bash /root/validate-guestfs-probe.sh" \
             > "$v_log" 2>&1 \
             && grep -q "LIVE PASS" "$v_log" \
@@ -120,6 +121,7 @@ journey_main() {
     fi
     local n_log="$ITF_RUN_DIR/validator-negative.log"
     local neg_rc=0
+    itf_step_start "validator negative-control run" "PVE ssh intentionally unreachable"
     itf_guest_exec "$s_ip" "bash /root/validate-guestfs-probe.sh" \
         > "$n_log" 2>&1 || neg_rc=$?
     # Restore the hosts entry whatever the verdict — the lab stays healthy.

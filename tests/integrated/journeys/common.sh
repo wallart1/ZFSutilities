@@ -118,6 +118,7 @@ itf_journey_stage_os() {
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local vmid guest_ip dev_ip preseed_file serve_dir qname
     local seed_rel=""
+    itf_step_start "stage: OS guest install" "$gname ($distro)"
 
     # --rerun: replay on the previous run's guest — a rollback to the
     # os-installed checkpoint replaces the whole install machinery (the
@@ -441,6 +442,7 @@ itf_journey_stage_os() {
     if [[ "$distro" == debian ]]; then
         serial_args+=(--kick $'\x1b[B' --kick-delay 8)
     fi
+    itf_step_start "guest install (serial watch)" "$gname — up to 3600s"
     python3 "$ITF_ROOT/lib/serial_console.py" "${serial_args[@]}" \
         > "$ITF_RUN_DIR/serial-console.log" 2>&1 &
     driver_pid=$!
@@ -575,6 +577,7 @@ itf_journey_stage_pve_os() {
     local guest_file="$ITF_RUN_DIR/guest-pve.txt"
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local vmid guest_ip boot_iso qname
+    itf_step_start "stage: PVE OS guest install" "$gname"
 
     boot_iso="$(itf_pve_iso_customize "$base" "$guest_hostname" \
         2>"$ITF_RUN_DIR/iso-customize.log")"
@@ -620,6 +623,7 @@ itf_journey_stage_pve_os() {
     # "Installation done, rebooting..." on success; every failure path
     # funnels into err_reboot's "Installation aborted" (post-hook
     # failures print their own banner first and may wait 30 s).
+    itf_step_start "guest install (serial watch)" "$gname — up to 3600s"
     python3 "$ITF_ROOT/lib/serial_console.py" \
         --host "$base" --user "$ITF_SSH_USER" --vmid "$vmid" \
         --exit-after 'Installation done|Installation aborted|hook failed' \
@@ -703,6 +707,7 @@ itf_journey_run_installer() {
     local label="$3"
     local expected_rc="${4:-0}"
     local answers inst_log inst_rc
+    itf_step_start "installer run" "$label"
     answers="$ITF_RUN_DIR/install-answers.txt"
     printf '%b' "$feed_format" > "$answers"
     inst_log="$ITF_RUN_DIR/guest-install.log"
@@ -735,6 +740,7 @@ itf_journey_run_installer() {
 itf_journey_stage_download() {
     local guest_ip="$1"
     local dl_script relver dev_ip
+    itf_step_start "stage: release download" "guest fetch of the tree under test"
     dev_ip="$(itf_dev_ip)"
     dl_script="$ITF_RUN_DIR/guest-dl.sh"
     if [[ "$ITF_SW_SOURCE" == "dev-tarball" ]]; then
@@ -837,6 +843,7 @@ EOF
 itf_journey_stage_prepare_install() {
     local guest_ip="$1"
 
+    itf_step_start "stage: install prep" "download tooling, release, prereq check"
     local guest_tooling
     guest_tooling="apt-get update -qq && DEBIAN_FRONTEND=noninteractive"
     guest_tooling+=" apt-get install -y -qq curl ca-certificates"
@@ -980,6 +987,7 @@ zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev
 zpool list
 EOF
     itf_guest_put "$guest_ip" "$pool_script" /root/itf-pools.sh > /dev/null 2>&1
+    itf_step_start "test pool build" "parted + three RAIDZ1 zpool creates"
     if itf_guest_exec "$guest_ip" "bash /root/itf-pools.sh" \
         > "$ITF_RUN_DIR/guest-pools.log" 2>&1; then
         itf_step pass "test pools created" "zfstest1/2/3 (three RAIDZ1, docs recipe)"
@@ -1065,6 +1073,7 @@ itf_journey_stage_upgrade_env() {
         return 1
     fi
     local vb=/usr/local/lib/zfsutilities
+    itf_step_start "stage: upgrade env" "$gname (premise, download, baseline, serve)"
 
     # --- The upgrade premise: active version strictly older than the
     # tree under test.  sort -V decides "older": the premise holds when
@@ -1340,6 +1349,7 @@ EOF
 itf_journey_stage_upgrade_relabel() {
     local guest_ip="$1"
     local vb=/usr/local/lib/zfsutilities
+    itf_step_start "stage: upgrade relabel" "pristine capture + one-patch-newer re-serve"
 
     local active
     # shellcheck disable=SC2016  # the $ expansions run in the guest
@@ -1521,6 +1531,7 @@ itf_vmos_image_zvol() {
         return 1
     fi
     itf_step info "VM-OS image available" "$(du -h "$gz" | awk '{print $1}') cached image"
+    itf_step_start "VM-OS image write" "scp + sparse dd onto $zvol"
     # shellcheck disable=SC2016  # the $ expansions run in the guest
     if itf_guest_put "$s_ip" "$gz" /root/itf-vmos.raw.gz > /dev/null 2>&1 \
         && itf_guest_exec "$s_ip" "
@@ -1557,6 +1568,7 @@ itf_vmos_image_zvol() {
 # slow; keep the default generous.
 itf_vm_wait_agent() {
     local c_ip="$1" vmid="$2" timeout="${3:-900}"
+    itf_step_start "VM agent wait" "vmid $vmid — polling up to ${timeout}s (TCG boot)"
     local deadline=$(( SECONDS + timeout ))
     while (( SECONDS < deadline )); do
         if itf_guest_exec "$c_ip" "qm agent $vmid ping" > /dev/null 2>&1; then
@@ -1575,6 +1587,7 @@ itf_vm_wait_agent() {
 # answer before the caller proceeds.
 itf_vm_boot_with_agent() {
     local c_ip="$1" vmid="$2" timeout="${3:-900}"
+    itf_step_start "VM boot" "vmid $vmid (TCG, agent gate up to ${timeout}s)"
     if itf_guest_exec "$c_ip" "qm set $vmid --agent enabled=1 --kvm 0" \
             > "$ITF_RUN_DIR/vm-$vmid-agent.log" 2>&1 \
         && itf_guest_exec "$c_ip" "qm start $vmid" \
@@ -1781,6 +1794,7 @@ itf_reboot_guest_wait() {
     local mode_file="$ITF_RUN_DIR/reboot-mode-${role}"
     [[ -f "$mode_file" ]] && read -r mode < "$mode_file"
     rm -f "$mode_file"
+    itf_step_start "reboot wait [$role]" "down-wait + ssh + IP re-discovery, up to ${timeout}s"
 
     local guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local base vmid old_ip rec_name
@@ -1938,6 +1952,7 @@ _itf_keystore_wait_sdc() {
 itf_keystore_provision() {
     local s_base="$1" s_vmid="$2" s_ip="$3"
     _itf_keystore_config_ok || return 1
+    itf_step_start "keystore provision" "cryptsetup, LUKS key device on $s_ip"
 
     local tool_log="$ITF_RUN_DIR/keystore-cryptsetup.log"
     if itf_guest_exec "$s_ip" \
@@ -2112,6 +2127,7 @@ itf_keystore_lock_umount() {
 itf_journey_stage_encrypted_key_lun() {
     local gname="$1" s_base="$2" s_vmid="$3" s_ip="$4" c_ip="$5"
     local pool="zfstest1" key_path="/mnt/ZFSkeys/keys/${ITF_KEYFILE_NAME}"
+    itf_step_start "stage: encrypted key LUN" "$gname"
 
     itf_keystore_provision "$s_base" "$s_vmid" "$s_ip" || return 1
 
@@ -2219,6 +2235,7 @@ itf_new_vm_disk_encrypted() {
     local c_ip="$1" pool="$2" vmid="$3" disknum="$4" size="$5" key_path="$6" stem="$7"
     local answers="$ITF_RUN_DIR/${stem}-answers.txt"
     printf '%s\n' "$key_path" > "$answers"
+    itf_step_start "encrypted VM disk create" "new-vm-disk $pool $vmid $disknum ($stem)"
     itf_guest_exec_feed "$c_ip" "$answers" \
         "bash -lc 'new-vm-disk $pool $vmid $disknum $size --encrypted'" \
         > "$ITF_RUN_DIR/${stem}.log" 2>&1
@@ -2381,6 +2398,7 @@ itf_keystore_unlock_mount_wrong() {
 # gates on the recover/add transcript.
 itf_key_ceremony() {
     local label="$1" s_base="$2" s_vmid="$3" s_ip="$4" mode="${5:-recover}"
+    itf_step_start "key ceremony" "$mode ($label)"
     itf_keystore_insert "$s_base" "$s_vmid" || return 1
     itf_keystore_unlock_mount "$s_ip" || return 1
     itf_storage_load_keys "$s_ip" || return 1
@@ -2604,6 +2622,7 @@ itf_vm_disk_links_present() {
 itf_wait_vm_disk_links() {
     local c_ip="$1" timeout="$2"
     shift 2
+    itf_step_start "VM disk link wait" "polling up to ${timeout}s"
     local start=$SECONDS
     while (( SECONDS - start < timeout )); do
         if itf_vm_disk_links_present "$c_ip" "$@" > /dev/null 2>&1; then
@@ -2794,6 +2813,7 @@ itf_journey_stage_boot_workload_lab() {
     local pool_a="zfstest1"
     local key_path="/mnt/ZFSkeys/keys/${ITF_KEYFILE_NAME}"
     local vm log
+    itf_step_start "stage: boot workload lab" "$gname (enroll, LUNs, TCG boots)"
 
     local gz="$ITF_CACHE_DIR/itf-vmos.raw.gz"
     if [[ -s "$gz" ]]; then
@@ -2974,6 +2994,7 @@ itf_journey_stage_boot_workload_lab() {
 itf_single_node_lab_main() {
     local gname="$1"
 
+    itf_step_start "stage: single-node lab" "$gname (clone, verify, test pools)"
     itf_journey_stage_from_template "$gname" || return 1
 
     itf_journey_verify_installed "$J_GUEST_IP"
@@ -3027,6 +3048,8 @@ itf_journey_stage_from_template() {
     local guest_file="$ITF_RUN_DIR/guest.txt"
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local tmpl_vmid stamp vmid guest_ip
+    itf_step_start "stage: template clone" \
+        "$gname${template:+ from $template}"
 
     # --rerun: replay on the previous run's guest — rolling back to the
     # as-cloned checkpoint replaces the template clone (the driver put

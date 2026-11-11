@@ -202,6 +202,41 @@ class TestDiskRepositoryResolveById(unittest.TestCase):
         self.assertEqual(mapping["/dev/sda1"], "wwn-0x5000cca768-part1")
 
 
+class TestSmartctlRcReasons(unittest.TestCase):
+    """smartctl_rc_reasons names exit bits, unknown bits included."""
+
+    def test_zero_and_none_yield_empty(self):
+        from disk_repository import smartctl_rc_reasons
+
+        self.assertEqual(smartctl_rc_reasons(0), "")
+        self.assertEqual(smartctl_rc_reasons(None), "")
+
+    def test_single_bits_named(self):
+        from disk_repository import smartctl_rc_reasons
+
+        self.assertEqual(smartctl_rc_reasons(8), "disk failing")
+        self.assertEqual(smartctl_rc_reasons(32), "error-log entries")
+
+    def test_combined_bits_joined(self):
+        from disk_repository import smartctl_rc_reasons
+
+        # rc=104 = 8+32+64: failing + error log + self-test errors.
+        self.assertEqual(
+            smartctl_rc_reasons(104),
+            "disk failing, error-log entries, self-test errors",
+        )
+
+    def test_unknown_bits_named_by_mask(self):
+        from disk_repository import smartctl_rc_reasons
+
+        # Bit 0x80 is known (log unreadable); 0x100 is beyond the defined
+        # mask and must be named, never hidden.
+        self.assertEqual(
+            smartctl_rc_reasons(0x180),
+            "log unreadable, rc bits 0x100",
+        )
+
+
 class TestDiskRepositorySmart(unittest.TestCase):
     """smartctl health/details return PASSED/FAILED/n/a and never raise."""
 
@@ -219,13 +254,14 @@ class TestDiskRepositorySmart(unittest.TestCase):
             self.assertEqual(repo.smart_health("/dev/sda"), "PASSED")
 
     def test_smart_health_failed(self):
+        """A failing disk exits rc=8 with FAILED! output — verdict still parsed."""
         with mock_subprocess() as m:
             m.set_command_handler(
                 r"smartctl -H",
                 lambda _cmd, **_kw: subprocess.CompletedProcess(
                     args=[],
-                    returncode=0,
-                    stdout="SMART overall-health self-assessment test result: FAILED\n",
+                    returncode=8,
+                    stdout="SMART overall-health self-assessment test result: FAILED!\n",
                 ),
             )
             repo = DiskRepository(sudo=False)
@@ -249,7 +285,35 @@ class TestDiskRepositorySmart(unittest.TestCase):
                 ),
             )
             repo = DiskRepository(sudo=False)
-            self.assertIn("START OF INFORMATION", repo.smart_details("/dev/sda"))
+            details, rc = repo.smart_details("/dev/sda")
+        self.assertIn("START OF INFORMATION", details)
+        self.assertEqual(rc, 0)
+
+    def test_smart_details_flagged_report_returned(self):
+        """rc bit 5 (error-log entries) accompanies a full report — keep it."""
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -a",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(
+                    args=[],
+                    returncode=32,
+                    stdout="=== START OF INFORMATION SECTION ===\nSMART Error Log Version: 1\n",
+                ),
+            )
+            repo = DiskRepository(sudo=False)
+            details, rc = repo.smart_details("/dev/sda")
+        self.assertIn("START OF INFORMATION", details)
+        self.assertEqual(rc, 32)
+
+    def test_smart_details_no_output(self):
+        """rc!=0 with nothing printed is the only true unavailable case."""
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -a",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(args=[], returncode=4, stdout=""),
+            )
+            repo = DiskRepository(sudo=False)
+            self.assertEqual(repo.smart_details("/dev/sda"), ("n/a", 4))
 
     def test_smart_details_missing_binary(self):
         with mock_subprocess() as m:
@@ -258,7 +322,24 @@ class TestDiskRepositorySmart(unittest.TestCase):
                 lambda _cmd, **_kw: (_ for _ in ()).throw(FileNotFoundError("smartctl")),
             )
             repo = DiskRepository(sudo=False)
-            self.assertEqual(repo.smart_details("/dev/sda"), "n/a")
+            self.assertEqual(repo.smart_details("/dev/sda"), ("n/a", None))
+
+    def test_smart_health_and_wear_failing_disk_json(self):
+        """rc=8 with JSON present: health FAILED, not n/a."""
+        import json
+
+        payload = {"smart_status": {"passed": False}}
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -j -H -A",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(
+                    args=[], returncode=8, stdout=json.dumps(payload)
+                ),
+            )
+            repo = DiskRepository(sudo=False)
+            health, wear = repo._smart_health_and_wear("/dev/sda")
+        self.assertEqual(health, "FAILED")
+        self.assertIsNone(wear)
 
 
 class TestDiskRepositorySmartWear(unittest.TestCase):
@@ -326,6 +407,11 @@ class TestDiskRepositorySmartWear(unittest.TestCase):
             "messages": [{"string": "Smartctl open device: /dev/sda failed: Permission denied"}],
         }
         self.assertIsNone(self._wear_with_json(payload, returncode=2))
+
+    def test_wear_parsed_despite_flagged_exit(self):
+        """rc!=0 with real wear JSON still parses (flag bits don't hide data)."""
+        payload = {"nvme_smart_health_information_log": {"percentage_used": 7}}
+        self.assertEqual(self._wear_with_json(payload, returncode=8), 7)
 
     def test_missing_binary_returns_none(self):
         with mock_subprocess() as m:

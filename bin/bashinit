@@ -164,6 +164,23 @@ function with_msg_level {
     return "$rc"
 }
 
+# Log a VERB-level message that stays off the terminal by default — the
+# mirror of with_msg_level for a single message. The per-call assignment
+# applies a WARN floor only when no gate is set, so an explicitly chosen
+# ZFSUTILITIES_MSG_LEVEL always wins (VERB/DEBUG show the message,
+# INFO/WARN/FATAL hide it; an invalid gate is no gate, the implied-NONE
+# law, and shows it). The session log keeps the message either way
+# (log_msg's law), and the GUI log viewers reveal it under the level
+# filter.
+# Usage: log_verb "Created property-manifest dataset" "$mds"
+function log_verb {
+    if [[ -z "${ZFSUTILITIES_MSG_LEVEL:-}" ]]; then
+        ZFSUTILITIES_MSG_LEVEL=WARN log_msg "VERB: $*"
+    else
+        log_msg "VERB: $*"
+    fi
+}
+
 # Logging function with automatic prefix.
 # Usage:
 # log_msg "This is a message"

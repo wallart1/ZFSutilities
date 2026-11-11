@@ -49,6 +49,44 @@ class DiskInventory:
 # Group 1: the result word, e.g. PASSED or FAILED.
 _SMART_HEALTH_RE = re.compile(r"^\s*SMART overall-health self-assessment test result:\s*(\S+).*$")
 
+# smartctl exit-status bits (smartctl(8), EXIT STATUS). Nonzero does not mean
+# "no report": bits 3-7 accompany a report that flags problems, so callers
+# gate on output presence and use the exit status only to explain it.
+_SMARTCTL_RC_BITS = (
+    (1, "command line error"),
+    (2, "device open failed"),
+    (4, "SMART command failed"),
+    (8, "disk failing"),
+    (16, "prefail attribute"),
+    (32, "error-log entries"),
+    (64, "self-test errors"),
+    (128, "log unreadable"),
+)
+
+
+def smartctl_rc_reasons(rc):
+    """Return the smartctl exit-status meanings of *rc* as a short phrase.
+
+    Unknown bits are named by mask value so the phrase never hides
+    information; rc 0 or None yields an empty string.
+    """
+    if not isinstance(rc, int) or rc == 0:
+        return ""
+    reasons = []
+    known = 0
+    for bit, text in _SMARTCTL_RC_BITS:
+        if rc & bit:
+            reasons.append(text)
+        known |= bit
+    # No & 0xFF here: every defined bit lives in the low byte, so masking
+    # would make this branch unreachable — a value above 0xFF (not a real
+    # smartctl exit code) is exactly the unknown the docstring names.
+    unknown = rc & ~known
+    if unknown:
+        reasons.append(f"rc bits {unknown:#04x}")
+    return ", ".join(reasons)
+
+
 # SMART attributes whose raw value is already a used-percentage, versus
 # normalized remaining-life attributes that must be inverted (100 - value).
 _WEAR_RAW_ATTRIBUTES = {"percent_lifetime_used"}
@@ -522,7 +560,12 @@ class DiskRepository:
         return by_id
 
     def smart_health(self, path: str) -> str:
-        """Return SMART health for *path* as PASSED, FAILED, or n/a."""
+        """Return SMART health for *path* as PASSED, FAILED, or n/a.
+
+        Stdout is parsed even when smartctl exits nonzero: the failing-disk
+        exit bit (8) accompanies exactly the FAILED! output it names, so
+        gating on the exit code would hide a failing disk's verdict.
+        """
         if not path:
             return "n/a"
         cmd = self._prefix([self.smartctl_bin, "-H", path])
@@ -530,12 +573,12 @@ class DiskRepository:
             result = self._run(cmd, check=False)
         except (FileNotFoundError, OSError):
             return "n/a"
-        if result.returncode != 0:
-            return "n/a"
         for line in result.stdout.splitlines():
             match = _SMART_HEALTH_RE.match(line)
             if match:
-                result_word = match.group(1).upper()
+                # ATA failing output ends in "FAILED!" — the bang is punctuation,
+                # not part of the verdict.
+                result_word = match.group(1).rstrip("!").upper()
                 if result_word == "PASSED":
                     return "PASSED"
                 if result_word == "FAILED":
@@ -543,18 +586,23 @@ class DiskRepository:
                 return result_word
         return "n/a"
 
-    def smart_details(self, path: str) -> str:
-        """Return raw `smartctl -a` output for *path*, or n/a if unavailable."""
+    def smart_details(self, path: str) -> tuple[str, int | None]:
+        """Return (report, rc) from `smartctl -a` for *path*.
+
+        The report is returned whenever smartctl printed one — a nonzero
+        exit often means the report *flags problems* (failing health,
+        error-log entries), which is exactly the report to show. The report
+        is "n/a" only when nothing was printed; rc is the smartctl exit
+        status, or None when smartctl could not run at all.
+        """
         if not path:
-            return "n/a"
+            return "n/a", None
         cmd = self._prefix([self.smartctl_bin, "-a", path])
         try:
             result = self._run(cmd, check=False)
         except (FileNotFoundError, OSError):
-            return "n/a"
-        if result.returncode != 0:
-            return "n/a"
-        return result.stdout or "n/a"
+            return "n/a", None
+        return result.stdout or "n/a", result.returncode
 
     def smart_wear(self, path: str) -> int | None:
         """Return SSD/NVMe wear percentage (0-100) for *path*, or None.
@@ -570,7 +618,7 @@ class DiskRepository:
             result = self._run(cmd, check=False)
         except (FileNotFoundError, OSError):
             return None
-        if result.returncode != 0 or not result.stdout:
+        if not result.stdout:
             return None
         try:
             data = json.loads(result.stdout)
@@ -579,13 +627,18 @@ class DiskRepository:
         return _parse_smart_wear(data)
 
     def _smart_health_and_wear(self, path: str) -> tuple[str, int | None]:
-        """One `smartctl -j -H -A` call returning (health, wear_percent)."""
+        """One `smartctl -j -H -A` call returning (health, wear_percent).
+
+        The JSON is parsed even when smartctl exits nonzero: a failing disk
+        (exit bit 8) reports smart_status.passed=false, and hiding that
+        behind the exit code would show n/a for a failing disk.
+        """
         cmd = self._prefix([self.smartctl_bin, "-j", "-H", "-A", path])
         try:
             result = self._run(cmd, check=False)
         except (FileNotFoundError, OSError):
             return "n/a", None
-        if result.returncode != 0 or not result.stdout:
+        if not result.stdout:
             return "n/a", None
         try:
             data = json.loads(result.stdout)

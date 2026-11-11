@@ -182,12 +182,8 @@ def create_datasets_page(app):
     # the 20-row cap); leftover page space stays blank below.
     box.pack_start(scrolled, False, False, 0)
 
-    # Summary row: dataset count on the left, color legend on the right
+    # Legend row: color legend on the right
     summary_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    app.datasets_summary_label = Gtk.Label()
-    app.datasets_summary_label.set_halign(Gtk.Align.START)
-    summary_row.pack_start(app.datasets_summary_label, False, False, 0)
-
     app.datasets_legend_label = Gtk.Label()
     app.datasets_legend_label.set_markup(
         f"<small><i><span foreground='{UNMOUNTED_FG}'>Teal text</span>"
@@ -299,8 +295,6 @@ def refresh_datasets_page(app, pool_filter=None):
         app.datasets_store.append(
             ds_iter, ["(loading...)", "", "", "", "", "", "", True, False, None]
         )
-
-    app.datasets_summary_label.set_text(f"{len(pools_to_show)} datasets")
 
     # Restore expanded rows, loading children as we go
     restore_expanded_rows(app.datasets_store, app.datasets_view, expanded)

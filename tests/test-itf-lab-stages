@@ -65,6 +65,7 @@ test_test_pools_success_path() {
             return 0
         }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { _calls+="artifact:$1 "; return 0; }
         itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
         echo "$?" > "$work/rc"
@@ -95,6 +96,7 @@ test_test_pools_recipe_content() {
         itf_guest_put() { return 0; }
         itf_guest_snapshot() { return 0; }
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
     ) > /dev/null 2>&1
@@ -124,6 +126,7 @@ test_test_pools_attach_failure_fails_stage() {
         itf_guest_put() { return 0; }
         itf_guest_snapshot() { _calls+="snap "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
         echo "$?" > "$work/rc"
@@ -156,6 +159,7 @@ test_test_pools_guest_script_failure_fails_stage() {
         itf_guest_put() { return 0; }
         itf_guest_snapshot() { _calls+="snap "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
         echo "$?" > "$work/rc"
@@ -191,6 +195,7 @@ test_test_pools_dry_run_emits_guarded_attach() {
         itf_guest_put() { return 0; }
         itf_guest_snapshot() { return 0; }
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         ITF_DRY_RUN=1 itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
         echo "$?" > "$work/rc"
@@ -274,6 +279,7 @@ test_stage_os_distro_selects_renderer() {
         # shellcheck disable=SC1090
         source "$ITF_COMMON"
         itf_step() { :; }
+        itf_step_start() { :; }
         itf_artifact() { :; }
         _rendered=""
         itf_preseed_render() { _rendered="preseed:$1"; return 0; }
@@ -345,6 +351,7 @@ test_vmos_stamp_short_circuit() {
         _calls=""
         itf_qm() { _calls+="qm "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_vmos_stamp_want > "$ITF_CACHE_DIR/itf-vmos.stamp"
         itf_vmos_build
         echo "$?" > "$work/rc"
@@ -483,6 +490,7 @@ test_vmos_build_orchestration() {
         itf_guest_destroy() { _calls+="destroy:$2 "; return 0; }
         itf_vmos_wait_guest_ping() { _calls+="ping "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_vmos_build --disk-gb 4
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -535,6 +543,7 @@ test_vm_boot_with_agent_gates_on_ping() {
         }
         itf_vm_wait_agent() { _calls+="wait:$1:$2 "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_vm_boot_with_agent 10.2.2.2 101
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -575,6 +584,7 @@ test_vm_workload_helpers_use_agent_channel() {
             return 0
         }
         itf_step() { _calls+="step:$1 "; return 0; }
+        itf_step_start() { :; }
         itf_vm_workload_start 10.2.2.2 101
         itf_vm_workload_sample 10.2.2.2 101 > "$work/sample"
         itf_vm_workload_checksum 10.2.2.2 101 > "$work/cksum"
@@ -662,6 +672,7 @@ test_reboot_stage_in_guest_with_kept_ip() {
         itf_guest_stop() { _calls+="stop "; return 0; }
         itf_guest_start() { _calls+="start "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_reboot_guest j99 storage --timeout 60
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -703,6 +714,7 @@ test_reboot_stage_rediscovery_rewrites_record() {
         itf_guest_stop() { return 0; }
         itf_guest_start() { return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_reboot_guest j99 storage --timeout 5
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -735,6 +747,7 @@ test_reboot_stage_power_uses_guarded_verbs() {
         itf_guest_stop() { _calls+="stop:$1:$2 "; return 0; }
         itf_guest_start() { _calls+="start:$1:$2 "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_reboot_guest j99 storage --power --timeout 5
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -770,6 +783,7 @@ test_reboot_begin_returns_before_wait() {
         itf_guest_stop() { _calls+="stop "; return 0; }
         itf_guest_start() { _calls+="start "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_reboot_guest_begin j99 storage
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -799,6 +813,7 @@ test_reboot_wait_power_mode_starts_guest() {
         itf_guest_stop() { _calls+="stop "; return 0; }
         itf_guest_start() { _calls+="start:$2 "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_reboot_guest_begin j99 storage --power
         b_rc=$?
         itf_reboot_guest_wait j99 storage --timeout 5
@@ -824,6 +839,7 @@ test_reboot_stage_fails_without_record() {
         # shellcheck disable=SC1090
         source "$ITF_COMMON"
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_reboot_guest j99 storage
         echo "$?" > "$work/rc"
     ) > /dev/null 2>&1
@@ -865,6 +881,7 @@ test_keystore_provision_shapes() {
         itf_guest_put() { return 0; }
         itf_guest_snapshot() { _calls+="snap:$3 "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_keystore_provision base.invalid 8005 10.4.4.4
         echo "$?" > "$work/rc"
@@ -906,6 +923,7 @@ test_keystore_insert_remove_by_volid() {
         _calls=""
         itf_qm() { _calls+="qm:$2:$3:$4:$5 "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_keystore_insert base.invalid 8005
         itf_keystore_remove base.invalid 8005
         echo "$?" > "$work/rc"
@@ -930,6 +948,7 @@ test_keystore_unlock_mount_feeds_stdin() {
         itf_guest_exec() { _calls+="exec:[$2] "; return 0; }
         itf_guest_exec_feed() { _feeds+="$3 | "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_keystore_unlock_mount 10.4.4.4
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -989,6 +1008,7 @@ test_encrypted_key_lun_stage_happy_path() {
         itf_guest_put() { return 0; }
         itf_guest_snapshot() { _calls+="snap:$3 "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_journey_stage_encrypted_key_lun j99 base.invalid 8005 10.4.4.4 10.5.5.5
         echo "$?" > "$work/rc"
@@ -1027,6 +1047,7 @@ test_encrypted_key_lun_gates_on_config() {
         source "$ITF_COMMON"
         _calls=""
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_qm() { return 0; }
         itf_guest_exec() { return 0; }
         itf_guest_exec_feed() { return 0; }
@@ -1054,6 +1075,7 @@ test_j05_encrypted_flag_contract() {
         # shellcheck disable=SC1090
         source "$j05"
         itf_step() { return 0; }
+        itf_step_start() { :; }
         j05_two_node_lab_main --bogus-flag
         echo "$?"
     ) > "$work/j05-rc" 2>"$work/j05-err"
@@ -1079,6 +1101,7 @@ test_j05_same_ip_collision_convergence() {
         # shellcheck disable=SC1090
         source "$j05"
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_qm() {
             echo "qm $*" >> "$work/calls"
             return 0
@@ -1108,6 +1131,7 @@ test_j05_same_ip_collision_convergence() {
         # shellcheck disable=SC1090
         source "$j05"
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_qm() { return 0; }
         itf_guest_ip() { echo "10.0.0.154"; }
         itf_wait_ssh() { return 0; }
@@ -1123,6 +1147,7 @@ test_j05_same_ip_collision_convergence() {
         # shellcheck disable=SC1090
         source "$j05"
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_qm() { return 0; }
         itf_guest_ip() { echo "10.0.0.77"; }
         itf_wait_ssh() { return 1; }
@@ -1196,6 +1221,7 @@ test_upgrade_relabel_stage_rewrites_release() {
         itf_dev_ip() { echo "10.9.9.9"; }
         curl() { return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_journey_stage_upgrade_relabel 10.1.1.1
         echo "$?" > "$work/rc"
@@ -1242,6 +1268,7 @@ test_upgrade_relabel_stage_fails_without_staging() {
         itf_guest_exec() { case "$2" in *readlink*) echo "0.139.0";; esac; return 0; }
         itf_dev_ip() { echo "10.9.9.9"; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_upgrade_relabel 10.1.1.1
         echo "$?" > "$work/rc"
         printf '%s' "$_calls" > "$work/calls"
@@ -1269,6 +1296,7 @@ test_upgrade_env_relabel_mode_gates() {
         itf_guest_exec() { case "$2" in *readlink*) echo "0.118.0";; esac; return 0; }
         itf_journey_stage_download() { _calls+="download "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_upgrade_env j99 --guest-ip 10.1.1.1 --relabel
         echo "$?" > "$work/rc-mismatch"
         printf '%s' "$_calls" > "$work/calls-mismatch"
@@ -1292,6 +1320,7 @@ test_upgrade_env_relabel_mode_gates() {
         itf_guest_exec() { case "$2" in *readlink*) echo "$repo_version";; esac; return 0; }
         itf_journey_stage_download() { _calls+="download "; return 1; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_upgrade_env j99 --guest-ip 10.1.1.1 --relabel
         echo "$?" > "$work/rc-equal"
         printf '%s' "$_calls" > "$work/calls-equal"
@@ -1308,6 +1337,7 @@ test_upgrade_env_relabel_mode_gates() {
         _calls=""
         itf_guest_exec() { return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_upgrade_env j99 --guest-ip 10.1.1.1 --relabel
         echo "$?" > "$work/rc-release"
         printf '%s' "$_calls" > "$work/calls-release"
@@ -1344,6 +1374,7 @@ test_two_node_mods_stage_shapes() {
             return 0
         }
         itf_step() { _calls+="step:$1:$2 "; _details+="$* "; return 0; }
+        itf_step_start() { :; }
         itf_journey_stage_two_node_mods j99 10.1.1.1 10.2.2.2 0.139.0
         echo "$?" > "$work/rc"
         printf '%s' "$J_MOD_STORAGE_HASH" > "$work/hash-s"
@@ -1425,6 +1456,7 @@ test_lun_marker_helpers_shapes() {
             return "$_exec_rc"
         }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_lun_marker_write 10.2.2.2 101 scsi1 j99
         echo "$?" > "$work/rc-write"
         itf_lun_marker_verify 10.2.2.2 101 scsi1 j99
@@ -1625,6 +1657,7 @@ test_storage_boot_state_captures() {
             return 0
         }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { _calls+="artifact:$1 "; return 0; }
         itf_storage_boot_state 10.4.4.4 s-label
         echo "$?" > "$work/rc"
@@ -1667,6 +1700,7 @@ test_keystore_unlock_mount_wrong_rejects() {
             return 2
         }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_keystore_unlock_mount_wrong 10.4.4.4
         echo "$?" > "$work/rc"
@@ -1714,6 +1748,7 @@ test_storage_load_keys_modes() {
             return 0
         }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         # -a mode: the -a run's rc is not the gate; keystatus is.
         itf_storage_load_keys 10.4.4.4
@@ -1749,6 +1784,7 @@ test_key_ceremony_modes() {
         itf_storage_load_keys() { _calls+="loadkeys "; return 0; }
         itf_guest_exec() { _calls+="run:[$2] "; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_key_ceremony lbl base.invalid 8005 10.4.4.4 recover
         echo "$?" > "$work/rc-rec"
@@ -1841,6 +1877,7 @@ test_fence_tick_shape() {
             return 0
         }
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_fence_tick 10.5.5.5 lbl
         echo "$?" > "$work/rc"
@@ -1866,6 +1903,7 @@ test_compute_fallout_sample_shape() {
         _cmds=""
         itf_guest_exec() { _cmds+="$2"; return 0; }
         itf_step() { return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_compute_fallout_sample 10.5.5.5 lbl 101 202
         echo "$?" > "$work/rc"
@@ -1919,6 +1957,7 @@ test_boot_workload_lab_orchestration() {
         itf_vm_workload_sample() { printf '1700000000\n1700000001\n'; return 0; }
         itf_vm_workload_checksum() { echo "4294967295 42 /workload.log"; return 0; }
         itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
         itf_artifact() { return 0; }
         itf_journey_stage_boot_workload_lab j99 base.invalid 8005 10.4.4.4 10.5.5.5
         echo "$?" > "$work/rc"

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -229,6 +230,31 @@ class TestStaleLockUnverifiableScript(unittest.TestCase):
             zlm.release(lock_id)
 
 
+def _wait_holder_execed(pid, script="sleep", timeout=5.0):
+    """Block until /proc/<pid>/cmdline shows *script* (the exec completed).
+
+    Between fork and exec the child's cmdline still shows the PARENT's argv
+    (the pytest worker). zlm's stale-lock detection reads that argv, finds
+    the recorded script absent from a non-empty cmdline, and reaps the
+    fabricated lock — the acquire() below then succeeds instead of raising,
+    the xdist flake this wait removes (the window widens under full-suite
+    load). Real holders never hit this: a process records its own script
+    only after it is running that script.
+    """
+    deadline = time.monotonic() + timeout
+    path = f"/proc/{pid}/cmdline"
+    while time.monotonic() < deadline:
+        try:
+            with open(path, "rb") as f:
+                cmdline = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            cmdline = ""
+        if script in cmdline:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"holder pid {pid} never showed {script!r} in its cmdline")
+
+
 class TestLocalConflictDetails(unittest.TestCase):
     """A local conflict error must name the blocking holder(s)."""
 
@@ -257,6 +283,7 @@ class TestLocalConflictDetails(unittest.TestCase):
         # A live holder whose script appears in its cmdline, so stale
         # cleanup keeps the fabricated lock in place.
         holder = subprocess.Popen(["sleep", "60"])
+        _wait_holder_execed(holder.pid)
         # Cleanups run LIFO: wait must be registered first so terminate
         # fires before it — the reverse order waits out the holder's full
         # natural lifetime (60s per test).
@@ -288,6 +315,7 @@ class TestLocalConflictDetails(unittest.TestCase):
     def test_local_conflict_message_names_every_holder(self):
         holders = [subprocess.Popen(["sleep", "60"]) for _ in range(2)]
         for proc in holders:
+            _wait_holder_execed(proc.pid)
             # LIFO cleanups: wait registered before terminate (see above).
             self.addCleanup(proc.wait)
             self.addCleanup(proc.terminate)

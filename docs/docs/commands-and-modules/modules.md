@@ -73,6 +73,7 @@ rootcheck
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `bashinit`               | Sets `$mydir` to the caller's directory and auto-creates a session log for CLI scripts                                                                                                     |
 | `log_msg`                | Logs messages with `file:line:` prefix to stderr and to the session log; a set `ZFSUTILITIES_MSG_LEVEL` gate can hold a message off the terminal ([gate](../developer-guide/architecture.md#terminal-message-level-gate)) |
+| `log_verb`               | Logs one `VERB:`-level message that stays off the terminal by default (the session log keeps it); an explicitly set gate always wins — the single-message mirror of `with_msg_level`        |
 | `msg_prefix`             | Emits the same `file:line:` prefix without the message body                                                                                                                                |
 | `calledbybash`           | Returns true when the current file was executed directly (not sourced)                                                                                                                      |
 | `snapname_timestamp`     | Renders the canonical snapshot-name timestamp — UTC with a literal `Z` suffix (`2026-10-07T01:46Z`); optional epoch argument selects a specific instant (deterministic across zones)       |

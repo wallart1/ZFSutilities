@@ -44,6 +44,7 @@ journey_main() {
 
     local e2e_log
     e2e_log="$ITF_RUN_DIR/guest-payload-e2e.log"
+    itf_step_start "payload e2e matrix" "guest-side driver, full scenario set"
     if itf_guest_exec "$guest_ip" \
             'cd /root/ZFSutilities && python3 tests/integrated/e2e/payload-e2e-driver.py' \
             > "$e2e_log" 2>&1; then

@@ -104,6 +104,11 @@ itf_guest_create() {
         return 2
     fi
 
+    # Live-report only inside a run; stdout stays clean — callers
+    # capture the vmid.
+    [[ -n "${ITF_RUN_DIR:-}" ]] \
+        && itf_step_start "guest create" "$name (vmid $vmid)" > /dev/null
+
     local -a qargs=(
         create "$vmid"
         --name "$name"
@@ -163,6 +168,11 @@ itf_guest_clone() {
     shift
     local base="${ITF_BASE_HOSTS[0]}" template="${ITF_TEMPLATE_NAME:-}" vmid="" mem="" cores=""
     local key
+
+    # Live-report only inside a run (also serves `itf guest clone`);
+    # stdout stays clean — callers capture the vmid.
+    [[ -n "${ITF_RUN_DIR:-}" ]] \
+        && itf_step_start "template clone" "$name from $template (full clone)" > /dev/null
 
     while (( $# > 0 )); do
         key="$1"
@@ -548,6 +558,10 @@ itf_guest_rollback() {
 # works from the first boot after install.
 itf_guest_ip() {
     local base="$1" vmid="$2" timeout="${3:-300}"
+    # Live-report only inside a run; stdout stays clean — callers
+    # capture the discovered address.
+    [[ -n "${ITF_RUN_DIR:-}" ]] \
+        && itf_step_start "guest IP discovery" "vmid $vmid — up to ${timeout}s" > /dev/null
     local deadline=$(( SECONDS + timeout )) ip out
     while (( SECONDS < deadline )); do
         out="$(itf_qm "$base" guest cmd "$vmid" network-get-interfaces 2>/dev/null)" || true
@@ -616,6 +630,8 @@ itf_iso_fetch() {
         echo "itf: ISO already cached: $dest"
         return 0
     fi
+    [[ -n "${ITF_RUN_DIR:-}" ]] \
+        && itf_step_start "ISO download" "$name ($(basename "$url"))" > /dev/null
     echo "itf: fetching $url"
     curl -fL --retry 3 --progress-bar -o "$dest" "$url" || {
         rm -f "$dest"
@@ -649,6 +665,8 @@ itf_iso_upload() {
         return 1
     fi
     local tmp="/tmp/itf-iso-upload-$$"
+    [[ -n "${ITF_RUN_DIR:-}" ]] \
+        && itf_step_start "ISO upload" "$name -> $base" > /dev/null
     if ! itf_base_put "$base" "$src" "$tmp"; then
         itf_base_exec "$base" "rm -f $(printf '%q' "$tmp")" || true
         return 1
@@ -697,6 +715,8 @@ itf_iso_customize() {
         echo "itf: pristine ISO not cached — run itf_iso_fetch first" >&2
         return 1
     }
+    [[ -n "${ITF_RUN_DIR:-}" ]] \
+        && itf_step_start "boot ISO build" "$name (extract + isolinux append + repack)" > /dev/null
 
     local tree="$ITF_CACHE_DIR/iso-tree"
     rm -rf "$tree"
@@ -1011,6 +1031,8 @@ itf_pve_iso_customize() {
             echo "itf: PVE ISO not cached — run 'itf iso fetch pve' first" >&2
             return 1
         }
+        [[ -n "${ITF_RUN_DIR:-}" ]] \
+            && itf_step_start "PVE boot ISO build" "$name (answers embedded, repack)" > /dev/null
 
         local tree="$ITF_CACHE_DIR/pve-iso-tree"
         rm -rf "$tree"
@@ -1105,6 +1127,8 @@ itf_ubuntu_boot_setup() {
     if [[ ! -s "$bootdir/vmlinuz" || ! -s "$bootdir/initrd" ]]; then
         rm -rf "$bootdir"
         mkdir -p "$bootdir" || return 1
+        [[ -n "${ITF_RUN_DIR:-}" ]] \
+            && itf_step_start "casper kernel extract" "vmlinuz + initrd from the Ubuntu ISO" > /dev/null
         if ! 7z e -y -o"$bootdir" "$ITF_CACHE_DIR/$ITF_UBUNTU_ISO_NAME" \
                 casper/vmlinuz casper/initrd > /dev/null 2>&1; then
             rm -rf "$bootdir"

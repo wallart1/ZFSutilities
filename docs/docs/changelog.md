@@ -1,5 +1,131 @@
 # Changelog
 
+## 0.141.0
+
+*Released 2026-11-11*
+
+### Added
+
+- **ITF live run reports.** Every `report.md` line now carries a UTC
+  timestamp, and long activities — a guest install, a serial-console
+  watch, a poll loop, an upgrade run — open with a `**START**` line the
+  moment they begin. A journey watched mid-flight now shows what is
+  running right now, not just what already finished. START lines are
+  annotations only: they never land in `steps.tsv` and never move the
+  pass/fail counters, so `itf watch` and the guest-sweep verdict keep
+  their one-row-per-completed-step contract. Helper live-reports only
+  inside a run and keep stdout clean for callers that capture a VMID or
+  an address.
+- **`log_verb` (bashinit).** The single-message mirror of
+  `with_msg_level`: a `VERB:`-level detail that stays off the terminal
+  by default while the session log keeps it. An explicitly chosen
+  `ZFSUTILITIES_MSG_LEVEL` always wins — `VERB`/`DEBUG` reveal the
+  message, `INFO`/`WARN`/`FATAL` hide it, and an unset or invalid gate
+  never gates.
+- **`smartctl_rc_reasons` (disk_repository).** Decodes smartctl's
+  exit-status bitmask into its set bits ("disk failing, error-log
+  entries"); unknown bits are named by mask value so the phrase never
+  hides information. The GUI's SMART Details warnings use it to say
+  *why* smartctl flagged a disk or produced no report.
+
+### Fixed
+
+- **Failing disks no longer masquerade as `n/a`.** smartctl's exit
+  status is a bitmask, and the bits that matter most — failing health,
+  prefail attributes, error-log entries, self-test errors — accompany a
+  *full report*. The old `rc != 0 → n/a` gates threw away exactly those
+  reports: a failing disk showed blank health and an empty details
+  dump. Health, wear, and details are now parsed whenever smartctl
+  printed output; the `FAILED!` verdict's trailing bang is treated as
+  punctuation. In the GUI, a WARN naming the flags precedes the dump of
+  a flagged report, and a missing report produces a WARN that names the
+  exit reason (`device open failed`, `SMART command failed`) instead of
+  a bare "unavailable".
+- **Squeezed charts after window resize.** `tight_layout` margins are
+  figure-fraction coordinates solved at one canvas size, and the GTK3
+  canvas resizes its figure on every `size-allocate` — so a layout
+  solved before mapping scaled into dead bands above, below, and left
+  of a squeezed plot. Both matplotlib renderers (the Performance
+  rolling chart and the blocksize ladder) re-solve the layout when the
+  allocation size changes, deduped on the last-seen size: re-solves
+  happen only on reallocation, never per draw
+  (`constrained_layout` stays banned).
+- **Prerequisite remediation survives kernel upgrades.** A missing
+  `zfs-kernel-module` now remediates with the architecture headers
+  *meta* package (`linux-headers-amd64`) instead of the running
+  kernel's concrete headers. The meta tracks every future kernel, so a
+  routine `apt full-upgrade` lands the new kernel's headers and
+  `zfs-dkms` rebuilds the module unattended — proven live on the ITF
+  storage template, where a 6.12.111 → 6.12.116 upgrade had rebooted
+  with "Module zfs not found".
+- **zlm test flake under xdist.** The conflict-message tests fabricated
+  a lock held by a freshly spawned `sleep`, but between fork and exec
+  the child's `/proc/<pid>/cmdline` still shows the pytest worker's
+  argv — stale-lock detection read that argv, reaped the fabricated
+  lock, and the expected conflict error never raised. The tests now
+  wait for the holder's exec to complete before fabricating the lock
+  (the product behavior is correct: a real holder records its own
+  script only once it is running that script).
+
+### Changed
+
+- **Orphaned-zvol notices in `archive-vm` demoted to gated `VERB`.** An
+  orphan at `<pool>/proxmox/vm-<vmid>-disk-<n>` that the VM config does
+  not reference is advisory — the run proceeds and the orphan is
+  neither archived nor touched. The notice now stays off the terminal
+  (session log keeps it; `ZFSUTILITIES_MSG_LEVEL=VERB` reveals it)
+  instead of training operators to ignore warnings.
+- **Lock-abort wording in `zfs-send-receive`.** "Backup operation
+  aborted by user due to lock conflict" lost "by user": the abort is
+  not necessarily a human choice — holder-name resolution can abort a
+  run unattended.
+- **Datasets page count label removed.** The "N datasets" summary label
+  is gone; the summary row keeps only the unmounted-dataset color
+  legend. The tree itself carries the count.
+- **`smart_details` returns `(report, rc)`.** The Python repository
+  method now returns the smartctl exit status alongside the report
+  (`rc` is `None` when smartctl could not run at all), so callers can
+  explain a report instead of guessing at it.
+
+### Tests
+
+- Direct unit tests for `smartctl_rc_reasons` (bit combos, the
+  unknown-bits mask, `0`/`None`); the unknown-bits test exposed and
+  fixed dead code — a `& 0xFF` mask made the documented branch
+  unreachable.
+- ITF report suite covers START lines (report.md-only, no counter
+  movement, refused before `itf_report_init`) and UTC-stamped step and
+  ARTIFACT lines; driver/lab-stage stubs gained `itf_step_start`.
+- archive-vm suite: orphan notices asserted hidden by default and shown
+  under `ZFSUTILITIES_MSG_LEVEL=VERB` in both single-node and two-node
+  runs, plus a fence that the enclosure resolver's VERB chatter never
+  reaches the terminal (gate-faithful fake).
+- Charting suite: resize re-layout asserted for the rolling chart, the
+  filled ladder (deduped, pre-map 1×1 ignored), and the empty
+  placeholder; the blocksize-ladder spike fills after window map and
+  fences the axes margins against the squeezed-ladder defect.
+- ITF ledger maintenance with the 0.140.0 release: FINDINGS pruned
+  F-048/F-049 (F-047 the only open row), repair-plans 026/027 removed,
+  R-08 closed with 0.138.0, and requirement R-10 opened for the
+  compute-host GUI coverage gap.
+
+### Documentation
+
+- Installation guide: create **root's** SSH key for the two-node link
+  (`sudo ssh-keygen` / `sudo ssh-copy-id`) — the tooling runs as root,
+  so the copied key must be root's.
+- `log_verb` documented in the bashinit module table and the
+  architecture gate section; `smart_details`'s tuple return and the
+  smartctl exit-bit law in the Python module reference; a glossary
+  entry for smartctl exit-status bits.
+- ITF docs: START lines and timestamps in the README and the developer
+  guide; the roadmap row for GUI automation and the OS matrix aligned
+  with the standing parked policy; the coverage map points at R-10.
+- GTK GUI guide: the Migrate Pool section restructured into scannable
+  subsections; SMART Details documents the flags-WARN behavior.
+- Messages catalog: the orphan-zvol VERB row, the lock-abort wording,
+  and the two SMART Details WARN shapes.
+
 ## 0.140.0
 
 *Released 2026-11-10*

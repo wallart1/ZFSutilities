@@ -173,6 +173,7 @@ echo kill-done
 EOF
     itf_guest_put "$s_ip" "$runner" /root/itf-j17-kill.sh > /dev/null 2>&1 \
         || return 1
+    itf_step_start "kill run ($stem)" "product run to its marker, then SIGTERM"
     itf_guest_exec "$s_ip" "bash /root/itf-j17-kill.sh" \
         > "$ITF_RUN_DIR/kill-${stem}.log" 2>&1
     local rc=$?
@@ -474,6 +475,7 @@ j17_iscsi_interrupted_ops_main() {
         rfeed="$ITF_RUN_DIR/m2-answer.txt"
         printf '%s\n' "$ans" > "$rfeed"
         log="$ITF_RUN_DIR/m2-abort-rc.log"
+        itf_step_start "reconcile-iscsi-state run" "planned LUN changes"
         itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
             > "$log" 2>&1
         rc=$?
@@ -507,6 +509,7 @@ j17_iscsi_interrupted_ops_main() {
     rfeed="$ITF_RUN_DIR/m2-apply-answers.txt"
     printf 'Y\n' > "$rfeed"
     log="$ITF_RUN_DIR/m2-apply.log"
+    itf_step_start "reconcile-iscsi-state run" "planned LUN changes"
     itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
         > "$log" 2>&1
     rc=$?
@@ -848,6 +851,7 @@ j17_iscsi_interrupted_ops_main() {
     rfeed="$ITF_RUN_DIR/s10-reconcile-answers.txt"
     printf 'y\n' > "$rfeed"
     log="$ITF_RUN_DIR/s10-reconcile.log"
+    itf_step_start "reconcile-iscsi-state run" "planned LUN changes"
     itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
         > "$log" 2>&1
     rc=$?
@@ -871,6 +875,7 @@ j17_iscsi_interrupted_ops_main() {
 
     # Idempotence: nothing left to do.
     log="$ITF_RUN_DIR/s10-idempotent.log"
+    itf_step_start "reconcile-iscsi-state run" "third run (idempotence check)"
     itf_guest_exec "$s_ip" "bash -lc 'reconcile-iscsi-state'" \
         > "$log" 2>&1
     rc=$?
@@ -976,6 +981,7 @@ j17_iscsi_interrupted_ops_main() {
     rfeed="$ITF_RUN_DIR/s14-reconcile-answers.txt"
     printf 'y\n' > "$rfeed"
     log="$ITF_RUN_DIR/s14-reconcile.log"
+    itf_step_start "reconcile-iscsi-state run" "planned LUN changes"
     itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
         > "$log" 2>&1
     rc=$?
@@ -1050,6 +1056,7 @@ j17_iscsi_interrupted_ops_main() {
     rfeed="$ITF_RUN_DIR/s14-rebuild-answers.txt"
     printf 'y\n' > "$rfeed"
     log="$ITF_RUN_DIR/s14-rebuild.log"
+    itf_step_start "reconcile-iscsi-state run" "planned LUN changes"
     itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
         > "$log" 2>&1
     rc=$?
@@ -1138,6 +1145,7 @@ echo s12-done
 EOF
     itf_guest_put "$s_ip" "$stem" /root/itf-j17-s12.sh > /dev/null 2>&1
     log="$ITF_RUN_DIR/s12-concurrent.log"
+    itf_step_start "concurrent reconcile + restore [s12]" "backgrounded pair via wrapper"
     itf_guest_exec "$s_ip" "bash /root/itf-j17-s12.sh" > "$log" 2>&1
     rc=$?
     itf_artifact "s12-concurrent" "$log"
@@ -1218,6 +1226,7 @@ reconcile-iscsi-state (pid"* ]] \
     rfeed="$ITF_RUN_DIR/s12-converge-answers.txt"
     printf 'y\n' > "$rfeed"
     log="$ITF_RUN_DIR/s12-converge.log"
+    itf_step_start "reconcile-iscsi-state run" "planned LUN changes"
     itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
         > "$log" 2>&1
     rc=$?

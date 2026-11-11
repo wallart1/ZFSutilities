@@ -70,6 +70,18 @@ canvas.draw_idle()
   re-solves the layout on every draw and tripled the steady-state redraw
   cost in the spike (~150 ms vs ~50 ms at 560×420). Call
   `fig.tight_layout()` once at build time instead.
+- **A one-shot `tight_layout` must be re-run when the canvas size
+  changes.** `tight_layout` stores the axes margins as figure-fraction
+  coordinates, solved at the canvas size of the moment — and the GTK3
+  canvas resizes its figure on every `size-allocate` (pre-map 1×1, then
+  the empty-height allocation, then the content height once data
+  arrives). Left as a one-shot, margins solved at a stale size scale up
+  proportionally: the ladder rendered with hundreds of pixels of dead
+  space above, below, and left of a squeezed plot. Both matplotlib
+  renderers therefore re-run `fig.tight_layout(pad=0.4)` from their
+  `size-allocate` handler, deduped on the last-seen allocation size —
+  re-solves happen only on reallocation (user-paced window resizing),
+  never per draw.
 - **Import matplotlib lazily**, never at module level in a GUI module.
   The test suites import every `gi`-importing module under the
   `mock_gtk()` fake (see [Testing](testing.md)), where real GTK — and
@@ -159,13 +171,19 @@ The matplotlib ladder rebuilds its axes on every Alignment-view refresh
 cadence) and re-requests the widget height from the shared row geometry
 only when the row set changes — a refresh with the same pools and rungs
 re-draws at the same height, preserving the page's scroll stability.
+Its axes layout is re-solved when the row set changes and again whenever
+the canvas allocation size changes (the gotcha above: the ladder's long
+row labels make the stale-margin scaling the most visible of any chart —
+dead bands above, below, and left of a squeezed plot).
 The embed, refresh path, and both renderers' output were verified in
 one realized window by `spikes/blocksize_ladder_spike.py` (run like the
 first spike, headless under `NO_AT_BRIDGE=1 xvfb-run -a`): factory
-selection, non-blank renders from identical data, and a screenshot
-written next to the spike for visual review; the realized-window check
-(`test_alignment_realized`) additionally drives the ladder through the
-real page on both display paths.
+selection, non-blank renders from identical data, an axes-margins fence
+(the ladder is filled only after its window is mapped, the Alignment
+page's allocation order, and the plot must still fill the canvas), and a
+screenshot written next to the spike for visual review; the
+realized-window check (`test_alignment_realized`) additionally drives
+the ladder through the real page on both display paths.
 
 ## Theme palette and the ladder viewport
 

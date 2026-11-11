@@ -2096,169 +2096,246 @@ The exact command is `zpool add <pool> <special|log|cache> [mirror] <by-id…>`.
 
 #### Migrate Pool
 
-Copy-based expansion for changes ZFS cannot perform in place — converting a
-stripe to raidz (or mirror to raidz), changing vdev width, or changing the
-pool blocksize (the `ashift` property).
-Pick the source pool and one of two destination modes:
+Migrate Pool makes changes ZFS cannot perform in place by copying the pool.
+Use it to:
 
-- **New disks** — select eligible disks and a topology for a new pool (built
-  under a temporary name like `<pool>_mig`), or
-- **Holding pool** — pick another imported pool with free space at least equal
-  to the source pool's allocated data; the source pool is then destroyed and
-  rebuilt with the chosen topology before the data is copied back. Any other
-  imported non-root pool qualifies, even an empty one —
-  a pool only needs datasets to be a migration *source*, not a holding pool.
-  The holding pool is a temporary waystation, not a destination: it keeps its
-  name and its own datasets, and only the reserved migration namespace inside
-  it is removed afterwards. Holding-mode copies land in that reserved
-  namespace (`<holding-pool>/migrate_<source-pool>/<dataset>`) so they can
-  never collide with backup or offsite copies of the same datasets — a pool
-  that also receives backups is a valid holding pool. The rebuilt pool's
-  disks are your choice: the source pool's own data-vdev disks (pre-selected,
-  since the cutover destroy frees them) plus any eligible unused disks — so
-  the new topology can use the old disks, new disks, or any mix. Former
-  infrastructure-vdev disks of the source pool are also listed (freed by the
-  same destroy) but start **unchecked**, each labeled with the class it
-  served — tick one only if you deliberately want it as a data vdev.
-  Disks you leave unselected simply stay free for later use.
+- convert a stripe or a mirror to raidz,
+- change the vdev width, or
+- change the pool blocksize (the `ashift` property).
 
-Choose **New disks** when you have unused disks to build the new pool on (the
-old disks are freed untouched and remain re-importable). Choose **Holding
-pool** when the new topology should be built from the existing disks — alone
-or combined with additional unused disks — or whenever you have no spare
-disks at all.
+Pick the source pool and one of two destination modes.
+
+##### Destination modes
+
+- **New disks** — select eligible disks and a topology for a new pool. The
+  new pool is built under a temporary name like `<pool>_mig`.
+- **Holding pool** — pick another imported pool with free space at least
+  equal to the source pool's allocated data. The source pool is destroyed
+  and rebuilt with the chosen topology, and then the data is copied back.
+
+Any other imported non-root pool qualifies as a holding pool, even an empty
+one. A pool only needs datasets to be a migration *source*, not a holding
+pool.
+
+The holding pool is a temporary waystation, not a destination:
+
+- it keeps its own name and its own datasets;
+- holding-mode copies land in a reserved namespace inside it
+  (`<holding-pool>/migrate_<source-pool>/<dataset>`), so they can never
+  collide with backup or offsite copies of the same datasets; and
+- only that reserved namespace is removed afterwards.
+
+A pool that also receives backups is therefore a valid holding pool.
+
+In holding mode, the rebuilt pool's disks are your choice:
+
+- the source pool's own data-vdev disks — pre-selected, because the cutover
+  destroy frees them — plus
+- any eligible unused disks.
+
+The new topology can use the old disks, new disks, or any mix. Former
+infrastructure-vdev disks of the source pool are also listed, freed by the
+same destroy, but they start **unchecked** and each is labeled with the class
+it served. Tick one only if you deliberately want it as a data vdev. Disks
+you leave unselected simply stay free for later use.
+
+The choice between the modes depends on your spare disks:
+
+- **New disks** — you have unused disks to build the new pool on. The old
+  disks are freed untouched and remain re-importable.
+- **Holding pool** — the new topology should be built from the existing
+  disks, alone or combined with additional unused disks — or you have no
+  spare disks at all.
+
+##### New pool settings
 
 The **new pool settings** section decides what the rebuilt pool looks like.
-It defaults to **Match origin pool**, a pseudo-profile derived from the
-source pool itself: the origin's blocksize, its curated pool properties
-(autotrim, autoexpand, autoreplace, failmode, multihost, listsnapshots,
-delegation), and its root dataset's live filesystem properties — carried to
-the new pool as explicit `-o`/`-O` options so nothing silently reverts to
-`zpool create` defaults. Every value stays editable: you can switch to a
-saved pool profile, change the topology radio (which defaults to the origin's
-data-vdev shape when the disk count permits), and above all change the
-**blocksize** — the setting that exists for the sake of which Migrate Pool
-offers this section at all, because it cannot be changed on a live pool. The
-disk recommendation for the selected disks is shown as a hint, and a visible
+It defaults to **Match origin pool** — a pseudo-profile derived from the
+source pool itself. The origin's settings travel to the new pool as explicit
+`-o`/`-O` options, so nothing silently reverts to `zpool create` defaults:
+
+- the origin's blocksize;
+- its curated pool properties — autotrim, autoexpand, autoreplace, failmode,
+  multihost, listsnapshots, delegation; and
+- its root dataset's live filesystem properties.
+
+Every value stays editable:
+
+- switch to a saved pool profile;
+- change the topology radio, which defaults to the origin's data-vdev shape
+  when the disk count permits; and, above all,
+- change the **blocksize** — the reason this section exists at all: it
+  cannot be changed on a live pool.
+
+The disk recommendation for the selected disks is shown as a hint. A visible
 warning asks you to confirm when the chosen blocksize is *smaller* than the
-recommendation (a too-small blocksize permanently hurts modern drives).
+recommendation, because a too-small blocksize permanently hurts modern
+drives.
+
 Infrastructure vdevs (special, log, cache, spare) are never recreated by the
-migration: when the source pool has them, the review page warns with each
+migration. When the source pool has them, the review page warns with each
 class and its disks, and a reminder logged after a successful cutover says
-to re-add them with **Add Infra Vdev** — they can be added to (and removed
-from) a live pool at any time, so nothing is foreclosed by doing it after
-the cutover.
+to re-add them with **Add Infra Vdev**. Infrastructure vdevs can be added to
+and removed from a live pool at any time, so nothing is foreclosed by doing
+it after the cutover.
+
+##### Non-default pool properties
 
 Below the settings, a **Non-default pool properties** section appears when
 the source pool has pool properties set away from their defaults beyond the
-curated seven (a `comment`, `compatibility`, `dedup_table_quota`, …). These
-cannot travel through the profile's `zpool create -o` options, so each is
-listed with its origin value and a checkbox: a checked property is
-re-applied with one `zpool set` right after the new pool is imported under
-the source pool's name; uncheck any you do not want to carry over (the
-values themselves are the origin's and are not editable in the dialog).
-The replay steps are part of the reviewed plan and are non-fatal — by the
-time they run the data is already migrated, so a property the running zfs
-build refuses is logged and skipped rather than failing the cutover. The
-curated seven are never listed here: they belong to the pool profile, so a
-deliberately chosen saved profile is never clobbered by origin values.
+curated seven — a `comment`, `compatibility`, `dedup_table_quota`, and so
+on. These properties cannot travel through the profile's `zpool create -o`
+options. Each is listed with its origin value and a checkbox:
 
-The review page lists every step that will run, from the recursive migration
-snapshot through one `zfs send -Rw` replication step per top-level dataset
-(received with `zfs receive -u -F -s -v`; snapshots, descendants, and
-properties included; encrypted datasets are sent raw; `-v` logs each dataset
-as it is received so progress through the tree is visible in the log) to a
-dataset-tree verification, plus the cutover steps that follow the copy (a
-catch-up snapshot with incremental sends, the export/import swap, and in
-holding mode the pool rebuild and copy-back). The create steps name the
-chosen shape — the new pool's topology and blocksize — so the plan reflects
-the settings above.
-That shape — one snapshot of the whole pool, then one **Replicate** step per
-top-level dataset — is deliberate. The recursive migration snapshot stamps
-every dataset at a single consistent point in time under one snapshot name,
-which becomes the common starting point for every copy and for the cutover
-incremental. The copies themselves are addressed per top-level dataset: a
-pool whose data lives under a single top-level dataset shows a single
-**Replicate** step, and that step — snapshots and descendants — carries the
-pool's entire data; a pool with several top-level datasets gets one
-**Replicate** step, and one cutover catch-up send, per dataset. The source
-pool's root dataset is never replicated: the destination already has a root
-of its own (created with the new pool in new-disk mode, or implied by the
-reserved migration namespace in holding mode), a pool root cannot be received
-over another pool's root, and a root holds no user data — only properties,
-which do not travel in send streams. Per-dataset sends also keep resume
-tokens and the dataset-tree verification scoped to one dataset at a time.
-An optional **Bandwidth limit** (a rate such as `100m` or `64KiB` — digits
-plus an optional `k`/`m`/`g`/`t`/`p`/`e` multiplier, enforced by the
-pacer `lib/pace_stream.py`) throttles the copy. Every copy is resumable: an interrupted transfer leaves a receive
-resume token on the destination, and re-running Migrate Pool resumes from
-that token instead of starting over, with live `pv` progress shown in the
-status area. Typed confirmation of the source pool name starts the copy
-phase. If the pool's dataset layout changed after the review (a dataset was
-renamed, added, or removed while the wizard was open), the run is aborted
-before anything starts with an explanation — re-open Migrate Pool and review
-the plan again.
+- a checked property is re-applied with one `zpool set`, right after the new
+  pool is imported under the source pool's name;
+- uncheck any property you do not want to carry over.
 
-When the copy finishes, the cutover starts with a catch-up: a recursive
-cutover snapshot (the migration snapshot's name with a `-cutover` suffix)
-followed by one incremental `zfs send -Rw -I` per top-level dataset from the
-migration snapshot to the cutover snapshot, bringing the destination up to
-date with writes made while the copy ran. From the cutover snapshot onward
-the pool must be quiesced — stop VMs and unmount shares and make no other
-writes: the cutover ends by exporting the source pool, so writes made after
-the cutover snapshot are lost, but the window is only seconds. Before the
-catch-up runs, the dataset layout is re-checked at cutover time (the same
-structural check as at start; a change aborts the cutover with an
-explanation and leaves the copy in place for a re-run), and the pool's
-zvols are scanned for running Proxmox VMs (`qm status`, run locally in
-single-node mode or on the compute host over SSH in two-node mode; VMs on
-non-Proxmox zvols are ignored). If any VM is running, a warning dialog
-lists the VM IDs and their disks and asks whether to continue — this is a
-reminder, not an enforcement: the check cannot stop the VMs for you, so
-choose Continue only after shutting them down. A final typed confirmation
-of the source pool name then gates the destructive steps: the source pool
-is exported and the migrated pool is re-imported under the source pool's
-name — a permanent rename written to the pool label, so every future import
-uses the normal pool name — and every `pool/dataset` path, and everything
-that references it, survives the swap.
+The values shown are the origin's and are not editable in the dialog.
+
+The replay steps are part of the reviewed plan, and they are non-fatal. By
+the time they run, the data is already migrated. A property the running zfs
+build refuses is logged and skipped rather than failing the cutover.
+
+The curated seven are never listed here: they belong to the pool profile.
+A deliberately chosen saved profile is therefore never clobbered by origin
+values.
+
+##### The review page
+
+The review page lists every step that will run:
+
+- a recursive migration snapshot;
+- one `zfs send -Rw` replication step per top-level dataset;
+- a dataset-tree verification; and
+- the cutover steps that follow the copy — a catch-up snapshot with
+  incremental sends, the export/import swap, and in holding mode the pool
+  rebuild and copy-back.
+
+The create steps name the chosen shape — the new pool's topology and
+blocksize — so the plan reflects the settings above.
+
+Each replication step is received with `zfs receive -u -F -s -v`. Snapshots,
+descendants, and properties are included. Encrypted datasets are sent raw.
+The `-v` flag logs each dataset as it is received, so progress through the
+tree is visible in the log.
+
+The copy shape — one snapshot of the whole pool, then one **Replicate** step
+per top-level dataset — is deliberate:
+
+- The recursive migration snapshot stamps every dataset at a single
+  consistent point in time, under one snapshot name. That snapshot is the
+  common starting point for every copy and for the cutover incremental.
+- A pool whose data lives under a single top-level dataset shows a single
+  **Replicate** step, and that step — snapshots and descendants — carries
+  the pool's entire data. A pool with several top-level datasets gets one
+  **Replicate** step, and one cutover catch-up send, per dataset.
+- The source pool's root dataset is never replicated. The destination
+  already has a root of its own: created with the new pool in new-disk
+  mode, or implied by the reserved migration namespace in holding mode. A
+  pool root cannot be received over another pool's root, and a root holds
+  no user data — only properties, which do not travel in send streams.
+- Per-dataset sends keep resume tokens and the dataset-tree verification
+  scoped to one dataset at a time.
+
+An optional **Bandwidth limit** throttles the copy. Enter a rate such as
+`100m` or `64KiB` — digits plus an optional `k`/`m`/`g`/`t`/`p`/`e`
+multiplier — enforced by the pacer `lib/pace_stream.py`.
+
+Every copy is resumable. An interrupted transfer leaves a receive resume
+token on the destination. Re-running Migrate Pool resumes from that token
+instead of starting over, with live `pv` progress shown in the status area.
+
+Typed confirmation of the source pool name starts the copy phase. If the
+pool's dataset layout changed after the review — a dataset renamed, added,
+or removed while the wizard was open — the run is aborted before anything
+starts, with an explanation. Re-open Migrate Pool and review the plan
+again.
+
+##### Cutover
+
+When the copy finishes, the cutover starts with a catch-up. It takes a
+recursive cutover snapshot — the migration snapshot's name with a `-cutover`
+suffix. Then it sends one incremental `zfs send -Rw -I` per top-level
+dataset, from the migration snapshot to the cutover snapshot. The catch-up
+brings the destination up to date with writes made while the copy ran.
+
+From the cutover snapshot onward, the pool must be quiesced: stop VMs,
+unmount shares, and make no other writes. The cutover ends by exporting the
+source pool, so writes made after the cutover snapshot are lost — but the
+window is only seconds.
+
+Before the catch-up runs, two checks:
+
+- The dataset layout is re-checked at cutover time, with the same structural
+  check as at start. A change aborts the cutover with an explanation and
+  leaves the copy in place for a re-run.
+- The pool's zvols are scanned for running Proxmox VMs with `qm status` —
+  run locally in single-node mode, or on the compute host over SSH in
+  two-node mode. VMs on non-Proxmox zvols are ignored. If any VM is
+  running, a warning dialog lists the VM IDs and their disks and asks
+  whether to continue. The dialog is a reminder, not an enforcement: the
+  check cannot stop the VMs for you. Choose Continue only after shutting
+  them down.
+
+A final typed confirmation of the source pool name gates the destructive
+steps. The source pool is exported, and the migrated pool is re-imported
+under the source pool's name. That re-import is a permanent rename written
+to the pool label, so every future import uses the normal pool name. Every
+`pool/dataset` path, and everything that references it, survives the swap.
+
+##### Stopping a migration
 
 Aborting a migration is safe at every point before the destructive steps:
-stopping during the copy phase loses nothing (the source pool is untouched);
-after the export but before the destroy, the source pool re-imports intact;
-in holding mode after the source pool is destroyed, the complete verified
-copy remains on the holding pool, so re-running Migrate Pool resumes the
-copies and finishes the job. Your regular backups are never touched by a
-migration. If cutover is deferred, the migration snapshot and copies remain
-in place; in
-holding mode the cutover also removes the migration namespace from the
-holding pool.
+
+- **During the copy phase** — nothing is lost; the source pool is untouched.
+- **After the export but before the destroy** — the source pool re-imports
+  intact.
+- **In holding mode, after the source pool is destroyed** — the complete
+  verified copy remains on the holding pool. Re-running Migrate Pool resumes
+  the copies and finishes the job.
+
+Your regular backups are never touched by a migration. If the cutover is
+deferred, the migration snapshot and the copies remain in place. In holding
+mode, the cutover also removes the migration namespace from the holding
+pool.
+
+##### Snapshot holds
 
 Snapshot holds survive the migration. ZFS send streams never carry holds, so
-Migrate Pool captures every hold on the source pool (including its own, such
-as offsite receipts) into a temporary file before the cutover, then reapplies
-them once the migrated pool has been imported under the source pool's name —
-in both destination modes. In holding mode the holds are released after
-capture and before the source pool is destroyed (a held snapshot cannot be
-destroyed, so the destroy would fail otherwise). Holds are never placed on
-the holding-pool copy, so removing the migration namespace cannot fail on a
-hold. If the cutover fails or is cancelled after the holds were released,
-the captured file is kept and its path logged, together with the
+Migrate Pool captures every hold on the source pool — including its own,
+such as offsite receipts — into a temporary file before the cutover. It
+then reapplies the holds once the migrated pool has been imported under the
+source pool's name, in both destination modes.
+
+In holding mode, the holds are released after capture and before the source
+pool is destroyed. A held snapshot cannot be destroyed, so the destroy would
+fail otherwise. Holds are never placed on the holding-pool copy, so removing
+the migration namespace cannot fail on a hold.
+
+If the cutover fails or is cancelled after the holds were released, the
+captured file is kept and its path is logged, together with the
 `zfsreapplyholds --apply` command that restores the holds once the pool is
 imported again. Holds placed on the source pool *while* a migration is
-running (after the capture step) are not preserved.
+running — after the capture step — are not preserved.
 
-After a successful cutover, if the migrated pool is enrolled in two-node iSCSI
-(`POOL_TARGET`), a follow-up `repair-iscsi-luns` step rebuilds its backstores
-and LUN mappings and rescans the compute host automatically. The migrated pool
-keeps its name, so its existing Proxmox storage entry stays valid; you are
-nonetheless offered Proxmox enrollment after the cutover (and after the LUN
-repair step), which quietly skips when the pool is already registered.
-Cutover refuses to start while the
-pool's scrub is running or paused. The pool hosting the root filesystem is
-never offered for migration, and a pool with no datasets is never offered as a
-source (there is nothing to copy); if the Disks-page pool selector points
-at such a pool when you start Migrate Pool, the run refuses to open with an
-explanation instead of silently switching to another pool.
+##### After the cutover
+
+After a successful cutover, if the migrated pool is enrolled in two-node
+iSCSI (`POOL_TARGET`), a follow-up `repair-iscsi-luns` step rebuilds its
+backstores and LUN mappings and rescans the compute host automatically. The
+migrated pool keeps its name, so its existing Proxmox storage entry stays
+valid. You are nonetheless offered Proxmox enrollment after the cutover —
+and after the LUN repair step — which quietly skips when the pool is
+already registered.
+
+The cutover refuses to start while the pool's scrub is running or paused.
+
+The pool hosting the root filesystem is never offered for migration.
+Neither is a pool with no datasets — there is nothing to copy. If the
+Disks-page pool selector points at such a pool when you start Migrate Pool,
+the run refuses to open with an explanation instead of silently switching
+to another pool.
 
 ### Workload profiles
 
@@ -2368,8 +2445,11 @@ lock's holder.
   [Wipe Labels](#wipe-labels)). Requires a single disk that belongs to no
   pool; storage host only on two-node systems.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
-  GUI log panel. Requires a single disk to be selected and `smartctl` to be
-  installed; otherwise a warning is logged.
+  GUI log panel. Requires a single selected disk and an installed `smartctl`.
+  The report prints even when smartctl flags problems — failing health,
+  error-log entries, self-test errors. A WARN line before the dump names the
+  flags. When smartctl prints nothing at all, the WARN names the smartctl
+  exit reason instead.
 - **Surface Test…** — run a SMART surface self-test on the selected HDD (see
   [Surface Test](#surface-test)). Storage host only on two-node systems.
 - **Set Max I/O Rate…** — name the selected enclosure and set its transfer

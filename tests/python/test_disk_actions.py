@@ -104,7 +104,7 @@ class TestDiskActions(unittest.TestCase):
     def test_smart_details_logs_output(self):
         da = _import_disk_actions()
         app = _make_app()
-        app.ctx.disk_repository.smart_details.return_value = "line one\nline two\n"
+        app.ctx.disk_repository.smart_details.return_value = ("line one\nline two\n", 0)
         _select_first_disk(app, _disk_row("/dev/sda"))
 
         with capture_logs() as logs:
@@ -113,6 +113,26 @@ class TestDiskActions(unittest.TestCase):
         _assert_log_contains(logs, "INFO: SMART details for /dev/sda:")
         _assert_log_contains(logs, "INFO: line one")
         _assert_log_contains(logs, "INFO: line two")
+        self.assertFalse(any("WARN" in line for line in logs))
+
+    def test_smart_details_flagged_report_logged_with_warn(self):
+        """rc!=0 with a report: WARN names the flags, then the dump follows."""
+        da = _import_disk_actions()
+        app = _make_app()
+        app.ctx.disk_repository.smart_details.return_value = (
+            "=== START OF INFORMATION SECTION ===\n",
+            32,
+        )
+        _select_first_disk(app, _disk_row("/dev/sda"))
+
+        with capture_logs() as logs:
+            da.on_disks_smart_details(app)
+
+        _assert_log_contains(logs, "WARN: smartctl flags /dev/sda: error-log entries (rc=32)")
+        _assert_log_contains(logs, "INFO: SMART details for /dev/sda:")
+        warn_at = next(i for i, line in enumerate(logs) if "WARN: smartctl flags" in line)
+        dump_at = next(i for i, line in enumerate(logs) if "INFO: SMART details for" in line)
+        self.assertLess(warn_at, dump_at)
 
     def test_smart_details_warns_when_nothing_selected(self):
         da = _import_disk_actions()
@@ -128,15 +148,33 @@ class TestDiskActions(unittest.TestCase):
         _assert_log_contains(logs, "WARN: Select a disk to view SMART details")
 
     def test_smart_details_warns_when_unavailable(self):
+        """No report: the WARN carries the smartctl exit reason."""
         da = _import_disk_actions()
         app = _make_app()
-        app.ctx.disk_repository.smart_details.return_value = "n/a"
+        app.ctx.disk_repository.smart_details.return_value = ("n/a", 4)
         _select_first_disk(app, _disk_row("/dev/sda"))
 
         with capture_logs() as logs:
             da.on_disks_smart_details(app)
 
-        _assert_log_contains(logs, "WARN: SMART details unavailable for /dev/sda")
+        _assert_log_contains(
+            logs,
+            "WARN: SMART details unavailable for /dev/sda (smartctl rc=4: SMART command failed)",
+        )
+
+    def test_smart_details_warns_when_smartctl_did_not_run(self):
+        """smartctl missing entirely: the WARN says so instead of citing rc=0."""
+        da = _import_disk_actions()
+        app = _make_app()
+        app.ctx.disk_repository.smart_details.return_value = ("n/a", None)
+        _select_first_disk(app, _disk_row("/dev/sda"))
+
+        with capture_logs() as logs:
+            da.on_disks_smart_details(app)
+
+        _assert_log_contains(
+            logs, "WARN: SMART details unavailable for /dev/sda (smartctl did not run)"
+        )
 
 
 if __name__ == "__main__":

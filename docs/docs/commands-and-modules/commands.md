@@ -3086,8 +3086,9 @@ sudo archive-vm <vmid>
 4. **Discover referenced zvols** — Reads `/etc/pve/qemu-server/<vmid>.conf` and resolves each
    referenced disk to its zvol. In single-node mode this parses the local ZFS disk lines; in
    two-node mode it resolves iSCSI target/LUN pairs on the storage host. Any orphaned zvols
-   that match the VM ID but are not referenced in the config are reported as warnings and
-   are not archived.
+   that match the VM ID but are not referenced in the config are noted at gated `VERB` level
+   (off the terminal unless `ZFSUTILITIES_MSG_LEVEL=VERB` is set; always in the session log)
+   and are not archived.
 5. **Archive zvols** — Prompts for a transfer rate limit (a rate value
    such as `100M`, empty = unlimited; the answer is saved as the default in
    the JSON config key `archive_rate_limit`, shared with `unarchive-vm`).
@@ -3179,7 +3180,7 @@ sudo archive-vm <vmid>
    report the disks with dependent clones, and prompt whether the script
    should sever the dependent clones.
 3. Read `/etc/pve/qemu-server/<vmid>.conf` and resolve only the referenced disks to zvols,
-   warning about any orphaned zvols that are skipped.
+   noting any orphaned zvols that are skipped at gated `VERB` level.
 4. Archive each referenced zvol via the shared transfer engine: unencrypted zvols are
    device-copied onto a thin archive zvol created at `volblocksize=1M` (sha256-verified);
    encrypted zvols use raw `zfs send -cw` received as-is, keeping their original

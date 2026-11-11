@@ -114,6 +114,7 @@ j16_lun_inventory() {
 # restart the VM through the agent gate.
 j16_writer_resume_classified() {
     local c_ip="$1" vm="$2" label="$3" base_max="$4"
+    itf_step_start "writer resume poll [$label]" "vmid $vm — up to 300s"
     local probe_start=$SECONDS new_max resumed=0
     while (( SECONDS - probe_start < 300 )); do
         new_max="$(itf_vm_workload_sample "$c_ip" "$vm" 2>/dev/null \
@@ -734,6 +735,7 @@ j16_iscsi_total_loss_main() {
     # under their target (live-proven: the loop tried to "delete" the
     # compute initiator's ACL as a target and died on "No such Target
     # in configfs").  An operator wipes their own targets.
+    itf_step_start "LIO wipe" "every backstore + all three targets (retry loop)"
     # shellcheck disable=SC2029  # expansions run on the storage guest
     if itf_guest_exec "$s_ip" "
             set -e
@@ -1095,6 +1097,7 @@ saveconfig.json\"))' \\
     fi
     itf_artifact "s8-heal" "$log"
     log="$ITF_RUN_DIR/s8-recover.log"
+    itf_step_start "encrypted-LUN recover run" "iscsi-recover-encrypted-luns after the wipe"
     itf_guest_exec "$s_ip" "bash -lc 'iscsi-recover-encrypted-luns'" \
         > "$log" 2>&1
     rc=$?

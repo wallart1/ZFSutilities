@@ -117,7 +117,6 @@ class TestCreateDatasetsPage(unittest.TestCase):
         self.assertTrue(hasattr(app, "datasets_store"))
         self.assertTrue(hasattr(app, "datasets_view"))
         self.assertTrue(hasattr(app, "datasets_search"))
-        self.assertTrue(hasattr(app, "datasets_summary_label"))
         self.assertTrue(hasattr(app, "datasets_legend_label"))
         self.assertIs(app.datasets_scrolled, dp.Gtk.ScrolledWindow.return_value)
         # The Datasets tab builds its own unified context menu, so it does not
@@ -190,7 +189,6 @@ class TestRefreshDatasetsPage(unittest.TestCase):
         app.datasets_view.get_selection.return_value.get_selected_rows.return_value = (None, [])
         app.datasets_search = MagicMock()
         app.datasets_search._text = ""
-        app.datasets_summary_label = MagicMock()
         app.datasets_scrolled = MagicMock()
         app.datasets_scrolled.get_vadjustment.return_value.get_value.return_value = 0.0
         return app
@@ -203,7 +201,7 @@ class TestRefreshDatasetsPage(unittest.TestCase):
             )
         ]
 
-    def test_loads_online_pools_and_summary(self):
+    def test_loads_online_pools(self):
         app = self._make_app()
         with (
             patch.object(dp, "get_expanded_rows", return_value=set()),
@@ -218,7 +216,6 @@ class TestRefreshDatasetsPage(unittest.TestCase):
         self.assertEqual(app.datasets_store._rows[0]["values"][0], "tank")
         self.assertEqual(app.datasets_store._rows[0]["values"][2], "filesystem")
         self.assertEqual(app.datasets_store._rows[2]["values"][0], "backup")
-        app.datasets_summary_label.set_text.assert_called_once_with("2 datasets")
 
     def test_root_rows_are_creation_first(self):
         # The Creation column leads the row: snapshot names embed UTC
@@ -246,7 +243,6 @@ class TestRefreshDatasetsPage(unittest.TestCase):
 
         self.assertEqual(len(app.datasets_store._rows), 2)  # backup root + dummy child
         self.assertEqual(app.datasets_store._rows[0]["values"][0], "backup")
-        app.datasets_summary_label.set_text.assert_called_once_with("1 datasets")
 
     def test_handles_pool_list_error(self):
         app = self._make_app()
@@ -258,7 +254,6 @@ class TestRefreshDatasetsPage(unittest.TestCase):
             dp.refresh_datasets_page(app)
 
         self.assertEqual(len(app.datasets_store._rows), 0)
-        app.datasets_summary_label.set_text.assert_not_called()
 
     def test_falls_back_when_root_dataset_unavailable(self):
         app = self._make_app()
@@ -273,7 +268,6 @@ class TestRefreshDatasetsPage(unittest.TestCase):
         self.assertEqual(app.datasets_store._rows[0]["values"][0], "tank")
         self.assertEqual(app.datasets_store._rows[0]["values"][2], "filesystem")
         self.assertEqual(app.datasets_store._rows[2]["values"][0], "backup")
-        app.datasets_summary_label.set_text.assert_called_once_with("2 datasets")
 
     def test_preserves_scroll_position(self):
         app = self._make_app()
@@ -829,7 +823,6 @@ class TestRefreshDatasetsPageSearch(unittest.TestCase):
         app.datasets_view.get_selection.return_value.get_selected_rows.return_value = (None, [])
         app.datasets_search = MagicMock()
         app.datasets_search._text = ""
-        app.datasets_summary_label = MagicMock()
         app.datasets_scrolled = MagicMock()
         app.datasets_scrolled.get_vadjustment.return_value.get_value.return_value = 0.0
         return app

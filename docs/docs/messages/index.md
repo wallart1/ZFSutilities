@@ -47,7 +47,7 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 | `FATAL: Could not capture existing holds on .... Aborting to avoid losing target hold tags. Set preserve_target_holds='N' to skip hold preservation.` | Before a full-copy run that will wipe the destination, the holds capture failed; nothing has been mutated yet | Script aborts (exit 8); fix the hold listing or set the suggested override |
 | `VERB: Dataset ... is a ZFS clone. It will be backed up as a regular dataset.` | The source has a clone origin, so it is sent as a plain dataset copy | Informational |
 | `INFO: About to copy the following datasets to ...:` | Plan summary; the dataset list follows, then a press-enter prompt when autoproceed != 'Y' (after which autoproceed is forced to 'Y' for the rest of the run) | Press Enter to proceed to the per-dataset loop |
-| `WARN: Backup operation aborted by user due to lock conflict on source '...'.` / `... on destination '...'.` | The operator chose to abort the whole operation while resolving a dataset lock | Script aborts (exit 9) |
+| `WARN: Backup operation aborted due to lock conflict on source '...'.` / `... on destination '...'.` | The operator chose to abort the whole operation while resolving a dataset lock | Script aborts (exit 9) |
 | `INFO: Skipping dataset ... (lock conflict on source).` / `... (lock conflict on destination).` / `... (lock conflict on destination after preparation).` | The operator chose to skip this dataset while resolving a lock | Dataset skipped, run continues |
 | `WARN: No snapshots found on ... (nextsnap=notneeded). Skipping.` | A run that did not need a new snapshot found the source has no snapshots at all | Dataset skipped, run continues |
 | `INFO: Dry-run: Would create snapshot ...` | Dry-run replacement for creating the new source snapshot | Informational; nothing created |
@@ -756,7 +756,7 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `WARN: Config references vm-...-disk-... but no zvol was found` | A Proxmox config disk reference has no matching zvol | Disk skipped; the archive will lack it |
 | `WARN: Config references target ... LUN ... but no backstore was found` | A two-node iSCSI reference could not be resolved via targetcli | Disk skipped |
 | `WARN: Backstore ... has no zvol` | The backstore has no `/dev/zvol` mapping | Disk skipped |
-| `WARN: Orphaned zvol not referenced in config: ...` | A zvol at `<pool>/proxmox/vm-<vmid>-disk-<n>` exists but the config does not reference it. Replicated backup copies nested deeper on other pools are not flagged | Warning only; the orphan is not archived |
+| `VERB: Orphaned zvol not referenced in config: ...` | A zvol at `<pool>/proxmox/vm-<vmid>-disk-<n>` exists but the config does not reference it. Replicated backup copies nested deeper on other pools are not flagged. Advisory detail, so `archive-vm` keeps it off the terminal: session log only, shown on the terminal only under `ZFSUTILITIES_MSG_LEVEL=VERB`/`DEBUG` (the GUI log viewers show it under the level filter) | None needed; the orphan is not archived |
 | `FATAL: SSH to ... failed` | Two-node discovery could not reach the storage host | Script aborts; check SSH |
 | `INFO: --- Step 1: Discovering dependent clones ---` | Phase milestone | Informational |
 | `INFO: Found disks with dependent clones:` | Dependent ZFS clones exist on this VM's zvols | The severance prompt follows |
@@ -2276,7 +2276,8 @@ GUI Disks tab SMART actions and the Wipe Labels handler.
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `WARN: Select a disk to view SMART details` | No disk row selected | Action aborted |
-| `WARN: SMART details unavailable for ...` | The details query returned empty or n/a | Dump aborted |
+| `WARN: SMART details unavailable for ... (smartctl rc=N: reason)` | smartctl printed no report; the rc bits name why (`device open failed`, `SMART command failed`, ...) | Dump aborted |
+| `WARN: smartctl flags ...: reason (rc=N)` | smartctl printed the report and flagged problems (failing health, error-log entries, self-test errors, ...) | Report follows below — heed the flags |
 | `INFO: SMART details for ...:` | Header of the smartctl output dump | Informational |
 | `WARN: Disk wipe is available only on the storage host` | Wipe Labels invoked on a two-node compute host | Action aborted |
 | `WARN: Dataset runner not available` / `WARN: cannot wipe labels on ...: ...` | Runner tracker missing (defensive) / the disk's write lock is held by another operation (the message names the holder) | Action aborted |

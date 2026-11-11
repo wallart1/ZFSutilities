@@ -386,6 +386,7 @@ j15_iscsi_boot_keys_main() {
     base_max="$(tail -n 1 "$ITF_RUN_DIR/workload-s1b-baseline-101.txt" 2>/dev/null)"
     new_max="$(tail -n 1 "$ITF_RUN_DIR/workload-s1b-post-101.txt" 2>/dev/null || true)"
     local probe_start=$SECONDS resumed=0
+    itf_step_start "VM 101 resume poll" "watching /workload.log for growth — up to 300s"
     while (( SECONDS - probe_start < 300 )); do
         new_max="$(itf_vm_workload_sample "$c_ip" 101 2>/dev/null | tail -n 1 || true)"
         if [[ "$new_max" =~ ^[0-9]+$ && "$base_max" =~ ^[0-9]+$ ]] \
@@ -422,6 +423,7 @@ j15_iscsi_boot_keys_main() {
     # clinging session transparently resumes once the LUN is restored
     # (no restart), or the guest is wedged and needs a stop/start.
     # Bounded, timeout-wrapped probes classify which one happened.
+    itf_step_start "VM 202 resume poll" "timeout-wrapped agent probes — up to 240s"
     local v202_base v202_now v202_start=$SECONDS v202_resumed=0
     v202_base="$(tail -n 1 "$ITF_RUN_DIR/workload-s1b-baseline-202.txt" 2>/dev/null)"
     while (( SECONDS - v202_start < 240 )); do
@@ -511,6 +513,7 @@ j15_iscsi_boot_keys_main() {
 
     j15_park_vms s3 || return 1
     log="$ITF_RUN_DIR/restart-iscsi-services.log"
+    itf_step_start "restart-iscsi-services run" "full recycle + encrypted-LUN re-add"
     itf_guest_exec "$s_ip" "bash -lc 'restart-iscsi-services'" > "$log" 2>&1
     rc=$?
     itf_artifact "restart-iscsi-services" "$log"
