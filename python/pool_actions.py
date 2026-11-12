@@ -619,7 +619,9 @@ def _approve_and_stop_vms(app, blockers):
         dialog.destroy()
         if response != Gtk.ResponseType.YES:
             return False
-        result = subprocess.run(["qm", "stop", vmid], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            ["qm", "stop", vmid], capture_output=True, text=True, errors="replace", check=False
+        )
         if result.returncode != 0:
             log_msg(f"WARN: Failed to stop VM {vmid}: {result.stderr.strip()}")
             return False
@@ -669,6 +671,7 @@ def _approve_and_remove_iscsi(app, blockers):
                     ["targetcli", f"/iscsi/{iqn}/tpg1/luns", "delete", f"lun{lun_num}"],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     check=False,
                 )
                 if result.returncode != 0:
@@ -684,6 +687,7 @@ def _approve_and_remove_iscsi(app, blockers):
             ["targetcli", "/backstores/block", "delete", bsname],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         if result.returncode != 0 and not removed_lun:

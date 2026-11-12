@@ -292,6 +292,7 @@ def send_desktop_notification(
             command,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=_desktop_timeout(),
             check=False,
         )

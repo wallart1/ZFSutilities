@@ -648,7 +648,7 @@ def fetch_pve_vm_options(host, conf_dir=PVE_QEMU_CONF_DIR, runner=None, errors=N
 
         def runner(argv, timeout):
             return subprocess.run(
-                argv, capture_output=True, text=True, timeout=timeout, check=False
+                argv, capture_output=True, text=True, errors="replace", timeout=timeout, check=False
             )
 
     script = f'for f in {conf_dir}/*.conf; do echo "== $f"; cat "$f"; done'
@@ -981,7 +981,12 @@ def collect_alignment_sample(
             sample.dataset_read_failures.append(pool.name)
     try:
         result = subprocess.run(
-            IOSTAT_R_ARGS, capture_output=True, text=True, timeout=timeout, check=False
+            IOSTAT_R_ARGS,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            check=False,
         )
         if result.returncode == 0:
             sample.histograms = parse_zpool_iostat_r(result.stdout)

@@ -231,7 +231,9 @@ def collect_zvol_signatures(paths, runner=None, timeout=LSBLK_TIMEOUT):
     if runner is None:
 
         def runner(argv, t):
-            return subprocess.run(argv, capture_output=True, text=True, timeout=t, check=False)
+            return subprocess.run(
+                argv, capture_output=True, text=True, errors="replace", timeout=t, check=False
+            )
 
     signatures = {}
     for path in paths:
@@ -465,7 +467,9 @@ class GuestFsProber:
 
     @staticmethod
     def _subprocess_run(argv, timeout):
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        return subprocess.run(
+            argv, capture_output=True, text=True, errors="replace", timeout=timeout, check=False
+        )
 
     def channel_argv(self):
         """argv prefix reaching ``qm``: ssh to the compute host, or local.

@@ -713,6 +713,7 @@ class TestOnPoolsExport(unittest.TestCase):
                 ["qm", "stop", "105"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             self.assertEqual(mock_export.call_count, 2)
@@ -862,12 +863,14 @@ class TestOnPoolsExport(unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_run.assert_any_call(
                 ["targetcli", "/backstores/block", "delete", "vm-105-disk-0"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             self.assertEqual(mock_export.call_count, 2)

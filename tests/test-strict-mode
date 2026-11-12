@@ -25,6 +25,9 @@ old_mydir="$mydir"
 # so they were audited and flipped as part of the same campaign).
 # check-vm-disk-paths joined 2026-10-26: born in a parallel lane hours
 # after the family list was drawn, so the campaign tree never saw it.
+# zfsdailybackup left 2026-11-11: user-customizable orchestrator
+# templates set no strict mode (coding-policies.md orchestrator
+# exemption) — site edits must not be subjected to bash strictness.
 # Sourced libraries (zfslockmanager, zfs-diagnose-busy, zfssnapbuild,
 # zfsbuildfsarray) deliberately carry NO set line — strictness belongs
 # to the callers; the libraries are written to tolerate strict callers.
@@ -68,7 +71,6 @@ strict_scripts=(
     show-lun-map
     switch-version
     uninstall-zfsutilities
-    zfsdailybackup
     zfsdelfs
     zfslockctl
     zfslockmanager-remote
@@ -94,6 +96,27 @@ test_migrated_scripts_keep_strict_mode() {
     done
     if [[ -n "$missing" ]]; then
         test_fail "lost set -euo pipefail: ${missing}"
+        return
+    fi
+    test_pass
+}
+
+test_user_templates_carry_no_strict_mode() {
+    test_start "User-customizable orchestrator templates carry no set line"
+    # The coding-policies orchestrator exemption: template scripts sites
+    # are expected to edit (zfsdailybackup) must not subject those edits
+    # to bash strictness. The keep-strict guard above deliberately omits
+    # them; this fence fails if one quietly regains a set line.
+    local offender="" s head
+    local templates=(zfsdailybackup)
+    for s in "${templates[@]}"; do
+        head=$(sed -n '/^_local_bashinit=/q;p' "$old_mydir/bin/$s")
+        if grep -q '^set -[eo]' <<< "$head"; then
+            offender+="${s} "
+        fi
+    done
+    if [[ -n "$offender" ]]; then
+        test_fail "template must not set strict mode: ${offender}"
         return
     fi
     test_pass
@@ -247,6 +270,7 @@ test_env_knob_reads_are_defaulted() {
 }
 
 test_migrated_scripts_keep_strict_mode
+test_user_templates_carry_no_strict_mode
 test_sourced_lib_arrays_survive_strict_callers
 test_find_script_before_bashinit_under_set_u
 test_final_statement_is_exit_safe

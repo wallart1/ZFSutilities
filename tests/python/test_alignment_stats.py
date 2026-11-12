@@ -1115,6 +1115,7 @@ class TestCollectAlignmentSample(unittest.TestCase):
             als.IOSTAT_R_ARGS,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=als.IOSTAT_R_TIMEOUT,
             check=False,
         )

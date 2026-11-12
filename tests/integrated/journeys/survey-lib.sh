@@ -313,19 +313,23 @@ PYEOF
 
 itf_survey_stage_gui_env() {
     local guest_ip="$1"
-    itf_step_start "survey GUI env" "apt install Xvfb + python3-cairo"
-    # python3-cairo is documented as a product gap (F-047): the GUI's
-    # memory/alignment pages import cairo at module level, but the gui
-    # prerequisite set never installs a python cairo binding — the
-    # probing environment supplies it so the rest of the GUI surface
-    # can be surveyed pending the repair.
+    itf_step_start "survey GUI env" "apt install Xvfb + python3-gi-cairo"
+    # The gui prerequisite set now checks the cairo binding itself
+    # (F-047 fixed): python3-gi-cairo provides BOTH the bare `import
+    # cairo` (via its python3-cairo dependency) and the GI cairo bridge
+    # that marshals cairo.Context in draw callbacks — a bare
+    # python3-cairo install leaves every fallback-chart draw dying with
+    # "Couldn't find foreign struct converter for 'cairo.Context'".  The
+    # lab guest starts from a template built before the fix, so the
+    # probing environment installs the pair itself (Xvfb is not a
+    # product prerequisite at all).
     if itf_guest_exec "$guest_ip" \
             'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-                xvfb python3-cairo > /var/log/survey-xvfb-install.log 2>&1 \
+                xvfb python3-gi-cairo > /var/log/survey-xvfb-install.log 2>&1 \
              && command -v Xvfb && python3 -c "import cairo"' \
             > "$ITF_RUN_DIR/survey-xvfb.log" 2>&1; then
         itf_step pass "GUI probing environment" \
-            "Xvfb + python3-cairo installed in guest"
+            "Xvfb + python3-gi-cairo installed in guest"
     else
         itf_step fail "GUI probing environment" "see survey-xvfb.log"
         return 1

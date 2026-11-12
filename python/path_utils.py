@@ -227,6 +227,7 @@ def resolve_remote_bin(host, timeout=15):
             cmd,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -250,6 +251,7 @@ def resolve_remote_version(host, timeout=15):
             cmd,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             check=False,
         )

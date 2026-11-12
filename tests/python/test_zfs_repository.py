@@ -1426,6 +1426,7 @@ class TestScrubCommandsLogDebug(unittest.TestCase):
             ["zpool", "scrub", "tank"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=None,
         )
@@ -1440,6 +1441,7 @@ class TestScrubCommandsLogDebug(unittest.TestCase):
             ["zpool", "scrub", "-p", "tank"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=None,
         )
@@ -1454,6 +1456,7 @@ class TestScrubCommandsLogDebug(unittest.TestCase):
             ["zpool", "scrub", "tank"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=None,
         )
@@ -1468,6 +1471,7 @@ class TestScrubCommandsLogDebug(unittest.TestCase):
             ["zpool", "scrub", "-s", "tank"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=None,
         )
@@ -2182,6 +2186,35 @@ class TestMountOrderPropertyFixes(unittest.TestCase):
             fixes = mount_order_property_fixes(erroneous)
         self.assertEqual(len(fixes), 1)
         self.assertEqual(fixes[0]["dataset"], "tank")
+
+
+class TestRunDecodesRawBytes(unittest.TestCase):
+    """F-050 fence: raw non-UTF-8 bytes in tool output must never crash.
+
+    zfs error text embeds the offending byte of a rejected dataset or
+    snapshot name (e.g. `invalid character '\\302' in name`); strict
+    text-mode decoding raised UnicodeDecodeError and killed the calling
+    action instead of surfacing the refusal. `ZfsRepository._run` decodes
+    with errors="replace" — a real subprocess proves the tolerance,
+    because a mock can only ever hand back already-decoded str.
+    """
+
+    def test_run_replaces_invalid_utf8_in_captured_output(self):
+        repo = ZfsRepository(sudo=False)
+        # The child writes a lone 0xB5 byte through the binary buffer, so
+        # the byte reaches the pipe undecoded (a bash printf escape would
+        # re-encode through its locale and never produce an invalid
+        # sequence).
+        child = (
+            "import sys; sys.stderr.buffer.write(b'bad byte: \\xb5 in name\\n'); "
+            "sys.exit(1)"
+        )
+        result = repo._run([sys.executable, "-c", child], check=False)
+        self.assertEqual(result.returncode, 1)
+        # The surrounding text survives; the bad byte decoded to a
+        # replacement character instead of raising.
+        self.assertIn("bad byte:", result.stderr)
+        self.assertIn("in name", result.stderr)
 
 
 if __name__ == "__main__":

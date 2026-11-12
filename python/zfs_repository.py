@@ -36,6 +36,7 @@ def is_dataset_encrypted(path):
             ["zfs", "list", "-H", "-o", "name,mountpoint"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -59,6 +60,7 @@ def is_dataset_encrypted(path):
             ["zfs", "get", "-H", "-o", "value", "encryption", ds_name],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -81,6 +83,7 @@ def _list_fs_mount_state():
             ["zfs", "list", "-H", "-o", "name,mountpoint,mounted", "-t", "filesystem"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
     except OSError:
@@ -316,6 +319,7 @@ def _zfs_get_property(dataset, prop):
             ["zfs", "get", "-H", "-o", "value", prop, dataset],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
     except OSError:
@@ -1098,7 +1102,12 @@ class ZfsRepository:
         return (["sudo", "zpool"] if self.sudo else ["zpool"]) + list(args)
 
     def _run(self, cmd: list[str], check: bool = True, timeout: int | None = None):
-        return subprocess.run(cmd, capture_output=True, text=True, check=check, timeout=timeout)
+        # errors="replace": zfs error text can carry raw bytes (rejected
+        # names echo the offending byte), and one bad byte in tool output
+        # must never crash the calling action with UnicodeDecodeError.
+        return subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace", check=check, timeout=timeout
+        )
 
     # ------------------------------------------------------------------
     # Pool reads

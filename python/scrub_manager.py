@@ -1212,6 +1212,7 @@ def set_system_scrub_enabled(pool_name: str, weekly: bool, monthly: bool) -> boo
                 ["systemctl", action, "--now", unit],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
                 timeout=15,
             )

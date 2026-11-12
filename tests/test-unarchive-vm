@@ -396,9 +396,19 @@ ${arc_dataset}"
                 local ds f marker
                 case "$plain" in
                     "zfs list -H -o name "*)
+                        # Existence probe: answer from the mock state model
+                        # in-shell. Routing this through the mock zfs inside
+                        # a `| grep -qxF` pipeline leaves a fork pair as the
+                        # pipeline's producer and consumer — under
+                        # parallel-suite load a fork failure kills an
+                        # element and the orchestrator reads "dataset
+                        # missing" (the one-per-batch flake class
+                        # test-lib's list branch already de-forked itself
+                        # against).
                         ds="${plain#zfs list -H -o name }"
                         ds="${ds%% *}"
-                        zfs list -H -o name "$ds" 2>/dev/null | grep -qxF -- "$ds"
+                        [[ -n "${_mock_zfs_datasets[$ds]+x}" ]] \
+                            || _mock_zfs_receive_created "$ds"
                         return $?
                         ;;
                     "zfs get -H -o value mountpoint "*)

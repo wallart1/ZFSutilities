@@ -111,6 +111,7 @@ def _get_online_pool_names():
             ["zpool", "list", "-H", "-o", "name,health"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):

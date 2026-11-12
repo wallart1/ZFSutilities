@@ -25,6 +25,7 @@ def _online_pool_names():
             ["zpool", "list", "-H", "-o", "name,health"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=10,
             check=True,
         )
@@ -109,6 +110,7 @@ def discover_manifest_stores(source):
             ["zfs", "list", "-H", "-t", "filesystem", "-d", "2", "-o", "name", source],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=10,
             check=True,
         )

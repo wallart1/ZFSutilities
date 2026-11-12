@@ -15,7 +15,9 @@
 #              lib/pace_stream.py), rsync, smartctl
 #   proxmox  — pveversion (warn if absent; required only on two-node compute host)
 #   gui      — python3-gi, gir1.2-gtk-3.0, matplotlib (the Performance
-#              page's high-quality chart renderer), DISPLAY
+#              page's high-quality chart renderer), cairo (module import
+#              for the memory/alignment pages plus the GI cairo bridge
+#              for draw callbacks), DISPLAY
 #   two-node — ssh, scp, open-iscsi (only in --two-node mode), plus the
 #              read-only post-restore iSCSI state detection (informational
 #              warns; lib/iscsi-lib.sh)
@@ -267,6 +269,17 @@ check_apt_pkg "gui" "libwebkit2gtk-4.1-0"
 # GUI (and check-prerequisites may itself run as root during install),
 # which is why the remediation package is the system package.
 check_python_module matplotlib
+
+# Required: memory_page.py and alignment_page.py import cairo at module
+# level, so the GUI cannot even start without a python cairo binding.
+# PyGObject additionally needs the GI cairo bridge to marshal
+# cairo.Context in draw callbacks — without python3-gi-cairo every
+# fallback-chart draw dies with "Couldn't find foreign struct converter
+# for 'cairo.Context'" while the import succeeds.  Same system-package
+# law as matplotlib above: a pip --user install under a home directory
+# is invisible to the root-run GUI.
+check_python_module cairo
+check_apt_pkg "gui" "python3-gi-cairo"
 
 if [[ -n "${DISPLAY:-}" ]]; then
     pass "DISPLAY=$DISPLAY"

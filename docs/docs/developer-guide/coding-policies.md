@@ -21,7 +21,10 @@ Key foundational practices:
   pool names, and paths — they are configured by editing the script's own
   variables (or via the `zfsoverrides` mechanism) for a specific deployment.
   Reusable helpers, sourced libraries, and any code invoked by the GUI must
-  not hard-code installation-specific data.
+  not hard-code installation-specific data. User-customizable orchestrator
+  templates like `zfsdailybackup` also set **no** `set -euo pipefail` line:
+  sites are expected to edit them, and site edits must not be subjected to
+  bash strictness.
 - **Use `set -euo pipefail`** at the start of scripts to enable strict error
   handling:
     - `set -e`: Exit immediately on any command failure.

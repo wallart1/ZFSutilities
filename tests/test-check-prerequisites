@@ -110,16 +110,18 @@ EOF
         ln -s /bin/true "$tmp_bin/$cmd"
     done
 
-    # MATPLOTLIB_STUB=absent: python3 succeeds for everything except the
-    # matplotlib import probe (drives the required-module failure branch).
-    if [[ "${MATPLOTLIB_STUB:-present}" == "absent" ]]; then
+    # MATPLOTLIB_STUB=absent / CAIRO_STUB=absent: python3 succeeds for
+    # everything except the named module's import probe (drives the
+    # required-module failure branch of each GUI module check).
+    if [[ "${MATPLOTLIB_STUB:-present}" == "absent" || "${CAIRO_STUB:-present}" == "absent" ]]; then
         # rm first: the loop above left python3 as a symlink, and cat >
         # would follow it into /bin/true instead of replacing it.
         rm -f "$tmp_bin/python3"
         cat > "$tmp_bin/python3" << 'STUB'
 #!/usr/bin/bash
 for arg in "$@"; do
-    [[ "$arg" == *matplotlib* ]] && exit 1
+    [[ "$arg" == *matplotlib* && "${MATPLOTLIB_STUB:-}" == "absent" ]] && exit 1
+    [[ "$arg" == *cairo* && "${CAIRO_STUB:-}" == "absent" ]] && exit 1
 done
 exec /bin/true
 STUB
@@ -366,6 +368,67 @@ test_matplotlib_pass_when_importable() {
     fi
     if [[ "$output" != *"python3 module: matplotlib"* ]]; then
         test_fail "Expected the matplotlib pass line in output"
+        return
+    fi
+    test_pass
+}
+
+test_cairo_absent_fails_with_remediation_package() {
+    test_start "cairo absence fails the check with the system package named"
+
+    local output rc
+    output=$(CAIRO_STUB=absent run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+
+    # Required GUI prerequisite: absence fails so the installers'
+    # remediation offer pulls the system package in.
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1 when cairo is absent, got $rc"
+        return
+    fi
+    if [[ "$output" != *"python3 module: cairo"* ]]; then
+        test_fail "Expected the cairo fail line in output"
+        return
+    fi
+
+    output=$(CAIRO_STUB=absent \
+        run_check_prerequisites_with_mock_env --single-node --list-failures 2>&1)
+    rc=$?
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected --list-failures exit 1 when cairo is absent, got $rc"
+        return
+    fi
+    if ! printf '%s\n' "$output" | grep -q \
+        '^gui|python3 module: cairo|python3-cairo|module not installed$'; then
+        test_fail "Expected the python3-cairo remediation row in the failure list"
+        return
+    fi
+    test_pass
+}
+
+test_cairo_pass_when_importable() {
+    test_start "cairo presence reports a pass line"
+
+    local output rc
+    output=$(run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 when cairo is importable, got $rc"
+        return
+    fi
+    if [[ "$output" != *"python3 module: cairo"* ]]; then
+        test_fail "Expected the cairo pass line in output"
         return
     fi
     test_pass
@@ -747,6 +810,8 @@ test_module_check_skipped_without_modinfo
 test_module_row_alongside_missing_zfs_tools
 test_matplotlib_absent_fails_with_remediation_package
 test_matplotlib_pass_when_importable
+test_cairo_absent_fails_with_remediation_package
+test_cairo_pass_when_importable
 
 # ---------------------------------------------------------------------------
 # --two-node post-restore iSCSI detection (informational warns only)

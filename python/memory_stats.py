@@ -317,6 +317,7 @@ def collect_memory_sample(
             IOSTAT_ARGS,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -328,6 +329,7 @@ def collect_memory_sample(
                 IOSTAT_ARGS_FALLBACK,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=timeout,
                 check=False,
             )

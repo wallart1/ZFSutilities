@@ -694,6 +694,7 @@ def _mount_dataset_targets(targets, dataset=None):
                     ["sudo", "zfs", "mount", target],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     check=False,
                 )
                 if result.returncode != 0:
@@ -924,6 +925,7 @@ def _mount_one_volume_partition(item, repo, app):
         ["sudo", "mount", "-o", "ro", device, mountpoint],
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:
@@ -1024,6 +1026,7 @@ def _recover_orphaned_mount(target, repo):
                     ["sudo", "zfs", "mount", ancestor],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     check=False,
                 )
                 if result.returncode != 0:
@@ -1038,6 +1041,7 @@ def _recover_orphaned_mount(target, repo):
                 ["sudo", "zfs", "unmount", target],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             if result.returncode == 0:
@@ -1059,6 +1063,7 @@ def _recover_orphaned_mount(target, repo):
                     ["sudo", "umount", mountpoint],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     check=False,
                 )
                 if restore.returncode != 0:
@@ -1207,6 +1212,7 @@ def _lift_and_unmount(target, candidates, lifted, app, repo):
             ["sudo", "umount", mountpoint],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -1222,6 +1228,7 @@ def _lift_and_unmount(target, candidates, lifted, app, repo):
             ["sudo", "zfs", "unmount", target],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         if retry.returncode == 0:
@@ -1250,6 +1257,7 @@ def _restore_lifted(lifted, skip):
             ["sudo", "zfs", "mount", ancestor],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         if result.returncode == 0:
@@ -1350,6 +1358,7 @@ def _unmount_one_dataset(item, repo, app):
                         ["sudo", "zfs", "unmount", target],
                         capture_output=True,
                         text=True,
+                        errors="replace",
                         check=False,
                     )
                     if result.returncode == 0:
@@ -1522,6 +1531,7 @@ def _remount_repair_set(app, plan):
             ["sudo", "zfs", "mount", name],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         stderr = result.stderr.strip()
@@ -1612,6 +1622,7 @@ def execute_mount_repair(app, plan):
                     ],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     check=False,
                 )
                 if result.returncode != 0:
@@ -1636,6 +1647,7 @@ def execute_mount_repair(app, plan):
                     ["sudo", "zfs", "unmount", name],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     check=False,
                 )
                 if result.returncode == 0:
@@ -1658,6 +1670,7 @@ def execute_mount_repair(app, plan):
                             ["sudo", "zfs", "mount", ancestor],
                             capture_output=True,
                             text=True,
+                            errors="replace",
                             check=False,
                         )
                         if mount_result.returncode != 0:
@@ -1671,6 +1684,7 @@ def execute_mount_repair(app, plan):
                         ["sudo", "zfs", "unmount", name],
                         capture_output=True,
                         text=True,
+                        errors="replace",
                         check=False,
                     )
                     if retry.returncode == 0:
@@ -1809,7 +1823,11 @@ def _unmount_one_snapshot(item, repo, app):
     try:
         with zlm.lock(item["dataset"], "w", f"umount snapshot {full_snap}"):
             result = subprocess.run(
-                ["sudo", "umount", path], capture_output=True, text=True, check=False
+                ["sudo", "umount", path],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
             )
     except RuntimeError as exc:
         log_msg(f"FATAL: cannot unmount {full_snap}: {exc}")
@@ -1871,7 +1889,11 @@ def _unmount_device_layers(device, repo):
         if not mountpoint:
             return True
         result = subprocess.run(
-            ["sudo", "umount", device], capture_output=True, text=True, check=False
+            ["sudo", "umount", device],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
         )
         if result.returncode != 0:
             stderr = result.stderr.strip()

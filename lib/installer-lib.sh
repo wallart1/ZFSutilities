@@ -176,6 +176,8 @@ prerequisite_description() {
         rsync)                echo "File synchronization tool used by pull backups" ;;
         "python3")            echo "The Python 3 interpreter" ;;
         "python3 module: gi") echo "The PyGObject introspection bindings for GTK3" ;;
+        "python3 module: cairo") echo "The PyCairo vector-graphics library" ;;
+        "python3-gi-cairo")   echo "PyGObject's cairo bridge for GTK3 drawing callbacks" ;;
         "gir1.2-gtk-3.0")     echo "GTK3 GObject introspection data" ;;
         "gir1.2-webkit2-4.1") echo "WebKit2 GObject introspection data" ;;
         "libwebkit2gtk-4.1-0") echo "WebKit2 runtime library" ;;
@@ -198,7 +200,7 @@ prerequisite_why_needed() {
         bash|zfs|zpool|pv|rsync)
             echo "Core ZFSutilities scripts use this command directly"
             ;;
-        "python3"|"python3 module: gi"|"gir1.2-gtk-3.0"|"gir1.2-webkit2-4.1"|"libwebkit2gtk-4.1-0")
+        "python3"|"python3 module: gi"|"python3 module: cairo"|"python3-gi-cairo"|"gir1.2-gtk-3.0"|"gir1.2-webkit2-4.1"|"libwebkit2gtk-4.1-0")
             echo "Required by the GTK graphical user interface"
             ;;
         ssh|scp)

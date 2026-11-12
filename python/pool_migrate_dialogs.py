@@ -1742,7 +1742,9 @@ def _running_vms_on_pool(repository, source_pool: str) -> dict[str, list[str]]:
                 ]
             else:
                 argv = ["qm", "status", vmid]
-            result = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=30)
+            result = subprocess.run(
+                argv, capture_output=True, text=True, errors="replace", check=False, timeout=30
+            )
         except (OSError, subprocess.SubprocessError) as exc:
             log_msg(f"WARN: Could not check the status of VM {vmid}: {exc}")
             continue

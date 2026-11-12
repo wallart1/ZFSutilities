@@ -106,11 +106,19 @@ with findings reported as informational warnings — the gate stays read-only,
 and findings never fail it. `pip3` is required;
 `mkdocs` and `mkdocs-material` are pip-installed by the installer's doc-server
 step, so their absence is reported as a warning, not a failure. The GUI
-section also probes the optional chart renderer: a `python3 -c "import
-matplotlib"` check reports a pass line, and its absence is a warning naming
-the system package `python3-matplotlib` (the Performance page falls back to
-its built-in Cairo renderer; a pip `--user` install is invisible to the
-root-run GUI). MkDocs 2.x is
+section also requires the chart renderer. A `python3 -c "import
+matplotlib"` probe must succeed: absence fails the check (exit 1, with a
+`gui` row in `--list-failures`) naming the system package
+`python3-matplotlib`, so the installers' remediation offer installs it.
+The GUI still runs without it — the Performance page falls back to its
+built-in Cairo renderer — but the system package installs everywhere apt
+does, so it is the required form (a pip `--user` install is invisible to
+the root-run GUI). The GUI section also checks the cairo binding itself: a
+`python3 -c "import cairo"` probe (the memory and alignment pages import
+cairo at module level, so the GUI cannot start without it) plus the
+`python3-gi-cairo` package, whose GI bridge marshals `cairo.Context` in
+draw callbacks — a bare PyCairo install imports cleanly but leaves every
+fallback-chart draw failing. MkDocs 2.x is
 incompatible with this project; the prerequisite checker fails when `mkdocs`
 >= 2 is installed. When the ZFS tools are missing and apt has no installation
 candidate for `zfsutils-linux` (probed at runtime), the core section appends a

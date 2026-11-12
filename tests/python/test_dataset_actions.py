@@ -596,6 +596,7 @@ class TestUnmount(unittest.TestCase):
                 ["sudo", "umount", "/tmp/mnt/tank_vm-100@manual-2025-01-01"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_log.assert_any_call("VERB: Unmounted snapshot tank/vm-100@manual-2025-01-01")
@@ -855,6 +856,7 @@ class TestUnmountDataset(unittest.TestCase):
                 ["sudo", "zfs", "unmount", "tank/vm-100"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_log.assert_any_call("VERB: Unmounted tank/vm-100")
@@ -1241,6 +1243,7 @@ class TestUnmountDataset(unittest.TestCase):
                 ["sudo", "zfs", "unmount", "tank"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_log.assert_any_call("VERB: Unmounted tank")
@@ -1329,6 +1332,7 @@ class TestMount(unittest.TestCase):
                 ["sudo", "zfs", "mount", "tank/vm-100"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_log.assert_any_call("VERB: Mounted tank/vm-100")
@@ -1364,6 +1368,7 @@ class TestMount(unittest.TestCase):
                 ["sudo", "zfs", "mount", "tank"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_log.assert_any_call("VERB: Mounted tank")
@@ -1735,6 +1740,7 @@ class TestMount(unittest.TestCase):
                 ["sudo", "zfs", "mount", "tank/free"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_refresh.assert_called_once_with(app)
@@ -2494,6 +2500,7 @@ class TestMount(unittest.TestCase):
                 ["sudo", "zfs", "mount", "tank"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             mock_log.assert_any_call(
@@ -2982,6 +2989,7 @@ class TestVolumeLoopActions(unittest.TestCase):
             ["sudo", "mount", "-o", "ro", "/dev/loop0p1", mountpoint],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         mock_log.assert_any_call(f"INFO: Mounted /dev/loop0p1 at {mountpoint} (read-only)")
@@ -3095,6 +3103,7 @@ class TestVolumeLoopActions(unittest.TestCase):
             ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         mock_log.assert_any_call(
@@ -3255,6 +3264,7 @@ class TestVolumeLoopActions(unittest.TestCase):
             ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         repo.loop_detach.assert_called_once_with("/dev/loop0")
@@ -3567,6 +3577,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
             ["sudo", "mount", "-o", "ro", "/dev/loop0p1", mountpoint],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         mock_log.assert_any_call(f"INFO: Mounted /dev/loop0p1 at {mountpoint} (read-only)")
@@ -3651,6 +3662,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
             ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         mock_log.assert_any_call(
@@ -3754,6 +3766,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
             ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         repo.loop_detach.assert_called_once_with("/dev/loop0")

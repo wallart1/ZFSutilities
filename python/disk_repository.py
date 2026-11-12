@@ -312,7 +312,9 @@ class DiskRepository:
         self.udevadm_bin = udevadm_bin
 
     def _run(self, cmd: list[str], check: bool = True, timeout: int | None = None):
-        return subprocess.run(cmd, capture_output=True, text=True, check=check, timeout=timeout)
+        return subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace", check=check, timeout=timeout
+        )
 
     def _prefix(self, cmd: list[str]) -> list[str]:
         """Prepend sudo to *cmd* when the repository was created with sudo=True."""

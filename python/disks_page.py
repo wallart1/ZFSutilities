@@ -221,6 +221,11 @@ class DiskInventoryCache:
             topologies[pool_name] = topology
             self._collect_disk_paths(topology, pool_name, path_to_pools)
 
+        # Partition members must credit their whole disk: pools built on
+        # partitions (by-id -partN leaves) would otherwise leave the
+        # physical disk row pool-less.
+        self._credit_backing_disks(disks, path_to_pools)
+
         for disk in disks:
             disk.pools = self._pools_for_disk(disk.path, path_to_pools)
 
@@ -273,6 +278,46 @@ class DiskInventoryCache:
                 path_to_pools.setdefault(real, []).append(pool_name)
         for child in node.children:
             DiskInventoryCache._collect_disk_paths(child, pool_name, path_to_pools)
+
+    @staticmethod
+    def _credit_backing_disks(
+        disks: list[DiskInfo],
+        path_to_pools: dict[str, list[str]],
+    ) -> None:
+        """Credit each member's backing disk with the member's pool membership.
+
+        Each inventory entry is indexed by its kernel path, that path's
+        realpath, and its by-id name (bare basename and full
+        /dev/disk/by-id/ form — topology leaves carry the full form); a
+        hit maps to the entry's parent disk. A member the inventory does
+        not know (unplugged, mid-refresh) keeps only its own keys, so
+        membership fails open exactly as before.
+        """
+        index: dict[str, str] = {}
+        for disk in disks:
+            target = disk.parent_path or disk.path
+            keys = [disk.path]
+            if disk.by_id:
+                keys.extend((disk.by_id, f"/dev/disk/by-id/{disk.by_id}"))
+            for key in keys:
+                index[key] = target
+                try:
+                    index[os.path.realpath(key)] = target
+                except OSError:
+                    pass
+        for member, pool_names in list(path_to_pools.items()):
+            backing = index.get(member)
+            if backing is None:
+                try:
+                    backing = index.get(os.path.realpath(member))
+                except OSError:
+                    backing = None
+            if backing is None:
+                continue
+            credited = path_to_pools.setdefault(backing, [])
+            for pool_name in pool_names:
+                if pool_name not in credited:
+                    credited.append(pool_name)
 
     @staticmethod
     def _pools_for_disk(

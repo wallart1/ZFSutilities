@@ -815,24 +815,24 @@ class GuiProbe:
 
     def comp_checkagainst_add_remove_row(self):
         self.navigate("checkagainst")
-        views = self.treeviews("checkagainst")
-        if not views:
-            return False, "no comparison rows view"
-        store = views[0].get_model()
-        before = store.iter_n_children(None) if store is not None else 0
+        # The page stacks four views (backup-derived, offsite-derived,
+        # user entries, merged preview); Add Row/Remove Row operate on the
+        # USER entries store, so count and select there — views[0] is the
+        # backup-derived table and never moves.
+        store = getattr(self.win, "_ca_store", None)
+        view = getattr(self.win, "_ca_view", None)
+        if store is None or view is None:
+            return False, "no user entries view"
+        before = store.iter_n_children(None)
         self._click_action("checkagainst", "Add Row")
         self.pump(5)
-        after_add = (
-            views[0].get_model().iter_n_children(None) if views[0].get_model() is not None else 0
-        )
+        after_add = store.iter_n_children(None)
         # remove it again: select the last row, click Remove Row; any
         # confirmation is answered by the profile responder
-        self.select_row(views[0], max(after_add - 1, 0))
+        self.select_row(view, max(after_add - 1, 0))
         self._click_action("checkagainst", "Remove Row")
         self.pump(5)
-        after_remove = (
-            views[0].get_model().iter_n_children(None) if views[0].get_model() is not None else 0
-        )
+        after_remove = store.iter_n_children(None)
         return after_add == before + 1, (
             f"rows {before} -> {after_add} (add) -> {after_remove} (remove)"
         )

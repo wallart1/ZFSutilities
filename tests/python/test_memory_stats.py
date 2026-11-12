@@ -488,6 +488,7 @@ class TestCollectMemorySample(unittest.TestCase):
                 ms.IOSTAT_ARGS,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=ms.IOSTAT_TIMEOUT,
                 check=False,
             )

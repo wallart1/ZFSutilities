@@ -341,6 +341,26 @@ plan dir.)
 
 ## Active / parked threads
 
+- **0.141.0 wrap-up review pass (2026-11-11, uncommitted on top of the
+  cycle).** PREEXISTING emptied (all four entries resolved): disks-page
+  partition-member pools now credit the whole disk row
+  (`_credit_backing_disks`, red-proofed tests, gtk-gui Pools column
+  sentence); the unarchive ssh stub's existence probe answers from the
+  mock state in-shell (de-forked — the one-per-batch parallel-load
+  flake class test-lib already documented); zfsdailybackup DE-STRACTED
+  per the user's ruling that user-customizable orchestrators carry no
+  strict mode (coding-policies exemption bullet, test-strict-mode
+  template fence — note zfssendoffsite is also a documented template
+  but stays strict until the user rules); commands.md matplotlib
+  paragraph corrected to the fail reality. Test additions: F-050
+  raw-byte fence at ZfsRepository._run (sys.executable child writing a
+  lone 0xB5 — bash printf re-encodes escapes through its locale, so it
+  can never emit an invalid byte; strict-mode decode red-proofed).
+  GLOSSARY: RID-suffixed datasets (the flagged to-add item — RID = the
+  survey run's time-of-day digits) + strict mode. Gates: ruff
+  check/format green, shellcheck clean (documented command), docs
+  integrity green, site rebuilt, full suite green (no soaks).
+
 - **ITF report.md live visibility (2026-11-11, in tree, uncommitted).**
   Every report.md line now carries a UTC timestamp; `itf_step_start`
   (report-lib) announces the START of long activities — one line each at
@@ -585,6 +605,38 @@ plan dir.)
   backup_runner.py finish+cancel paths).
 - Gates: mkdocs build to /tmp clean (anchors resolve); history-marker grep
   sweep clean; full suite at turn end.
+
+## 2026-11-11 — j22 function survey vs the pub tree (first 0.141.0 survey)
+
+- Fresh j22 draw (107 items, two-node lab) against the merged pub tree
+  (run-20261111-195614): all CLI green; two GUI reds —
+- F-050 (product): Snapshot fed the probe's garbage name
+  `survey-garbage-µ` crashed the action with UnicodeDecodeError. zfs
+  rejects µ (`invalid character '\302' in name`) and embeds the raw byte
+  IN the error text; every product subprocess call decoded captured
+  output with strict UTF-8 (`text=True`). Fixed with
+  `errors="replace"` on every text-mode subprocess site (22 modules);
+  22 mock assertions that pinned the old kwargs updated. Reproduced
+  byte-exact on the kept lab guest before fixing.
+- F-047 closed (product): gui prereq set gains `check_python_module
+  cairo` + `check_apt_pkg python3-gi-cairo`. Second layer discovered in
+  the same probe log: bare python3-cairo imports fine but PyGObject
+  can't marshal `cairo.Context` — every fallback-chart draw died with
+  "Couldn't find foreign struct converter" TypeError spam
+  (python3-gi-cairo is the bridge; pulls python3-cairo via apt dep).
+  installer-lib description/why rows added; j05's y/y remediation feed
+  absorbs the new packages with no new prompts (aggregate prompts).
+  test-check-prerequisites: CAIRO_STUB knob + absent/pass tests.
+- Survey-engine fix (not a finding): comp_checkagainst_add_remove_row
+  counted views[0] — the page's first view is backup-derived; Add/Remove
+  Row operate on the USER store. Now counts/selects `_ca_store`/`_ca_view`.
+- survey-lib GUI staging: python3-cairo → python3-gi-cairo (bridge included).
+- Docs: commands.md check-prerequisites paragraph gains the cairo law.
+  PREEXISTING +1: commands.md says matplotlib absence is a "warning"
+  while the check fails (stale paragraph, its own doc decision).
+- Gates: test-check-prerequisites green; python suite green after the
+  assertion updates; archive-replay verification + full bash suite at
+  turn end (results in the wrap-up).
 
 ## 2026-11-11 (pub2): lock-conflict prompt under strict callers (user bug report)
 

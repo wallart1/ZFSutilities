@@ -546,6 +546,119 @@ class TestDiskInventoryCache(unittest.TestCase):
         self.assertEqual(len(data.disks), 1)
         self.assertEqual(data.disks[0].pools, ["pool1"])
 
+    def test_load_credits_backing_disk_for_partition_member(self):
+        """A pool built on partitions must credit the whole disk row.
+
+        Topology leaves for partition-member pools are by-id ``-partN``
+        paths; without backing-disk credit the physical disk row's Pools
+        column stays blank and selecting it takes the no-pool branch.
+        """
+        dp = _import_disks_page()
+        whole = _disk(path="/dev/sda", parent_path=None, by_id="ata-SSD-1234")
+        partition = _disk(
+            path="/dev/sda2",
+            name="sda2",
+            disk_type="part",
+            parent_path="/dev/sda",
+            by_id="ata-SSD-1234-part2",
+            pools=[],
+        )
+        disk_repo = MagicMock()
+        disk_repo.disk_inventory.return_value = MagicMock(
+            disks=[whole, partition],
+            by_path={"/dev/sda": whole, "/dev/sda2": partition},
+        )
+        zfs_repo = MagicMock()
+        zfs_repo.list_pools_full.return_value = [{"name": "pool1"}]
+        zfs_repo.pool_topology.return_value = _topology(
+            "pool1",
+            children=[
+                TopologyNode(
+                    name="/dev/disk/by-id/ata-SSD-1234-part2",
+                    vdev_type="disk",
+                    state="ONLINE",
+                    read=0,
+                    write=0,
+                    cksum=0,
+                    ashift=None,
+                    children=[],
+                )
+            ],
+        )
+        zfs_repo.get_ashift.return_value = MagicMock(effective=12)
+
+        # On a real host the by-id leaf symlinks to the kernel partition
+        # path; model that resolution so the fixture matches production
+        # device layout (realpath of a nonexistent path is a no-op here).
+        real_paths = {"/dev/disk/by-id/ata-SSD-1234-part2": "/dev/sda2"}
+        orig_realpath = os.path.realpath
+        cache = dp.DiskInventoryCache(disk_repo, zfs_repo)
+        with patch.object(
+            dp.os.path,
+            "realpath",
+            side_effect=lambda p: real_paths.get(p, orig_realpath(p)),
+        ):
+            data = cache._load()
+
+        by_path = {disk.path: disk for disk in data.disks}
+        self.assertEqual(by_path["/dev/sda"].pools, ["pool1"])
+        self.assertEqual(by_path["/dev/sda2"].pools, ["pool1"])
+
+    def test_load_credits_backing_disk_across_pools(self):
+        """Partitions of one disk in different pools credit the disk with both."""
+        dp = _import_disks_page()
+        whole = _disk(path="/dev/sda", parent_path=None, by_id="ata-SSD-1234")
+        part1 = _disk(
+            path="/dev/sda1",
+            name="sda1",
+            disk_type="part",
+            parent_path="/dev/sda",
+            by_id="ata-SSD-1234-part1",
+            pools=[],
+        )
+        part2 = _disk(
+            path="/dev/sda2",
+            name="sda2",
+            disk_type="part",
+            parent_path="/dev/sda",
+            by_id="ata-SSD-1234-part2",
+            pools=[],
+        )
+        disk_repo = MagicMock()
+        disk_repo.disk_inventory.return_value = MagicMock(
+            disks=[whole, part1, part2],
+            by_path={"/dev/sda": whole, "/dev/sda1": part1, "/dev/sda2": part2},
+        )
+        zfs_repo = MagicMock()
+        zfs_repo.list_pools_full.return_value = [
+            {"name": "pool1"},
+            {"name": "pool2"},
+        ]
+        zfs_repo.pool_topology.side_effect = lambda name: _topology(
+            name,
+            children=[
+                TopologyNode(
+                    name=f"/dev/sda{name[-1]}",
+                    vdev_type="disk",
+                    state="ONLINE",
+                    read=0,
+                    write=0,
+                    cksum=0,
+                    ashift=None,
+                    children=[],
+                )
+            ],
+        )
+        zfs_repo.get_ashift.return_value = MagicMock(effective=12)
+
+        cache = dp.DiskInventoryCache(disk_repo, zfs_repo)
+        data = cache._load()
+
+        by_path = {disk.path: disk for disk in data.disks}
+        self.assertEqual(by_path["/dev/sda"].pools, ["pool1", "pool2"])
+        self.assertEqual(by_path["/dev/sda1"].pools, ["pool1"])
+        self.assertEqual(by_path["/dev/sda2"].pools, ["pool2"])
+
     def test_load_passes_through_repository_filtering(self):
         """The cache must not re-add disks the repository filtered out.
 

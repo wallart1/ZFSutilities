@@ -906,7 +906,9 @@ def get_mounted_snapshots():
     """
     mounted = set()
     try:
-        result = subprocess.run(["mount", "-t", "zfs"], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            ["mount", "-t", "zfs"], capture_output=True, text=True, errors="replace", check=False
+        )
         if result.returncode != 0:
             return mounted
         for line in result.stdout.splitlines():
@@ -1306,6 +1308,7 @@ def get_busy_processes(path):
             ["fuser", "-m", path],
             capture_output=True,
             text=True,
+            errors="replace",
             check=True,
         )
         for line in result.stdout.strip().splitlines():
@@ -1320,6 +1323,7 @@ def get_busy_processes(path):
                 ["lsof", "-t", "+D", path],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=True,
             )
             pids.update(result.stdout.strip().split())
@@ -1333,6 +1337,7 @@ def get_busy_processes(path):
                 ["ps", "-p", pid, "-o", "comm="],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=True,
             )
             name = ps.stdout.strip()
@@ -1482,6 +1487,7 @@ def collect_dataset_busy_reasons(target, repo=None):
             ["pgrep", "-f", f"zfs send.*{target}"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -1503,6 +1509,7 @@ def collect_dataset_busy_reasons(target, repo=None):
                 ["targetcli", "/backstores/block", "ls"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
             )
             if result.returncode == 0 and f" {bsname} " in result.stdout:
@@ -1512,6 +1519,7 @@ def collect_dataset_busy_reasons(target, repo=None):
                         ["targetcli", "/iscsi", "ls"],
                         capture_output=True,
                         text=True,
+                        errors="replace",
                         check=True,
                     ).stdout
                     for t in re.findall(r"iqn\.\S+", iscsi_out):
@@ -1520,6 +1528,7 @@ def collect_dataset_busy_reasons(target, repo=None):
                                 ["targetcli", f"/iscsi/{t}/tpg1/luns", "ls"],
                                 capture_output=True,
                                 text=True,
+                                errors="replace",
                                 check=True,
                             ).stdout
                             if bsname in luns:
@@ -1557,6 +1566,7 @@ def collect_dataset_busy_reasons(target, repo=None):
                 ["qm", "status", vmid],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=True,
             )
             if "running" in result.stdout:
@@ -1580,6 +1590,7 @@ def collect_dataset_busy_reasons(target, repo=None):
                 ["zfs", "get", "-H", "-o", "value", prop, target],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=True,
             ).stdout.strip()
             if value and value != "off" and value != "-":

@@ -953,6 +953,7 @@ def _run_profile_now(app, profile_name):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
         )
     except OSError as exc:
         log_msg(f"WARN: Could not start profile {profile_name}: {exc}")

@@ -226,6 +226,7 @@ def _run_cmd(cmd, timeout=5):
             shell=True,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -276,6 +277,7 @@ def _scheduled_start_iso(pid):
             ["ps", "-p", str(pid), "-o", "lstart="],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=5,
             check=False,
         )
@@ -576,6 +578,7 @@ def _probe_remote_host(host, include_fence=False):
             ssh_command(host, _remote_probe_script(include_fence)),
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=30,
             check=False,
         )
@@ -617,6 +620,7 @@ def _get_host_zfs_version(host, sections=None):
                 ["zfs", "version"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=False,
                 timeout=10,
             )
@@ -696,6 +700,7 @@ def _get_local_os_info():
             ["pveversion"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=10,
         )
@@ -712,6 +717,7 @@ def _get_local_os_info():
             ["cat", "/etc/os-release"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=10,
         )
@@ -728,6 +734,7 @@ def _get_local_os_info():
             ["inxi", "-S"],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=10,
         )
@@ -1107,6 +1114,7 @@ def _compute_fence_failure_warning(probe_map=None):
                 cmd,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -2464,6 +2472,7 @@ def _on_fix_iscsi_clicked(_button, app):
             [repair_script],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=120,
         )
@@ -2674,6 +2683,7 @@ def _collect_running_tasks(app):
             ["pgrep", "-f", "profile_runner.py"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=5,
             check=False,
         )
@@ -2689,6 +2699,7 @@ def _collect_running_tasks(app):
                         ["ps", "-p", pid, "-o", "args="],
                         capture_output=True,
                         text=True,
+                        errors="replace",
                         timeout=5,
                         check=False,
                     )

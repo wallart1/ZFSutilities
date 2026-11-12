@@ -322,6 +322,7 @@ def _run_command(step, session_log_file=None):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",
                 env=env,
                 start_new_session=True,
             )

@@ -125,7 +125,12 @@ def _subprocess_run(argv: list[str]) -> tuple[int, str]:
     """Run *argv* and return ``(rc, stdout)``; non-zero/absent → (1, "")."""
     try:
         result = subprocess.run(
-            argv, capture_output=True, text=True, timeout=_PROBE_TIMEOUT, check=False
+            argv,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_PROBE_TIMEOUT,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return 1, ""

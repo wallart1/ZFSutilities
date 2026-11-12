@@ -11,8 +11,12 @@
 # custom daily-backup script.
 #
 # $1    (Optional) Overrides
+#
+# No strict mode here by design: this is a user-customizable template
+# (the orchestrator exemption in the developer guide's coding policies),
+# and site edits must not be subjected to bash strictness.
 
-set -euo pipefail
+
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then

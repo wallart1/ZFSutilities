@@ -69,6 +69,7 @@ fi
         ["bash", "-c", script],
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
     data = {

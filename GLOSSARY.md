@@ -1,7 +1,7 @@
 # Glossary
 
 **Items to be added by Zcode:**
-    rid-suffixed datasets
+
 
 
 Plain-language definitions of terms as they are actually used in this
@@ -654,6 +654,17 @@ dataset cannot be destroyed ("dataset is busy"); `zfs receive -A`
 discards the token together with the partial data. The busy resolver
 offers exactly that, as a destructive choice with a safe default.
 
+## RID-suffixed datasets
+
+The function survey names its scratch state after the run. Every run
+dir carries a timestamp, and its time-of-day digits become the run id
+(RID) — run-20261111-203336-… gives RID 203336. The playground
+datasets, snapshots, and clone VM wear that id as a suffix
+(`zfstest1/survey-203336`, `@survey-203336`), so one run's scratch is
+distinguishable from every other run's and teardown can find exactly
+its own. Report lines like "survey playground staged (rid 203336)"
+refer to this naming.
+
 ## run dir
 
 The product's runtime-state directory, `/run/zfsutilities` by default
@@ -738,6 +749,18 @@ per tick, which flooded the compute node's journal (~14,000 lines/hour at
 the 30 s default). With reuse plus the batched probe
 (`dashboard_page._probe_remote_host`), a refresh rides one existing
 connection and the poll becomes invisible in the remote journal.
+
+## strict mode
+
+Bash's `set -euo pipefail` trio at the top of a script: exit on any
+command failure, treat unset variables as errors, and fail a pipeline
+when any segment fails. Orchestrator scripts in this project set it;
+sourced libraries never do (the line would leak into every sourcing
+shell), so library code is written to *tolerate* strict callers —
+defaulting optional reads with `${var:-}` and the like. The one
+deliberate exception: user-customizable template scripts such as
+`zfsdailybackup` carry no set line, because sites edit them and those
+edits must not be subjected to bash strictness.
 
 ## suite
 

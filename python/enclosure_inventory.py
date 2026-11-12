@@ -165,7 +165,9 @@ class EnclosureInventory:
     # ------------------------------------------------------------------
 
     def _run(self, cmd: list[str], check: bool = True, timeout: int | None = None):
-        return subprocess.run(cmd, capture_output=True, text=True, check=check, timeout=timeout)
+        return subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace", check=check, timeout=timeout
+        )
 
     def _list_transport_disks(self) -> list[_TransportDisk]:
         """Whole disks with their transport from `lsblk --json`.

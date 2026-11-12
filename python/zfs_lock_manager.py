@@ -397,6 +397,7 @@ def _run_remote(host: str, *args: str, timeout: int = 30) -> subprocess.Complete
         cmd,
         capture_output=True,
         text=True,
+        errors="replace",
         timeout=timeout,
         check=False,
     )
@@ -426,6 +427,7 @@ def _acquire_remote(dataset: str, lock_type: str, description: str = "") -> str:
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         text=True,
+        errors="replace",
     )
 
     ready, _, _ = select.select([proc.stdout], [], [], 30)
