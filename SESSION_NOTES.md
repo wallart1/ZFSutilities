@@ -655,3 +655,171 @@ plan dir.)
   `_make_app` gives the app a real `_dashboard_task_carry` dict.
 - Docs: gtk-gui.md Tasks section — live-first ascending order and the
   retention behavior in user terms.
+
+*(pub3 lane history block, unioned at the 0.141.0 merge — pruned at the next release prune)*
+
+## 2026-11-11 — ITF: linked clones (no storage migration needed)
+
+- User asked whether the ITF VMs could move to a PVE storage type that
+  supports linked cloning. Answer: NO move needed — the lab's lvmthin
+  `itfguests` storage already supports linked clones (LvmThinPlugin
+  `clone_image` = `lvcreate -s` thin snapshot; live-proven on
+  zfstestvm1, PVE 9.2.26). The old "lvmthin → no linked clones (PVE
+  linked = file-based only)" belief (harness comment, docs bullet,
+  memory) was simply wrong. There is no `--linked` flag: linked is
+  `qm clone`'s default for templates; `--full 1` was the only thing
+  forcing copies.
+- `itf_guest_clone` now honors `ITF_CLONE_MODE` (linked default; full =
+  `--full 1` escape hatch, validated enum in config-lib). Rerun
+  snapshot/rollback and destroy proven fine on a linked volume (live
+  probe). Clone volids stay `vm-` (link untracked) → guard/fence/
+  teardown untouched; thin snapshots keep blocks after origin deletion
+  → template rebuilds still can't break running guests.
+- Live gate: fresh j04 green, 2m35s total, clone step 11 s (was
+  ~2¼ min standard, 9–10+ min for j10's 32 GiB template). Wording
+  swept (driver help, journeys README, common.sh/j04/j10 comments);
+  "linked clone" glossary entry added; memory corrected.
+- j10 fact: templates were re-stamped early 2026-11-11 (storage
+  deliberately 0.118.0 — j10's premise intact).
+
+## 2026-11-11 — GUI: Settings menu; Notifications + Documentation Editor moved (pub3)
+
+- User request: add a Settings menu to the menu bar; move File →
+  Notifications… and Help → Set Documentation Editor... into it, the
+  latter renamed to "Documentation Editor..." (ASCII ellipsis kept per
+  the item's existing style; Notifications… label unchanged, Unicode
+  ellipsis and all). Menu bar order: File, View, Settings, Help. File is
+  now Quit only (leading separator dropped); Help keeps its separator
+  between help topics and About. Handlers unchanged.
+- Test gotcha (create_menu_bar structural test): Gtk.Menu construction
+  order is file, view, FONT SUBMENUS ×2, settings, help — the font loop
+  runs before the settings block — so "third menu = settings" is wrong;
+  identify top-level menus via `items["File"/"Settings"/"Help"].
+  set_submenu.call_args` instead. Menu/MenuItem need per-call fresh
+  side_effects (shared class-mock instances can't be told apart);
+  mock_gtk(fresh=True) scopes the module re-import per test.
+- Docs swept for menu paths: gtk-gui.md (menu-bar list now four menus,
+  new "## Settings Menu" section before Help Menu, Editing Pages and
+  Notifications-dialog intros), profiles.md, data-structures.md,
+  messages/index.md (×2), python-modules.md — all "File → Notifications…"
+  → "Settings → Notifications…". Dialog title "Set Documentation Editor"
+  (zfsutilities_gui.py) deliberately unchanged. changelog references are
+  historical records, untouched.
+
+## 2026-11-11 — Logs: Log Viewer toolbar moved to the bottom (pub3)
+
+- User request: in the Log Viewer (embedded Logs-tab pane and its pop-out
+  window), move the Level dropdown, Short-prefix toggle, Search bar, and
+  pop-out/dock button from the top to the bottom. The viewer is ONE widget
+  tree (`viewer_box`) reparented between the tab frame and the pop-out
+  window, so a single pack-order change moves the toolbar in both
+  presentations — no widget duplication.
+- New order in `viewer_box`: path line (stays top), text view, status
+  label, Show More, Load Full Log, toolbar last (bottom bar). Only the
+  toolbar moved; the status line and chunk buttons keep their relative
+  order hugging the text they annotate.
+- Test gotcha: mock_gtk hands every `Gtk.Box()` the same shared instance,
+  so viewer_box vs viewer_toolbar needs `Gtk.Box.side_effect` returning
+  fresh mocks (addCleanup restores None); `Gtk.Frame.side_effect = None`
+  first, same isolation as the page-viewport test (this test runs last
+  alphabetically, after the bold-label test exhausts the sentinel list).
+  The toolbar is identified by being the box that packs the level combo,
+  not by construction index. Red-proofed by re-packing the toolbar above
+  the text view: `packed[-1] is toolbar` fails with the Load Full button
+  as the last pack.
+- gtk-gui.md Log-viewer section reworded (path line above the text view;
+  Level dropdown and Search bar below it). The main-window bottom panel
+  docs (a different viewer) untouched; the changelog's old wording is a
+  historical record, left alone.
+
+## 2026-11-11 — Surface test: false "Aborted", dialog width, estimates, conveyance
+
+- User report (Disks → Disk Inventory → Surface Test, Fast): the Wear/Test
+  cell showed "Aborted" while the test was still running; modal too wide;
+  wanted per-mode estimated run times and a conveyance option where
+  supported. Root causes verified against smartmontools `ataprint.cpp`:
+  - `poll_self_test` ran `smartctl -l selftest`, but its running regex
+    matched only the `-c` exec-status text ("Self-test routine in
+    progress... N% of test remaining") which never appears there. Real
+    `-l selftest` shows the running test as a log row with status
+    "Self-test routine in progress 90%" — exactly 29 chars, so the
+    `%-29s` column leaves ONE space before the remaining %. Every poll
+    said not-running; the first poll (immediately after Start, before the
+    log row appears) finalized the entry from the stale newest row →
+    "Aborted"/"Failed" while firmware kept testing.
+  - Estimate regexes assumed one-line `-c` output; smartctl prints
+    "Short self-test routine \n" + "recommended polling time: ( 2)
+    minutes." on TWO lines (Short even has a trailing space) → estimates
+    were "~unknown" since 0.103.0.
+  - smartctl prints the conveyance polling-time pair ONLY when supported
+    → parsing it doubles as the support check.
+- Fixes: poll now `smartctl -c -l selftest` (exec-status byte updates the
+  moment a test starts — closes the start-gap; log rows give final
+  statuses); log-row progress form parsed as fallback; polling-time
+  regexes cross the line break; new `self_test_estimates()` (one `-c`
+  call feeds the dialog); `start_self_test` accepts conveyance; dialog
+  rebuilt (short radio labels + wrapped descriptions with "Estimated run
+  time: ~Xm", conveyance option only when supported, labels wrap at 56
+  chars + dialog width 560); disks_page dispatches conveyance.
+- Tests use real smartmontools formats (row printf
+  `"#%2u  %-19s %-29s %1d0%%  %8u         %s"`). Gotcha: asserting on
+  `patch.object(dst.Gtk, "Label", MagicMock())` AFTER the with-block reads
+  the unpatched attribute — hold the mock reference (ExitStack helper).
+- Fixture-fidelity law held: the old fixtures baked in output shapes
+  smartctl never emits — that's how the bug survived since 0.103.0.
+
+## 2026-11-11 — Enclosures: Set Max I/O Rate modal width
+
+- User report: the Set Max I/O Rate… modal was far too wide — the
+  explanatory rate-syntax line sat on one line. The wrapping labels had
+  set_line_wrap(True) but no cap, and a wrapping label's natural width is
+  its full unwrapped line, so the ~230-char syntax text pinned the dialog
+  at that width (GTK wraps only when allocated less than natural width).
+- Fix mirrors the surface-test dialog treatment the same day:
+  create_dialog size=(560, -1) + set_max_width_chars(56)
+  (_RATE_DIALOG_MAX_WIDTH_CHARS) on the three wrapping labels (caption,
+  syntax, problem). New test_dialog_width_capped_and_text_wraps asserts
+  the size kwarg and that every wrapping label carries the cap.
+
+## 2026-11-10 (later) — Retention prune list: <offsite> row removed (user report, pub3)
+
+- User report: Prune Snapshots listed BOTH `<offsite>` and `z40tb` (the
+  online offsite-candidate registry pool) — two rows, one pool. Cause:
+  `refresh_prune_pools` added an `<offsite>` pseudo-row whenever a
+  `<offsite>`-keyed retention policy exists, while the real pool was
+  always individually listed too (offsite candidates are registry pools
+  by definition, so the placeholder could never add a pool the list
+  didn't already show).
+- Fix rule (matches the Offsite page's convention — tokens live in
+  stored configs, real pool names in the UI): the interactive prune
+  list shows real pool names only. `refresh_prune_pools` lost the
+  placeholder branch (every row health=ONLINE); `on_retention_prune`
+  lost the now-dead `<offsite>` selection-expansion block; the two
+  column-header tooltips lost their `<offsite>` wording.
+- Recall guard added: `load_retention_profile_config` WARNs when a
+  recalled profile's prune_pools entry matches no current row
+  ("<offsite>" or a detached pool), so a recall→re-save can't silently
+  drop a pool. The `<offsite>` POLICY itself is untouched — policy
+  creation/edit, zfscleanup's automatic pickup for online offsite
+  pools, and profile_runner's expansion for stored profiles all keep
+  working.
+- Tests: two prune-list tests rewritten + recall-WARN test added (all
+  red-proofed against the unmodified code); TestOnRetentionPruneOffsite
+  deleted; add-policy helper's stale get_offsite_candidate_names patch
+  dropped with the import. retention.md §"Special <offsite> Policy"
+  updated. Full suite green.
+- Same turn, user-cued: "Copied log path to clipboard" (logs_page.py
+  context-menu copy) demoted INFO → VERB; messages-manual row and the
+  built site follow; mkdocs 2.0 upgrade banner on build is the known
+  pin situation, ignored.
+- Also user-cued: gtk-gui.md's overlapping "Bottom panel" + "Log Panel"
+  sections merged into one "Bottom panel" section (no inbound #log-panel
+  links existed). The Log Panel pop-out paragraph had conflated the
+  Logs-tab viewer's pop-out with the main-window one — the merged bullet
+  now states only the main-window truth (geometry remembered; the
+  Logs-tab clause stays in the Logs tab's own Pop Out bullet).
+- Full-suite flake after the merge (docs-only turn): test-zfs-send-
+  receive-dryrun Test 31 (# END trailer) failed once in the full run
+  with "rc=5, duration=43s", then the single suite reran all-green
+  (21.4s, over budget but passing). Timing-sensitive under load; not
+  filed as PREEXISTING — rerun-green, nothing actionable.

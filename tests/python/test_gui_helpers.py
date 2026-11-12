@@ -745,21 +745,62 @@ class TestCreateMenuBar(unittest.TestCase):
         ):
             self.assertIn(("activate", handler, state_key), connect_args)
 
-    def test_file_menu_contains_notifications_before_quit(self):
-        with mock_gtk() as gtk_mock:
+    def test_settings_menu_holds_notifications_and_docs_editor(self):
+        """Settings carries Notifications and Documentation Editor; File keeps only Quit."""
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers
+
+            # Distinct per-call instances so individual menus and items can
+            # be told apart (the shared class-mock instances cannot).
+            menus = []
+
+            def fresh_menu(*_args, **_kwargs):
+                menus.append(MagicMock())
+                return menus[-1]
+
+            items = {}
+
+            def fresh_item(*_args, **kwargs):
+                item = MagicMock()
+                items[kwargs.get("label")] = item
+                return item
+
+            gtk_mock.Menu.side_effect = fresh_menu
+            gtk_mock.MenuItem.side_effect = fresh_item
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 app = MagicMock()
                 gui_helpers.create_menu_bar(app)
 
-        labels = [c.kwargs["label"] for c in gtk_mock.MenuItem.call_args_list]
+        labels = list(items)
         self.assertIn("Notifications…", labels)
-        self.assertLess(labels.index("Notifications…"), labels.index("Quit"))
+        self.assertIn("Documentation Editor...", labels)
+        self.assertNotIn("Set Documentation Editor...", labels)
 
-        connects = gtk_mock.MenuItem.return_value.connect.call_args_list
-        connect_args = [c.args for c in connects]
-        self.assertIn(("activate", app.on_notifications), connect_args)
+        # Identify the top-level menus by their set_submenu wiring (the
+        # font submenus are also Gtk.Menu instances, so construction
+        # order alone cannot pick the top-level menus out).
+        file_menu = items["File"].set_submenu.call_args[0][0]
+        settings_menu = items["Settings"].set_submenu.call_args[0][0]
+        help_menu = items["Help"].set_submenu.call_args[0][0]
+
+        self.assertEqual(
+            [c.args[0] for c in settings_menu.append.call_args_list],
+            [items["Notifications…"], items["Documentation Editor..."]],
+        )
+        self.assertEqual(
+            [c.args[0] for c in file_menu.append.call_args_list],
+            [items["Quit"]],
+        )
+        self.assertNotIn(
+            items["Documentation Editor..."],
+            [c.args[0] for c in help_menu.append.call_args_list],
+        )
+
+        notifications_connects = [c.args for c in items["Notifications…"].connect.call_args_list]
+        self.assertIn(("activate", app.on_notifications), notifications_connects)
+        editor_connects = [c.args for c in items["Documentation Editor..."].connect.call_args_list]
+        self.assertIn(("activate", app.on_set_docs_editor), editor_connects)
 
 
 class TestSectionHeaderAndNoteMarkup(unittest.TestCase):

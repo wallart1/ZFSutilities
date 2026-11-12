@@ -505,7 +505,8 @@ def create_logs_page(app):
 
     restore_log_font_scale(app, app.logs_text, LOG_FONT_STATE_LOGS)
 
-    # Viewer toolbar: level filter + short-prefix toggle + search + pop-out
+    # Viewer toolbar: level filter + short-prefix toggle + search + pop-out.
+    # Packed below the text view (bottom bar of the viewer pane).
     app.logs_viewer_level = DEFAULT_MSG_LEVEL
     app.logs_level_combo = Gtk.ComboBoxText()
     for level in MSG_LEVELS:
@@ -541,7 +542,7 @@ def create_logs_page(app):
     )
     viewer_toolbar.pack_start(app._logs_popout_toggle, False, False, 0)
 
-    # Path line above the toolbar: the full path of the log in the viewer.
+    # Path line above the text view: the full path of the log in the viewer.
     # Hidden until a log is selected; ellipsized from the left so the file
     # name stays visible when the directory prefix is cut.
     app.logs_path_label = Gtk.Label()
@@ -556,7 +557,6 @@ def create_logs_page(app):
     app.logs_path_label.set_margin_bottom(2)
     viewer_box.pack_start(app.logs_path_label, False, False, 0)
 
-    viewer_box.pack_start(viewer_toolbar, False, False, 0)
     viewer_box.pack_start(app.logs_text_scroll, True, True, 0)
 
     app.logs_status_label = Gtk.Label()
@@ -595,6 +595,10 @@ def create_logs_page(app):
     )
     app.logs_load_full_btn.connect("clicked", lambda _b: _on_load_full_log_clicked(app))
     viewer_box.pack_start(app.logs_load_full_btn, False, False, 0)
+
+    # Toolbar last: Level, Short prefix, Search, and the pop-out/dock button
+    # form the bottom bar of the viewer pane.
+    viewer_box.pack_start(viewer_toolbar, False, False, 0)
 
     # Track current file and read offset for chunked loading
     app._logs_current_path = None
@@ -918,7 +922,7 @@ def _copy_log_path_to_clipboard(log_path):
     clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
     clipboard.set_text(log_path, -1)
     clipboard.store()
-    log_msg(f"INFO: Copied log path to clipboard: {log_path}")
+    log_msg(f"VERB: Copied log path to clipboard: {log_path}")
 
 
 def _setup_logs_actions(app):

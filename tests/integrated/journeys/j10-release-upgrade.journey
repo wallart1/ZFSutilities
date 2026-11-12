@@ -5,7 +5,7 @@
 # upgrade path (upgrade-zfsutilities -> change scan -> salvage ->
 # deploy-version -> switch-version) had no journey coverage.
 #
-# The stale storage template is the old-version carrier: it full-clones
+# The stale storage template is the old-version carrier: it linked-clones
 # into a genuinely installed system running an OLDER product version
 # (0.118.0 at authorship), so "clone -> upgrade to the tree under test"
 # is a real old-to-new upgrade with zero extra infrastructure.  The

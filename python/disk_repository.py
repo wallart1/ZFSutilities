@@ -155,31 +155,61 @@ def _parse_smart_wear(data) -> int | None:
 _SELFTEST_PROGRESS_RE = re.compile(
     r"Self-test routine in progress\.\.\.\s*(\d+)% of test remaining"
 )
-# Regex: Short self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes
+# Regex: Short self-test routine\s+recommended polling time:\s*\(\s*(\d+)\)\s*minutes
 # Group 1: recommended polling time in minutes for a short self-test.
+# smartctl prints the routine name and the polling time on two lines
+# ("Short self-test routine \nrecommended polling time: \t (   2) minutes."),
+# so the match must cross the line break.
 _SHORT_MINUTES_RE = re.compile(
-    r"Short self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes", re.IGNORECASE
+    r"Short self-test routine\s+recommended polling time:\s*\(\s*(\d+)\)\s*minutes", re.IGNORECASE
 )
-# Regex: Extended self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes
+# Regex: Extended self-test routine\s+recommended polling time:\s*\(\s*(\d+)\)\s*minutes
 # Group 1: recommended polling time in minutes for an extended (long) self-test.
 _EXTENDED_MINUTES_RE = re.compile(
-    r"Extended self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes", re.IGNORECASE
+    r"Extended self-test routine\s+recommended polling time:\s*\(\s*(\d+)\)\s*minutes",
+    re.IGNORECASE,
 )
+# Regex: Conveyance self-test routine\s+recommended polling time:\s*\(\s*(\d+)\)\s*minutes
+# Group 1: recommended polling time in minutes for a conveyance self-test.
+# smartctl prints this pair only when the device supports conveyance
+# self-tests, so a match also proves support.
+_CONVEYANCE_MINUTES_RE = re.compile(
+    r"Conveyance self-test routine\s+recommended polling time:\s*\(\s*(\d+)\)\s*minutes",
+    re.IGNORECASE,
+)
+# Regex: Self-test routine in progress\s+(\d0)%
+# Purpose: the self-test log row for a running test glues the remaining
+# percent onto the status text ("Self-test routine in progress 90%",
+# a single space — smartmontools pads the status column to exactly 29
+# characters and this string is exactly 29 long).
+_SELFTEST_LOG_PROGRESS_RE = re.compile(r"Self-test routine in progress\s+(\d0)%")
 # Regex: ^#\s*\d+\s
 # Purpose: a self-test log row starts with "# <number>".
 _SELFTEST_LOG_ROW_RE = re.compile(r"^#\s*\d+\s")
 
 
 def _parse_selftest_progress(output: str) -> int | None:
-    """Return the percent remaining while a self-test runs, else None."""
-    match = _SELFTEST_PROGRESS_RE.search(output or "")
-    return int(match.group(1)) if match else None
+    """Return the percent remaining while a self-test runs, else None.
+
+    Matches both forms smartctl emits: the capabilities exec-status line
+    ("Self-test routine in progress... 90% of test remaining") and the
+    self-test log row ("Self-test routine in progress 90%").
+    """
+    for regex in (_SELFTEST_PROGRESS_RE, _SELFTEST_LOG_PROGRESS_RE):
+        match = regex.search(output or "")
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def _parse_test_minutes(output: str, mode: str) -> int | None:
     """Parse the recommended polling time (minutes) for *mode* from `smartctl -c`."""
-    regex = _SHORT_MINUTES_RE if mode == "short" else _EXTENDED_MINUTES_RE
-    match = regex.search(output or "")
+    regexes = {
+        "short": _SHORT_MINUTES_RE,
+        "long": _EXTENDED_MINUTES_RE,
+        "conveyance": _CONVEYANCE_MINUTES_RE,
+    }
+    match = regexes[mode].search(output or "") if mode in regexes else None
     return int(match.group(1)) if match else None
 
 
@@ -651,12 +681,12 @@ class DiskRepository:
         return health, _parse_smart_wear(data)
 
     def start_self_test(self, path: str, mode: str) -> bool:
-        """Start a SMART self-test on *path* (mode "short" or "long").
+        """Start a SMART self-test on *path* (mode "short", "long", or "conveyance").
 
         The test runs in the drive firmware and smartctl returns immediately.
         Returns False when the test could not be started.
         """
-        if not path or mode not in ("short", "long"):
+        if not path or mode not in ("short", "long", "conveyance"):
             return False
         cmd = self._prefix([self.smartctl_bin, "-t", mode, path])
         try:
@@ -678,7 +708,7 @@ class DiskRepository:
 
     def estimate_test_minutes(self, path: str, mode: str) -> int | None:
         """Recommended polling time (minutes) for the self-test mode, or None."""
-        if not path or mode not in ("short", "long"):
+        if not path or mode not in ("short", "long", "conveyance"):
             return None
         cmd = self._prefix([self.smartctl_bin, "-c", path])
         try:
@@ -689,17 +719,42 @@ class DiskRepository:
             return None
         return _parse_test_minutes(result.stdout, mode)
 
+    def self_test_estimates(self, path: str) -> dict:
+        """Recommended polling times (minutes) for every self-test mode.
+
+        One `smartctl -c` call returning {"short": n|None, "long": n|None,
+        "conveyance": n|None}. A conveyance value is present only when the
+        device supports conveyance self-tests (smartctl omits the pair
+        otherwise), so its presence doubles as the support check.
+        """
+        estimates = {"short": None, "long": None, "conveyance": None}
+        if not path:
+            return estimates
+        cmd = self._prefix([self.smartctl_bin, "-c", path])
+        try:
+            result = self._run(cmd, check=False, timeout=60)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return estimates
+        if result.returncode != 0 or not result.stdout:
+            return estimates
+        for mode in estimates:
+            estimates[mode] = _parse_test_minutes(result.stdout, mode)
+        return estimates
+
     def poll_self_test(self, path: str) -> dict:
-        """Poll the self-test log for *path*.
+        """Poll the self-test state for *path* via `smartctl -c -l selftest`.
 
         Returns {"running": True, "remaining_percent": N} while a test is in
         progress, otherwise {"running": False, "status_text": <newest log
-        status or None>}. Never raises.
+        status or None>}. Never raises. The capabilities section carries the
+        live self-test execution status (updated by the firmware the moment
+        a test starts, closing the gap before the log row appears); the log
+        section carries the final statuses.
         """
         empty = {"running": False, "status_text": None}
         if not path:
             return empty
-        cmd = self._prefix([self.smartctl_bin, "-l", "selftest", path])
+        cmd = self._prefix([self.smartctl_bin, "-c", "-l", "selftest", path])
         try:
             result = self._run(cmd, check=False, timeout=60)
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):

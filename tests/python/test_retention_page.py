@@ -533,6 +533,32 @@ class TestRetentionPageProfileConfig(unittest.TestCase):
             self.assertEqual(app._ret_prune_label_entry.get_text(), "monthly")
             self.assertEqual(app._ret_original_prune_label, "monthly")
 
+    def test_load_profile_config_warns_for_pools_missing_from_list(self):
+        """Recalling a profile names prune_pools entries with no current row."""
+        with temp_config_dir():
+            rp = self._fresh_module()
+            app = MagicMock()
+            app._ret_prune_label_entry = _FakeEntry("dailybackup")
+            app._ret_prune_store = _FakeStore([["tank", "ONLINE"]])
+            selection = MagicMock()
+            app._ret_prune_view = MagicMock()
+            app._ret_prune_view.get_selection.return_value = selection
+
+            with capture_logs() as logs:
+                rp.load_retention_profile_config(
+                    app,
+                    {"prune_label": "monthly", "prune_pools": ["tank", "<offsite>", "gone"]},
+                )
+
+            self.assertEqual(app._ret_prune_label_entry.get_text(), "monthly")
+            selection.select_path.assert_called_once()
+            self.assertTrue(
+                any(
+                    "WARN: profile pools missing from prune list: <offsite>, gone" in log
+                    for log in logs
+                )
+            )
+
 
 class TestRetentionPageMultiPoolSave(unittest.TestCase):
     """Verify edits to multiple pools are saved together."""
@@ -1122,7 +1148,8 @@ class TestRetentionPagePruneList(unittest.TestCase):
             self.assertEqual(pools, ["archive"])
             selection.select_path.assert_not_called()
 
-    def test_prune_list_expands_offsite_placeholder(self):
+    def test_prune_list_shows_offsite_candidate_by_name(self):
+        """An online offsite-candidate pool is listed by name, never as <offsite>."""
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=["tank", "z22tb"])
@@ -1146,16 +1173,14 @@ class TestRetentionPagePruneList(unittest.TestCase):
             )
             app._ret_prune_store = _FakeStore()
 
-            with patch.object(rp, "detect_offsite_pools", return_value=["z22tb", "z40tb"]):
-                rp.refresh_prune_pools(app)
+            rp.refresh_prune_pools(app)
 
             pools = [row[0] for row in app._ret_prune_store]
-            self.assertIn("<offsite>", pools)
-            self.assertIn("tank", pools)
-            offsite_row = next(row for row in app._ret_prune_store if row[0] == "<offsite>")
-            self.assertEqual(offsite_row[1], "z22tb, z40tb")
+            self.assertEqual(pools, ["tank", "z22tb"])
+            self.assertTrue(all(row[1] == "ONLINE" for row in app._ret_prune_store))
 
-    def test_prune_list_shows_offsite_not_online(self):
+    def test_prune_list_omits_offsite_row_when_none_online(self):
+        """No <offsite> placeholder row appears when no offsite pool is online."""
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=["tank"])
@@ -1168,6 +1193,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
                         "<offsite>": [{"name": "s", "retain": 4, "minage": 65}],
                     },
                     "pools": [
+                        {"name": "tank", "offsite_candidate": False},
                         {"name": "z22tb", "offsite_candidate": True},
                     ],
                 },
@@ -1177,11 +1203,10 @@ class TestRetentionPagePruneList(unittest.TestCase):
             )
             app._ret_prune_store = _FakeStore()
 
-            with patch.object(rp, "detect_offsite_pools", return_value=[]):
-                rp.refresh_prune_pools(app)
+            rp.refresh_prune_pools(app)
 
-            offsite_row = next(row for row in app._ret_prune_store if row[0] == "<offsite>")
-            self.assertEqual(offsite_row[1], "not online")
+            pools = [row[0] for row in app._ret_prune_store]
+            self.assertEqual(pools, ["tank"])
 
 
 class TestTabNavigationWiring(unittest.TestCase):

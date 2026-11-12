@@ -77,12 +77,13 @@ test_valid_config_loads_with_defaults() {
         fields="${ITF_HTTP_PORT}|${ITF_GUEST_NET_MODEL}|${ITF_RUNS_DIR}"
         fields+="|${ITF_STORAGE_BASE}|${ITF_COMPUTE_BASE}"
         fields+="|${ITF_CACHE_DIR}|${ITF_TEMPLATE_NAME}|${ITF_UBUNTU_TEMPLATE_NAME}"
+        fields+="|${ITF_CLONE_MODE}"
         echo "${fields}"
     ) 2>/dev/null )
     assert_rc 0 $?
     assert_equals \
         "8000|virtio|$mydir/tests/integrated/results|zfstestvm1|zfstestvm2|\
-$mydir/tests/integrated/cache|itf-template|itf-template-ubuntu" \
+$mydir/tests/integrated/cache|itf-template|itf-template-ubuntu|linked" \
         "$out"
 }
 
@@ -133,6 +134,7 @@ ITF_GUEST_POOL_DISK_GB=0
 ITF_DEBIAN_ISO_URL=ftp://nope.invalid/x.iso
 ITF_ISO_NAME=debian-netinst.iso
 ITF_SW_SOURCE=git
+ITF_CLONE_MODE=thin
 ITF_GITHUB_REPO=owner/repo
 EOF
     run_config_load "$tmp_dir/bad.conf"
@@ -145,6 +147,7 @@ EOF
     assert_contains "$load_err" "ITF_DEBIAN_ISO_URL must be an http(s) URL"
     assert_contains "$load_err" "ITF_ISO_NAME must start with 'itf-'"
     assert_contains "$load_err" "ITF_SW_SOURCE must be 'release' or 'dev-tarball'"
+    assert_contains "$load_err" "ITF_CLONE_MODE must be 'linked' or 'full'"
 }
 
 test_storage_name_charset_enforced() {

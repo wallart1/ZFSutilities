@@ -259,7 +259,7 @@ the GUI. Override the path in the environment with `$ZFSCONFIG_PATH`.
 
 ### `notifications` object
 
-Written by the File → **Notifications…** dialog and read by
+Written by the Settings → **Notifications…** dialog and read by
 `python/notifications.py` when a run finishes (scheduled profile, Run Now,
 or interactive GUI run). No migration seeds it: the key is absent until the
 dialog is first saved, and absence means both channels off with every
