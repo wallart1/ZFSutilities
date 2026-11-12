@@ -68,9 +68,13 @@ prepended to the source dataset's full name. For example, `threeamigos/data`
 becomes `fivebays/threeamigos/data` when copied to the `fivebays` pool. As
 datasets are copied through multiple tiers, the leading pool names stack up.
 
-When restoring, these extra leading qualifiers must be stripped back off so
-the dataset ends up in its original location. The restore scripts and the
-GUI's Restore tab handle this automatically.
+Restoring conventionally strips those leading qualifiers back off, so the
+dataset returns to its original location. The original name is not required,
+though. The GUI's Restore tab computes the conventional destination with
+**Auto-determine destination**, and it also accepts any typed destination.
+A destination that does not end with the source's own path restores the
+dataset under the new name (a rename). See
+[Where a Restore Lands](restore.md#where-a-restore-lands).
 
 ### Snapshots
 

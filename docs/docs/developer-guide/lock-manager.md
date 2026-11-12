@@ -85,6 +85,10 @@ storage node. Releasing the last lock held by a process and removing the
 first stale lock are internally guarded so a failing intermediate command
 cannot silently abort the caller mid-operation.
 
+The functions also tolerate `set -u` callers. Each optional environment
+variable is read with a default, so a strict orchestrator can call them
+whether or not the variable is set.
+
 ##### Conflict checking
 
 `zfslock_check <dataset> <type>`
@@ -98,9 +102,22 @@ cannot silently abort the caller mid-operation.
 
 - Returns: 0=acquired, 1=user aborted, 2=user skipped
 
-When stdin is not a TTY or `ZFSUTILITIES_HEADLESS=Y` is set, the function does not
-prompt. By default it logs a `FATAL:` message and returns 1 immediately. This
-prevents cron or headless profile runs from hanging indefinitely.
+The function prompts only when someone can answer. Two conditions must both
+hold:
+
+- stdin is a terminal, and
+- `ZFSUTILITIES_HEADLESS` is not `Y`.
+
+A command typed in a terminal meets both conditions. So does a job run by the
+GUI's job runner: the runner gives each step a pseudo-terminal (PTY) on stdin
+and holds the question in the GUI input-hold panel. The Interactive Conflict
+Resolution example later on this page shows the prompt and its choices.
+
+Otherwise the function does not prompt. By default it logs a `FATAL:` message
+and returns 1 immediately. This prevents cron or headless profile runs from
+hanging indefinitely. `profile_runner.py` exports `ZFSUTILITIES_HEADLESS=Y`
+for all bash steps it invokes, which keeps profile runs headless even when a
+terminal is attached.
 
 If `ZFSLOCK_HEADLESS_WAIT_SECONDS` is set to a positive number, the function
 will wait up to that many seconds for the lock to become free before logging
@@ -213,7 +230,7 @@ Choice [W/R/S/A/F]:
 retries automatically as soon as the lock is free. Press `Ctrl+C` to stop waiting
 and return to the choice prompt. Positive fractional values (for example `0.5`)
 are accepted; non-numeric or non-positive values are clamped to `1` second to avoid
-busy-waiting.
+busy-waiting. Pressing Enter at the choice prompt selects Wait.
 
 ### Timing Knobs (Environment Overrides)
 

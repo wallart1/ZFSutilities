@@ -159,12 +159,13 @@ The sidebar tabs are:
 | [Offsite](#offsite-tab)           | Configure and run offsite backups                          |
 | [Restore](#restore-tab)           | Restore datasets from backups                              |
 | [Schedule](#schedule-tab)         | Manage scheduled profiles                                  |
-| [Disks](#disks-tab)               | Physical disk inventory, pool topology, and pool growth    |
-| [Pools](#pools-tab)               | Register pools and manage scrubs                           |
-| [Datasets](#datasets-tab)         | Browse datasets and manage snapshots/holds                 |
 | [Retention](#retention-tab)       | Per-pool retention policies and pruning                    |
 | [Checkagainst](#checkagainst-tab) | Edit snapshot safety checks                                |
 | [Logs](#logs-tab)                 | Browse, search, and delete session log files               |
+| [Disks](#disks-tab)               | Physical disk inventory, pool topology, and pool growth    |
+| [Pools](#pools-tab)               | Register pools and manage scrubs                           |
+| [Datasets](#datasets-tab)         | Browse datasets and manage snapshots/holds                 |
+| [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors and live enclosure rates with rolling charts |
 
 ### Bottom panel
 
@@ -373,9 +374,10 @@ Live compilation of issues that need attention:
 - Unregistered pools
 - Pool-identity mismatches (two-node systems only): a pool configured in
   node.conf that is not imported — pools marked as offsite candidates in the
-  Pools tab are exempt, since they are routinely disconnected by design — an
-  imported pool outside the node config, or a known pool name whose GUID
-  changed (renamed or replaced)
+  Pools tab are exempt, since they are routinely disconnected by design, and
+  an attached one is not flagged as unexpected either — an imported pool
+  outside the node config, or a known pool name whose GUID changed (renamed
+  or replaced)
 - Stale lock files in `/run/lock/zfsutilities/.locks/`
 
 ### Pool Health
@@ -398,8 +400,10 @@ The default is **80 %** (range 50–95 %).
 
 One merged table of everything zfsutilities is doing — tasks **waiting** for a
 lock, tasks **running** right now, and the most recent **completed**
-operations — in reverse chronological order (newest first). Rows whose start
-time cannot be determined sort to the top.
+operations. Waiting and running rows always sit at the top, sorted ascending
+by start time: the task that has been running longest comes first. Completed
+rows follow, newest first. Rows whose start time cannot be determined sort to
+the top of the waiting/running block.
 
 | Column        | Meaning                                                                                                                                                    |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -426,8 +430,12 @@ The **Status** column shows the row's state plus the time it entered it:
   reached before the cancel.
 
 The list shows the ten most recent completed operations plus every live task.
-A cancelled task stays in the list as a completed row, and **View Log** opens
-its session log. The list refreshes automatically with the rest of the Dashboard.
+A running task never loses its row mid-run. If a refresh fails to see it, the
+row stays at its last-known state. It returns to normal as soon as a later
+refresh sees the task again, and its completed row takes over when the task
+finishes. A cancelled task stays in the list as a completed row, and
+**View Log** opens its session log. The list refreshes automatically with the
+rest of the Dashboard.
 
 #### Cancelling tasks
 
@@ -682,8 +690,10 @@ When the window is shorter than the page, the page itself scrolls.
 
 - **Source and Destination** — Two text entries for the source dataset and
   the destination pool/dataset. The source dataset is the one created by the
-  Backup tab. The destination dataset is the one that was originally backed up.
-  Any pre-existing dataset with the same name as the destination will be
+  Backup tab. The destination is typically the dataset that was originally
+  backed up, but any destination is accepted (see the naming rules below and
+  [Where a Restore Lands](restore.md#where-a-restore-lands)). Any pre-existing
+  dataset with the same name as the destination will be
   destroyed before being restored from the source.
   
   Enable **Auto-determine destination** to have the GUI compute the destination
@@ -1815,7 +1825,7 @@ extended SMART query that yields wear data — HDDs keep the quick health check 
 so the sweep stays fast even with many spinning disks. The two panes stay in sync
 visually: selecting a disk or partition tints every device that resides on it
 in the Pool Topology pane (drawn in teal), and selecting a pool, vdev, or
-device node in the topology pane tints the corresponding rows in the
+device node in the topology pane tints the corresponding disk rows in the
 inventory. Neither pane ever changes the other's selection — the correlation
 is teal text only.
 
@@ -1867,11 +1877,12 @@ each pool as a top-level row of one tree. A pool with nothing to show you
 stays collapsed; a pool expands automatically when it is the selected pool,
 when it contains the topology selection, or when one of its devices is
 tinted, and collapses again when none of that applies. Selecting a node
-highlights the corresponding member disks and
-partitions in the inventory (their text is drawn in teal): the pool node
-highlights every device in the pool, a vdev node highlights every device in
-that vdev, and a device node highlights just that device; the pool drop-down
-follows the selection's pool. Clearing the
+highlights the corresponding member disks in the inventory (their text is
+drawn in teal): the pool node highlights every device in the pool, a vdev
+node highlights every device in that vdev, and a device node highlights just
+that device. A member that is a partition highlights its whole disk — the
+tint always lands on a physical-disk row, never on a partition row; the pool
+drop-down follows the selection's pool. Clearing the
 topology selection restores the pool-wide highlight. Selecting a disk or
 partition in the inventory switches the pool selector to that disk's pool and
 tints every topology device that resides on the selected disk (a whole disk

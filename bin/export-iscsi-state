@@ -179,6 +179,18 @@ collect_live_state() {
         _state_grants["$iqn"]="$grants"
     done < <(pool_list)
 
+    # Offsite rotation pools never appear in pool_list (no iSCSI target),
+    # but an attached one must stay inside the GUID fence — record it in
+    # the pools map so the identity detectors cover it. A detached
+    # candidate fails the GUID read and is omitted, like an offline
+    # configured pool above.
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        [[ -n "${_state_pool_guids[$pool]:-}" ]] && continue
+        guid=$(zpool get -H -o value guid "$pool" 2>/dev/null) || guid=""
+        [[ -n "$guid" && "$guid" != *[!0-9]* ]] && _state_pool_guids["$pool"]="$guid"
+    done < <(_offsite_candidate_names)
+
     parse_backstores
     _state_bs_names=("${_bs_names[@]}")
     for name in "${_bs_names[@]}"; do

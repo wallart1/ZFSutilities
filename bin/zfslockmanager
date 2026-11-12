@@ -189,7 +189,7 @@ _zfslock_load_node_config() {
 
     # Test override: force a specific remote authority and pool list.
     if [[ -n "${ZFSLOCK_REMOTE_HOST:-}" ]]; then
-        _zfslock_storage_host="$ZFSLOCK_REMOTE_HOST"
+        _zfslock_storage_host="${ZFSLOCK_REMOTE_HOST:-}"
         _zfslock_node_mode="two-node"
         _zfslock_pool_target=()
         local pool
@@ -220,7 +220,7 @@ _zfslock_remote_host_for_dataset() {
 _zfslock_remote_bin() {
     local host="$1"
     if [[ -n "${ZFSLOCK_REMOTE_BIN:-}" ]]; then
-        echo "$ZFSLOCK_REMOTE_BIN"
+        echo "${ZFSLOCK_REMOTE_BIN:-}"
         return 0
     fi
     if declare -f remote_zfsutilities_bin >/dev/null 2>&1; then
@@ -1130,8 +1130,11 @@ zfslock_release_all() {
 
 # Determine whether interactive conflict resolution is safe.
 # Returns 0 (true) when stdin is a TTY and headless mode is not forced.
+# ZFSUTILITIES_HEADLESS is caller-optional (only the profile runner sets
+# it), so the read carries a default: the GUI runner hands every step a
+# PTY on stdin, which makes -t 0 true and reaches the read under set -u.
 _zfslock_is_interactive() {
-    [[ -t 0 && "$ZFSUTILITIES_HEADLESS" != "Y" ]]
+    [[ -t 0 && "${ZFSUTILITIES_HEADLESS:-}" != "Y" ]]
 }
 
 # Log one line describing a single conflicting lock holder.
@@ -1265,16 +1268,18 @@ zfslock_wait_or_resolve() {
             continue
         fi
 
-        # Display conflict info and prompt user
+        # Display conflict info and prompt user. Each field read is fenced:
+        # the holder can release the lock between the conflict and these
+        # reads, and a failed read must not abort a set -e caller mid-prompt.
         local lock_dataset lock_type lock_pid lock_script lock_acquired lock_desc
         local relative_time type_name
 
-        lock_dataset=$(_zfslock_read_field "$lockfile" "dataset")
-        lock_type=$(_zfslock_read_field "$lockfile" "type")
-        lock_pid=$(_zfslock_read_field "$lockfile" "pid")
-        lock_script=$(_zfslock_read_field "$lockfile" "script")
-        lock_acquired=$(_zfslock_read_field "$lockfile" "acquired")
-        lock_desc=$(_zfslock_read_field "$lockfile" "description")
+        lock_dataset=$(_zfslock_read_field "$lockfile" "dataset") || lock_dataset=""
+        lock_type=$(_zfslock_read_field "$lockfile" "type") || lock_type=""
+        lock_pid=$(_zfslock_read_field "$lockfile" "pid") || lock_pid=""
+        lock_script=$(_zfslock_read_field "$lockfile" "script") || lock_script=""
+        lock_acquired=$(_zfslock_read_field "$lockfile" "acquired") || lock_acquired=""
+        lock_desc=$(_zfslock_read_field "$lockfile" "description") || lock_desc=""
         relative_time=$(_zfslock_relative_time "$lock_acquired")
         type_name=$(_zfslock_type_name "$lock_type")
 
@@ -1297,8 +1302,11 @@ zfslock_wait_or_resolve() {
         echo "  [F] Force release lock (DANGEROUS - may corrupt data)"
         echo ""
 
-        local choice
-        ask_line "Choice [W/R/S/A/F]: " choice
+        # An unanswered prompt (EOF) reads as the empty default, like Enter;
+        # the fence keeps ask_line's read status from aborting a set -e
+        # caller.
+        local choice=""
+        ask_line "Choice [W/R/S/A/F]: " choice || true
 
         case "${choice^^}" in
             W|"")
@@ -1315,7 +1323,14 @@ zfslock_wait_or_resolve() {
                         break
                     fi
                 done
-                eval "$_prev_int_trap" 2>/dev/null || true
+                # trap -p prints nothing when no INT trap was armed, and
+                # eval of that empty string would leave the wait handler in
+                # place — swallowing every later Ctrl+C in the caller.
+                if [[ -n "$_prev_int_trap" ]]; then
+                    eval "$_prev_int_trap" 2>/dev/null || true
+                else
+                    trap - INT
+                fi
                 if [[ $_wait_interrupted -eq 1 ]]; then
                     echo "Wait interrupted."
                 fi
@@ -1333,7 +1348,8 @@ zfslock_wait_or_resolve() {
                 ;;
             F)
                 echo "WARNING: Force-releasing a lock may cause data corruption!"
-                ask_line "Are you sure? Type 'yes' to confirm: " confirm
+                local confirm=""
+                ask_line "Are you sure? Type 'yes' to confirm: " confirm || true
                 if [[ "$confirm" == "yes" ]]; then
                     local remote_host="" remote_lockfile=""
                     remote_host=$(_zfslock_read_field "$lockfile" "remote_host") || remote_host=""

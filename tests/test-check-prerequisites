@@ -1082,9 +1082,49 @@ test_two_node_identity_unexpected_pool_warns() {
         test_fail "Expected exit 0 with identity findings, got $rc"
         return
     fi
-    if [[ "$output" != *"imported pool temp is not in the node config — an unexpected \
-pool is serving data here"* ]]; then
+    if [[ "$output" != *"imported pool temp is not in the node config — add it to the \
+node config or export it"* ]]; then
         test_fail "Expected the unexpected-pool warn line in output"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_identity_offsite_candidate_imported_exempt() {
+    test_start "--two-node: imported offsite-candidate pool is exempt"
+
+    local fx output rc cfg
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    # z40tb (an offsite rotation candidate) and temp (an ordinary pool)
+    # are both imported and both outside the map-recorded expected set.
+    printf 'threeamigos\nz40tb\ntemp\n' > "${fx}/zpool-list"
+    printf 'threeamigos|4338716537971988948\nz40tb|13118082129064717561\n'\
+'temp|4169992676649853288\n' > "${fx}/zpool-guids"
+    # GUI config: only z40tb is marked as an offsite candidate.
+    cfg="${fx}/config.json"
+    printf '{"config_version": 31, "pools": [{"name": "threeamigos"}, {"name": "z40tb",'\
+' "offsite_candidate": true}, {"name": "temp"}]}\n' \
+        > "$cfg"
+    output=$(ZFSUTILITIES_CONFIG_PATH="$cfg" run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with identity findings, got $rc"
+        return
+    fi
+    if [[ "$output" == *"imported pool z40tb is not in the node config"* ]]; then
+        test_fail "Offsite-candidate pool must be exempt from the unexpected-import warn"
+        return
+    fi
+    if [[ "$output" != *"imported pool temp is not in the node config — add it to the \
+node config or export it"* ]]; then
+        test_fail "Non-offsite imported pool must still warn (exemption is selective)"
         return
     fi
     test_pass
@@ -1230,6 +1270,7 @@ test_two_node_detection_not_in_list_failures
 test_two_node_identity_guid_mismatch_warns
 test_two_node_identity_expected_pool_missing_warns
 test_two_node_identity_offsite_candidate_exempt
+test_two_node_identity_offsite_candidate_imported_exempt
 test_two_node_identity_unexpected_pool_warns
 test_two_node_identity_duplicate_import_candidate_warns
 test_two_node_identity_zvol_candidate_stays_silent

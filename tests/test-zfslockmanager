@@ -739,6 +739,10 @@ test_conflict_message() {
 # bashinit and the real lock manager, THEN enable set -e. The marker file is
 # written only if every lock call returned 0 — a set -e death anywhere leaves
 # it absent, so each test asserts on the marker, not just the exit code.
+# ZFSUTILITIES_HEADLESS stays unset (the heredoc shape does not set it), so
+# these children also exercise the headless decision with the variable
+# unbound — the strict-branch children below rely on the same read being
+# defaulted.
 _sete_child() {
     local body="$1" marker="$_mock_zfs_state_dir/sete_child_marker"
     local script="$_mock_zfs_state_dir/sete_child.sh"
@@ -746,7 +750,6 @@ _sete_child() {
 #!/usr/bin/bash
 source "$mydir/bin/bashinit"
 export ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs"
-export ZFSUTILITIES_HEADLESS=Y
 bashinit
 source "$mydir/bin/zfslockmanager"
 export ZFSLOCK_DIR="$ZFSLOCK_DIR"
@@ -800,7 +803,10 @@ zfslock_release "$lock1"')
     if [[ "$rc" == "0" && ! -f "$lock1" && ! -f "$lock2" ]]; then
         test_pass
     else
-        test_fail "rc=$rc lock1=$([[ -f "$lock1" ]] && echo present || echo gone) lock2=$([[ -f "$lock2" ]] && echo present || echo gone)"
+        local reason
+        reason="rc=$rc lock1=$([[ -f "$lock1" ]] && echo present || echo gone)"
+        reason+=" lock2=$([[ -f "$lock2" ]] && echo present || echo gone)"
+        test_fail "$reason"
     fi
 
     test_start "First stale-lock removal survives under set -e"
@@ -819,6 +825,352 @@ zfslock_cleanup_stale')
 
     rm -f "$_mock_zfs_state_dir/sete_child.sh" "$_mock_zfs_state_dir/sete_child_marker"
     cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
+# Strict callers with a terminal on stdin
+# ---------------------------------------------------------------------------
+# The GUI runner hands every step a pseudo-terminal on stdin, and the
+# orchestrators it runs are set -euo pipefail scripts. That combination is
+# the only one that reaches the interactive branch of zfslock_wait_or_resolve
+# with nounset on, and no piped-stdin test can produce it: [[ -t 0 ]] is
+# false in every suite, so the branch — and every variable read behind it —
+# never ran under test (the 0.140.0 GUI backup died exactly there, on the
+# unbound ZFSUTILITIES_HEADLESS read). tests/pty_run.py supplies the
+# terminal; these children run the real _zfslock_is_interactive, never the
+# _enable_interactive stub.
+
+_strict_child_marker="$_mock_zfs_state_dir/strict_child_marker"
+_strict_prompt="Choice [W/R/S/A/F]: "
+
+# Child-script template mirroring a strict orchestrator: set -euo pipefail
+# first, then bashinit and the real lock manager, then $body. A body records
+# its outcome in $_marker; a strict-mode death leaves the file absent.
+# Prints the script path.
+_strict_child_script() {
+    local body="$1"
+    local script="$_mock_zfs_state_dir/strict_child.sh"
+    cat > "$script" <<EOF
+#!/usr/bin/bash
+set -euo pipefail
+source "$mydir/bin/bashinit"
+export ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs"
+bashinit
+source "$mydir/bin/zfslockmanager"
+export ZFSLOCK_DIR="$ZFSLOCK_DIR"
+export zfslock_locks_dir="$zfslock_locks_dir"
+export zfslock_pids_dir="$zfslock_pids_dir"
+_marker="$_strict_child_marker"
+$body
+EOF
+    echo "$script"
+}
+
+# Body: acquire through a conditional call, the way zfs-send-receive does
+# (errexit is ignored inside the function; nounset is not). $2 is an
+# optional prelude line.
+_strict_body_cond() {
+    printf '%s\n' \
+        "${2:-}" \
+        'zfslock_init' \
+        'rc=0' \
+        "zfslock_wait_or_resolve \"$1\" \"w\" \"strict contender\" || rc=\$?" \
+        'echo "RC=$rc" > "$_marker"'
+}
+
+# Body: acquire through a bare call, so errexit is live inside the function.
+_strict_body_bare() {
+    printf '%s\n' \
+        "${2:-}" \
+        'zfslock_init' \
+        "zfslock_wait_or_resolve \"$1\" \"w\" \"strict contender\"" \
+        'echo "RC=0" > "$_marker"'
+}
+
+# Run a strict child with a pseudo-terminal on stdin and play the given
+# tests/pty_run.py steps against it. Shape "gui" is what the GUI runner
+# gives a step (PTY stdin, piped output, input-hold protocol on); shape
+# "terminal" is a command typed in a terminal window (protocol off).
+# Globals set: _pty_out (child output plus the helper's trailer lines),
+#              _pty_marker (the body's marker text, empty when absent)
+_pty_child() {
+    local shape="$1" body="$2"
+    shift 2
+    local script hold="Y"
+    script=$(_strict_child_script "$body")
+    [[ "$shape" == "terminal" ]] && hold=""
+    rm -f "$_strict_child_marker"
+    _pty_out=$(env -u ZFSUTILITIES_HEADLESS -u ZFSLOCK_HEADLESS_WAIT_SECONDS \
+        ZFSUTILITIES_INPUT_HOLD="$hold" \
+        python3 "$mydir/tests/pty_run.py" --shape "$shape" "$@" -- bash "$script" 2>&1)
+    _pty_marker=""
+    [[ -f "$_strict_child_marker" ]] && _pty_marker=$(<"$_strict_child_marker")
+    return 0
+}
+
+# Failure text for a _pty_child outcome: the marker and the child's output.
+_pty_diag() {
+    printf "marker='%s' (want %s); output: %s" "$_pty_marker" "$1" "$_pty_out"
+}
+
+# Start a background holder for $1 and confirm it holds the lock. On failure
+# the current test is failed and 1 is returned.
+_strict_holder_start() {
+    _bg_lock_start "$1" "w" "strict holder" 3600
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return 1
+    fi
+}
+
+# Print a pty_run --run command that ends the background holder of $1 and
+# returns once its lock file is gone. Only the holder's sleep is signalled:
+# the holder then runs off the end of its script and its EXIT trap releases
+# the lock. Signalling the holder as well races that cleanup — a TERM that
+# lands inside the trap leaves the lock file behind, and the suite cannot
+# reap the holder (to make the lock stale) while it waits on this command.
+# The command runs under sh, so it stays POSIX.
+_strict_holder_release_cmd() {
+    local lockfile
+    lockfile=$(_zfslock_file "$1")
+    printf "pkill -P %s; while [ -e '%s' ]; do sleep 0.02; done" \
+        "$_bg_lock_pid" "$lockfile"
+}
+
+test_strict_terminal_prompt_choices() {
+    echo ""
+    echo "=== Strict Caller Terminal Prompt Tests ==="
+    cleanup_test_locks
+    local ds
+
+    test_start "GUI-shape strict caller with the headless variable unset is prompted; A aborts"
+    ds="test/strict/abort"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_cond "$ds")" --expect "$_strict_prompt" --send a
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=1" \
+        && "$_pty_out" == *"CONFLICT: A lock could not be acquired for '$ds'"* \
+        && "$_pty_out" == *"Script: bg_lock_"* \
+        && "$_pty_out" == *"ZFSU-INPUT-REQ|"*"|$_strict_prompt"* \
+        && "$_pty_out" != *"unbound variable"* ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=1 with the banner and the input-hold request")"
+    fi
+    cleanup_test_locks
+
+    test_start "S skips the dataset (rc 2)"
+    ds="test/strict/skip"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_cond "$ds")" --expect "$_strict_prompt" --send s
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=2" ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=2")"
+    fi
+    cleanup_test_locks
+
+    test_start "R retries at once and acquires once the holder is gone"
+    ds="test/strict/retry"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_cond "$ds")" --expect "$_strict_prompt" \
+        --run "$(_strict_holder_release_cmd "$ds")" --send r
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0" ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0")"
+    fi
+    cleanup_test_locks
+
+    test_start "W waits and proceeds when the lock frees"
+    ds="test/strict/wait"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_cond "$ds")" --expect "$_strict_prompt" --send w \
+        --expect "Waiting for lock" --run "$(_strict_holder_release_cmd "$ds")" \
+        --expect "Lock is now available."
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0" ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0")"
+    fi
+    cleanup_test_locks
+
+    test_start "Terminal-shape strict caller is prompted on the terminal; A aborts"
+    ds="test/strict/terminal"
+    _strict_holder_start "$ds" || return
+    _pty_child terminal "$(_strict_body_cond "$ds")" --expect "$_strict_prompt" --send a
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=1" \
+        && "$_pty_out" == *"CONFLICT: A lock could not be acquired for '$ds'"* \
+        && "$_pty_out" != *"ZFSU-INPUT-REQ"* ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=1 with the banner and no input-hold marker")"
+    fi
+    cleanup_test_locks
+}
+
+test_strict_terminal_prompt_fences() {
+    echo ""
+    echo "=== Strict Caller Prompt Fence Tests ==="
+    cleanup_test_locks
+    local ds body prelude
+
+    # The bare-call bodies keep errexit live inside zfslock_wait_or_resolve:
+    # any unfenced non-zero status on the prompt path would kill the child
+    # before it writes its marker.
+
+    test_start "End of input at the prompt reads as the default (wait)"
+    ds="test/strict/eof"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_bare "$ds")" --expect "$_strict_prompt" --send-eof \
+        --expect "Waiting for lock" --run "$(_strict_holder_release_cmd "$ds")" \
+        --expect "Lock is now available."
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0" ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0")"
+    fi
+    cleanup_test_locks
+
+    test_start "F with yes force-releases the holder's lock and acquires"
+    ds="test/strict/force"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_cond "$ds")" --expect "$_strict_prompt" --send f \
+        --expect "Type 'yes' to confirm: " --send yes
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0" \
+        && "$_pty_out" == *"WARN: Force-released lock on $ds"* ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0 with the force-release WARN")"
+    fi
+    cleanup_test_locks
+
+    test_start "End of input at the force confirmation cancels the force release"
+    ds="test/strict/forceeof"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_bare "$ds")" --expect "$_strict_prompt" --send f \
+        --expect "Type 'yes' to confirm: " --send-eof \
+        --expect "Force release cancelled." \
+        --expect "$_strict_prompt" --run "$(_strict_holder_release_cmd "$ds")" --send r
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0" ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0")"
+    fi
+    cleanup_test_locks
+
+    test_start "A lock released between the conflict and the prompt leaves empty holder fields"
+    ds="test/strict/vanish"
+    # The child's stale check removes the lock file and answers "not stale"
+    # only when the resolver asks — a holder releasing right after the
+    # conflict was detected. Every other caller gets the real check.
+    prelude='eval "$(declare -f zfslock_is_stale | sed "1s/^zfslock_is_stale/_real_stale/")"
+zfslock_is_stale() {
+    if [[ "${FUNCNAME[1]}" == "zfslock_wait_or_resolve" ]]; then
+        rm -f "$1"
+        return 1
+    fi
+    _real_stale "$@"
+}'
+    body=$(_strict_body_bare "$ds" "$prelude")
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$body" --expect "$_strict_prompt" --send r
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0" \
+        && "$_pty_out" == *"Locked dataset: "$'\n'* ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0 with an empty holder field")"
+    fi
+    cleanup_test_locks
+
+    test_start "The wait choice leaves no interrupt handler behind in the caller"
+    ds="test/strict/inttrap"
+    body='zfslock_init
+rc=0
+zfslock_wait_or_resolve "test/strict/inttrap" "w" "strict contender" || rc=$?
+echo "RC=$rc TRAP=[$(trap -p INT)]" > "$_marker"'
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$body" --expect "$_strict_prompt" --send w \
+        --expect "Waiting for lock" --run "$(_strict_holder_release_cmd "$ds")" \
+        --expect "Lock is now available."
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0 TRAP=[]" ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0 TRAP=[]")"
+    fi
+    cleanup_test_locks
+
+    test_start "The wait choice restores the caller's own interrupt handler"
+    ds="test/strict/intrestore"
+    body='trap "echo caller-int" INT
+zfslock_init
+rc=0
+zfslock_wait_or_resolve "test/strict/intrestore" "w" "strict contender" || rc=$?
+echo "RC=$rc TRAP=[$(trap -p INT)]" > "$_marker"'
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$body" --expect "$_strict_prompt" --send w \
+        --expect "Waiting for lock" --run "$(_strict_holder_release_cmd "$ds")" \
+        --expect "Lock is now available."
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=0 TRAP=[trap -- 'echo caller-int' SIGINT]" ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=0 TRAP=[trap -- 'echo caller-int' SIGINT]")"
+    fi
+    cleanup_test_locks
+}
+
+test_strict_headless_decision() {
+    echo ""
+    echo "=== Strict Caller Headless Decision Tests ==="
+    cleanup_test_locks
+    local ds script out marker
+
+    test_start "Strict caller without a terminal stays headless with the variable unset"
+    ds="test/strict/piped"
+    _strict_holder_start "$ds" || return
+    script=$(_strict_child_script "$(_strict_body_cond "$ds")")
+    rm -f "$_strict_child_marker"
+    out=$(env -u ZFSUTILITIES_HEADLESS -u ZFSLOCK_HEADLESS_WAIT_SECONDS \
+        bash "$script" </dev/null 2>&1)
+    _bg_lock_kill
+    marker=""
+    [[ -f "$_strict_child_marker" ]] && marker=$(<"$_strict_child_marker")
+    if [[ "$marker" == "RC=1" \
+        && "$out" == *"FATAL: Lock conflict on '$ds' in non-interactive mode. Aborting."* \
+        && "$out" != *"$_strict_prompt"* ]]; then
+        test_pass
+    else
+        test_fail "marker='$marker' (want RC=1 with the headless FATAL); output: $out"
+    fi
+    cleanup_test_locks
+
+    test_start "ZFSUTILITIES_HEADLESS=Y keeps a strict caller headless even on a terminal"
+    ds="test/strict/forced"
+    _strict_holder_start "$ds" || return
+    _pty_child gui "$(_strict_body_cond "$ds" 'export ZFSUTILITIES_HEADLESS=Y')"
+    _bg_lock_kill
+    if [[ "$_pty_marker" == "RC=1" \
+        && "$_pty_out" == *"FATAL: Lock conflict on '$ds' in non-interactive mode. Aborting."* \
+        && "$_pty_out" != *"$_strict_prompt"* ]]; then
+        test_pass
+    else
+        test_fail "$(_pty_diag "RC=1 with the headless FATAL and no prompt")"
+    fi
+    cleanup_test_locks
+    rm -f "$_mock_zfs_state_dir/strict_child.sh" "$_strict_child_marker"
 }
 
 # ---------------------------------------------------------------------------
@@ -1377,6 +1729,9 @@ test_stale_conflict_retry
 test_conflict_message
 test_multi_lock_acquisition
 test_set_e_safety
+test_strict_terminal_prompt_choices
+test_strict_terminal_prompt_fences
+test_strict_headless_decision
 test_sanitize_interval
 test_wait_interval_fallback_reaches_sleep
 test_retry_throttle_fallback_reaches_sleep

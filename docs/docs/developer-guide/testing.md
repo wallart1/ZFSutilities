@@ -269,7 +269,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-setup-iscsi-targets` | `setup-iscsi-targets` initial target setup plus the post-restore detection signature (evidence printed) and the reconcile offer — declined leaves the system untouched, accepted runs the reconcile; a fresh install still detects clean |
 | `test-snapshot-names` | Static checks pinning every snapshot-name producer to the canonical UTC helper, plus a cross-implementation consistency matrix against the Python `snapshot_naming` module |
 | `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic, static-site refresh on start |
-| `test-strict-mode` | Static guard: the migrated orchestrators keep `set -euo pipefail` (new strict-mode scripts register here) |
+| `test-strict-mode` | Static guard: the migrated orchestrators keep `set -euo pipefail` (new strict-mode scripts register here); every read of a `ZFSUTILITIES_*` or `ZFSLOCK_*` environment variable that no bash file assigns carries a default |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup — including the iSCSI fence-unit gate (single-node skip, fresh two-node compute deploy with no node config yet) |
 | `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions; per-PID `/tmp` artifact lifecycle (green suites remove log and mock-state dir, failed suites retain only the log, exit status survives the cleanup trap); the source-time orphan sweep (a dead suite's leftover mock-state dir is reaped by the next suite to source `test-lib.sh`, a live suite's dir is never touched); the `zfs` mock's dataset-listing semantics (root filtering, unknown-root failure, the existence-model and receive-record root proofs, destroy purging receive records, flat unrooted listings) |
 | `test-unarchive-vm` | `unarchive-vm` `--new-vmid` rewriting, UUID regeneration, conflict handling; METHOD-branching restores (copy reblock via sidecar volblocksize vs raw/legacy plain receive), sidecar policy (missing `.disk_info` fatal, missing volblocksize sidecar warn for raw / fatal for copy), unknown-method rejection; rate-limited restore copy (pacer pacing, dd conv=sparse, a single paced destination read-back with the source device read exactly once) and the paced raw restore running through a standalone pacer segment, paced-only and with the progress display (the `python3` stub enforces `pace_stream.py`'s real CLI, as in `test-archive-vm`), in-flight source-hash coverage (hash read pattern, source-hash-failure abort with rollback); re-run idempotency (`RESTORED_AS` marker skip, unmarked-destination confirm/decline gates, completed-run clean exit); two-node restore staging (bash-format node conf, both hosts on the stub hostname so payloads take the local branches, ssh/targetcli mocks): Step-2 pool→target mapping via `pool_to_target` across two mapped pools and Step-3 by-path disk-line LUN rewrites; static payload-routing checks (on_storage/on_compute, no compute bounce); and the progress display (no `pv` stage when headless; a forced display arming `pv` in the restore copy, read-back verify, and raw restore paths; the display mode reaching the two-node restore payload) |
@@ -295,7 +295,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-zfsdelsnap` | Snapshot deletion safety checks, hold release, `zfscheckagainst` dependency sourcing, user-hold blocking; `_delsnap_preview_gate` (the read-only dry-run mirror of the gates): checkagainst rc matrix incl. exit-8 subshell containment and context folding, minimum-age keep and unknown-age fall-through, holds held/remaining/releasable classification, clone dependents |
 | `test-zfsfullcopy` | `zfsfullcopy` full-copy wrapper: overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-zfslockctl` | `zfslockctl cmd_wait` availability and interval validation: fractional `ZFSLOCK_WAIT_INTERVAL`, invalid/zero fallback, no-sleep fast path |
-| `test-zfslockmanager` | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, multi-lock acquisition, timing-knob sanitization, `source_helper` loading context |
+| `test-zfslockmanager` | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, multi-lock acquisition, timing-knob sanitization, `source_helper` loading context; the conflict prompt under a strict caller with a terminal on stdin (GUI and terminal shapes via `tests/pty_run.py`): each choice, end of input at either prompt, a lock released before the prompt, interrupt-handler restoration after a wait, and the headless decision with `ZFSUTILITIES_HEADLESS` unset and set |
 | `test-zfslockmanager-remote` | Remote lock hold/check/conflict protocol |
 | `test-zfslockmanager-soak` | Randomized timing-conflict scenarios for the lock manager at realistic timings — including wait/retry loops and headless timed waits (skipped by default; see "Soak suites") |
 | `test-zfsmassdelsnaps` | Mass snapshot deletion: ignore/respect retention, dry-run, approval, releaseholds forwarding; gate-reason "Would: Keep" preview lines stay out of the parsed candidate list and space estimate |
@@ -380,6 +380,36 @@ the `Updated:` summary line; Python: skips) rather than passed. Missing
 goldens fail with the command that creates them. Regeneration runs should
 target single suites (they run serially through `run-tests`); update mode
 under a parallel full run is not the documented path.
+
+### Testing Code Behind a Terminal Check
+
+The suites feed stdin from a pipe, so a branch gated on `[[ -t 0 ]]` never
+runs in an ordinary test. `tests/pty_run.py` runs a child with a
+pseudo-terminal (PTY) on stdin and plays a scripted conversation against it.
+The helper offers two shapes:
+
+- `gui` — stdin is the PTY, and stdout and stderr share one pipe. The GUI's
+  job runner arranges each step this way.
+- `terminal` — stdin, stdout, and stderr are all the PTY, as in a terminal
+  window.
+
+Steps run in the order given:
+
+- `--expect TEXT` waits for the text in the child's output.
+- `--send TEXT` types a line.
+- `--send-eof` ends the input.
+- `--run COMMAND` runs a shell command between steps.
+
+The helper prints the child's output, then a `PTYRUN-RC=<status>` line. It
+stops the child at `--timeout`, so a stuck prompt cannot hang a suite.
+
+```bash
+python3 tests/pty_run.py --shape gui \
+    --expect "Choice [W/R/S/A/F]: " --send a -- bash "$child_script"
+```
+
+`test-zfslockmanager` uses the helper to run the lock-conflict prompt under a
+strict caller.
 
 ### Bash Mock Infrastructure
 

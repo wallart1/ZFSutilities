@@ -975,6 +975,10 @@ class TestComputePoolIdentityWarnings(unittest.TestCase):
                 stack.enter_context(p)
             warnings = dp._compute_pool_identity_warnings(repo=repo)
         self.assertTrue(any("temp" in w and "not configured" in w for w in warnings))
+        # The warning names the action, per the Dashboard warning house style.
+        self.assertTrue(
+            any("temp" in w and "add it to the node config or export it" in w for w in warnings)
+        )
         # A pool the map never recorded gets no GUID comparison.
         self.assertFalse(any("temp" in w and "GUID" in w for w in warnings))
 
@@ -1065,7 +1069,7 @@ class TestComputePoolIdentityWarnings(unittest.TestCase):
         self.assertTrue(any("NVME1" in w and "not imported" in w for w in warnings))
 
     def test_offsite_candidate_guid_mismatch_still_warns(self):
-        # The exemption covers only the not-imported shape: an imported
+        # The exemption covers the set-difference shapes only: an imported
         # offsite pool must still pass the GUID identity check.
         config = {"pools": [{"name": "z22tb", "offsite_candidate": True}]}
         patches, repo = self._stack(
@@ -1079,6 +1083,33 @@ class TestComputePoolIdentityWarnings(unittest.TestCase):
             warnings = dp._compute_pool_identity_warnings(repo=repo, config=config)
         self.assertEqual(len(warnings), 1)
         self.assertIn("Pool z22tb GUID changed", warnings[0])
+
+    def test_offsite_candidate_imported_not_configured_is_exempt(self):
+        # An attached offsite rotation pool is a registry-known pool, not
+        # an unexpected one — importing it during a rotation is routine.
+        # A sibling non-offsite pool imported in the same state still
+        # warns, so the exemption is selective.
+        config = {
+            "pools": [
+                {"name": "z40tb", "offsite_candidate": True},
+                {"name": "temp", "offsite_candidate": False},
+            ]
+        }
+        patches, repo = self._stack(
+            {"threeamigos"},
+            self._rows(
+                ("threeamigos", "111"),
+                ("z40tb", "222"),
+                ("temp", "333"),
+            ),
+            {"threeamigos": "111"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo, config=config)
+        self.assertFalse(any("z40tb" in w for w in warnings))
+        self.assertTrue(any("temp" in w and "not configured" in w for w in warnings))
 
     def test_get_pool_identity_warnings_forwards_config(self):
         config = {"pools": [{"name": "z22tb", "offsite_candidate": True}]}
@@ -3162,6 +3193,7 @@ class TestRefreshTasksSection(unittest.TestCase):
         """
         app = MagicMock()
         app.config = {}
+        app._dashboard_task_carry = {}
         store = MagicMock()
         app.dashboard_tasks_store = store
         selection = MagicMock()
@@ -3335,7 +3367,7 @@ class TestRefreshTasksSection(unittest.TestCase):
         self.assertNotIn("PID", appended[3])
         self.assertNotIn("(", appended[3])
 
-    def test_reverse_chronological_order_mixed_rows(self):
+    def test_live_rows_sort_above_completed(self):
         app, store, _selection = self._make_app()
         tasks = [
             {
@@ -3363,7 +3395,125 @@ class TestRefreshTasksSection(unittest.TestCase):
         ]
         self._run_refresh(app, tasks=tasks, recent=recent)
         names = [call[0][0][2] for call in store.append.call_args_list]
-        self.assertEqual(names, ["Newest completed", "Running task", "Older completed"])
+        self.assertEqual(names, ["Running task", "Newest completed", "Older completed"])
+
+    def test_live_rows_sort_ascending_by_start(self):
+        app, store, _selection = self._make_app()
+        tasks = [
+            {
+                "name": "Late starter",
+                "type": "GUI",
+                "status": "Step 1/2",
+                "task_key": "runner:backup_runner",
+                "waiting_for_lock": False,
+                "started": "2026-06-29T12:00:00",
+            },
+            {
+                "name": "Longest running",
+                "type": "Scrub",
+                "status": "40.0% complete",
+                "task_key": "scrub:fivebays",
+                "waiting_for_lock": False,
+                "started": "2026-06-29T06:00:00",
+            },
+            {
+                "name": "Middle starter",
+                "type": "Profile",
+                "status": "PID 1234",
+                "task_key": "profile:Daily",
+                "waiting_for_lock": False,
+                "started": "2026-06-29T09:30:00",
+            },
+        ]
+        self._run_refresh(app, tasks=tasks)
+        names = [call[0][0][2] for call in store.append.call_args_list]
+        self.assertEqual(names, ["Longest running", "Middle starter", "Late starter"])
+
+    def test_unreported_live_row_carried_then_dropped(self):
+        """A live row survives collector misses, then drops past the limit."""
+        app, store, _selection = self._make_app()
+        task = {
+            "name": "Backup",
+            "type": "GUI",
+            "status": "Step 2/3",
+            "task_key": "runner:backup_runner",
+            "waiting_for_lock": False,
+            "started": "2026-06-29T09:00:00",
+        }
+        self._run_refresh(app, tasks=[task])
+        # Two consecutive missed refreshes keep the last-known row.
+        for _ in range(2):
+            store.append.reset_mock()
+            self._run_refresh(app)
+            names = [call[0][0][2] for call in store.append.call_args_list]
+            self.assertEqual(names, ["Backup"])
+            appended = store.append.call_args[0][0]
+            self.assertEqual(appended[4], "running")
+            self.assertTrue(appended[3].startswith("Running since 2026-06-29T09:00"))
+        # The third miss exceeds the carry limit: the row is gone.
+        store.append.reset_mock()
+        self._run_refresh(app)
+        store.append.assert_called_once()
+        self.assertEqual(store.append.call_args[0][0][0], "No tasks")
+
+    def test_carried_row_dropped_when_completed_row_appears(self):
+        """Completion evidence replaces the carried row immediately."""
+        app, store, _selection = self._make_app()
+        log_file = "/var/log/zfsutilities/sessions/backup.log"
+        task = {
+            "name": "Backup",
+            "type": "GUI",
+            "status": "Step 2/3",
+            "task_key": "runner:backup_runner",
+            "waiting_for_lock": False,
+            "started": "2026-06-29T09:00:00",
+            "log_file": log_file,
+        }
+        self._run_refresh(app, tasks=[task])
+        store.append.reset_mock()
+        self._run_refresh(
+            app,
+            recent=[
+                {
+                    "timestamp": "2026-06-29T09:40:00",
+                    "type": "backup",
+                    "name": "Backup",
+                    "result": "success",
+                    "log_file": log_file,
+                }
+            ],
+        )
+        # Only the completed row remains — no duplicate live row.
+        names = [call[0][0][2] for call in store.append.call_args_list]
+        self.assertEqual(names, ["Backup"])
+        self.assertEqual(store.append.call_args[0][0][4], "completed")
+
+    def test_carry_misses_reset_when_task_reappears(self):
+        """A task seen again restarts its carry count from zero."""
+        app, store, _selection = self._make_app()
+        task = {
+            "name": "Scrub: fivebays",
+            "type": "Scrub",
+            "status": "40.0% complete",
+            "task_key": "scrub:fivebays",
+            "waiting_for_lock": False,
+            "started": "2026-06-29T06:00:00",
+        }
+        self._run_refresh(app, tasks=[task])
+        # One missed refresh, then the collector reports it again.
+        self._run_refresh(app)
+        self._run_refresh(app, tasks=[task])
+        # Two further misses still carry the row (the count restarted).
+        for _ in range(2):
+            store.append.reset_mock()
+            self._run_refresh(app)
+            names = [call[0][0][2] for call in store.append.call_args_list]
+            self.assertEqual(names, ["Scrub: fivebays"])
+        # The third consecutive miss finally drops it.
+        store.append.reset_mock()
+        self._run_refresh(app)
+        store.append.assert_called_once()
+        self.assertEqual(store.append.call_args[0][0][0], "No tasks")
 
     def test_timeless_rows_sort_first(self):
         app, store, _selection = self._make_app()

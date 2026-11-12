@@ -1196,10 +1196,11 @@ def _compute_pool_identity_warnings(repo=None, config=None):
       the newest pool-resident iSCSI state map (renamed or replaced).
 
     Pools marked as offsite candidates in the GUI config (when *config* is
-    provided) are exempt from the not-imported shape only: an offsite
-    rotation pool is routinely disconnected by design. The other two shapes
-    fire only when a pool IS imported, and an imported offsite pool must
-    still pass the identity checks.
+    provided) are exempt from the not-imported and not-configured shapes:
+    an offsite rotation pool is routinely disconnected by design, and an
+    attached one is a registry-known pool, not an unexpected one. The GUID
+    shape still applies — an imported offsite pool must pass the identity
+    check.
 
     Returns a list of warning strings, [] in single-node mode or when
     everything is consistent, and None when the live pool list could not
@@ -1235,10 +1236,10 @@ def _compute_pool_identity_warnings(repo=None, config=None):
             f"Pool {pool} is configured in node.conf but not imported — "
             "offline, renamed, or replaced"
         )
-    for pool in sorted(set(live) - expected):
+    for pool in sorted(set(live) - expected - offsite):
         warnings.append(
             f"Pool {pool} is imported but not configured in node.conf — "
-            "an unexpected pool is serving data here"
+            "add it to the node config or export it"
         )
 
     # A GUID column that did not resolve (e.g. "-") is not an identity
@@ -1769,8 +1770,9 @@ def _gather_dashboard_data(app):
         warnings.append(fence_warning)
     # Pool identity (renamed/replaced pool under a known name) — mirrors
     # lib/iscsi-lib.sh's detect_pool_identity for the Dashboard. Offsite
-    # candidates are exempt from the not-imported shape while rotated
-    # offsite.
+    # candidates are exempt from the not-imported and not-configured
+    # shapes (routinely detached by design; attached is still a known
+    # pool — the GUID check fences its identity).
     pool_identity_warnings = _get_pool_identity_warnings(app.config)
     if pool_identity_warnings:
         warnings.extend(pool_identity_warnings)
@@ -2243,17 +2245,70 @@ def _save_dismissed_task_keys(app, keys):
     save_dashboard_config(app.config, dashboard_cfg)
 
 
+# Consecutive refreshes a live task row survives after the collectors
+# stop reporting it, so a collector miss cannot drop a running task.
+_TASK_CARRY_MISS_LIMIT = 2
+
+
+def _retain_unreported_live_rows(app, live_rows, completed_rows):
+    """Bridge collector misses: keep live rows for tasks still running.
+
+    The Tasks list is rebuilt from collector output on every refresh, and
+    a refresh landing in a collector's blind window (a runner flips
+    ``running`` off before its history entry is written, or a lock-file /
+    state-file read races a rewrite) would drop a still-running task's
+    row.  Each refresh records the live rows by task key; a task missing
+    from the current output keeps its last-known row for up to
+    ``_TASK_CARRY_MISS_LIMIT`` consecutive misses, and is dropped as soon
+    as a completed row with the same session log file appears (the task
+    finished; the outcome row takes over).  Returns the live rows to
+    show, carried rows included, still sorted ascending by start.
+    """
+    carry = getattr(app, "_dashboard_task_carry", None)
+    if not isinstance(carry, dict):
+        carry = {}
+    completed_logs = {r["log_file"] for r in completed_rows if r["log_file"]}
+
+    new_carry = {}
+    for row in live_rows:
+        if row["task_key"]:
+            new_carry[row["task_key"]] = {"row": row, "misses": 0}
+    retained = []
+    for task_key, entry in carry.items():
+        if task_key in new_carry:
+            continue
+        row = entry["row"]
+        if row["log_file"] and row["log_file"] in completed_logs:
+            # Positive completion evidence: the outcome row replaces it.
+            continue
+        misses = entry["misses"] + 1
+        if misses > _TASK_CARRY_MISS_LIMIT:
+            continue
+        new_carry[task_key] = {"row": row, "misses": misses}
+        retained.append(row)
+    app._dashboard_task_carry = new_carry
+
+    rows = live_rows + retained
+    rows.sort(key=lambda r: (r["sort_ts"] is not None, r["sort_ts"] or 0.0))
+    return rows
+
+
 def _refresh_tasks_section(app, tasks=None, recent=None):
     """Clear and repopulate the merged Tasks list.
 
     Rows come from the waiting/running collectors plus the newest
-    completed history entries, sorted reverse-chronologically by each
-    row's time (live rows use the task start, completed rows the
-    completion time); rows without a usable time sort to the top.
-    Completed entries the user removed stay hidden via their dismissal
-    keys, and keys that can no longer match the loaded history window
-    are pruned.  The current selection is preserved across the rebuild
-    for rows that survive (matched by task key or log file).
+    completed history entries.  Live rows always sit above the completed
+    ones, sorted ascending by task start (longest-running first; rows
+    without a usable time sort to the top of the live block).  Completed
+    rows stay reverse-chronological by completion time.  A live task the
+    collectors momentarily stop reporting keeps its last-known row for up
+    to ``_TASK_CARRY_MISS_LIMIT`` consecutive missed refreshes, or until
+    a completed entry with the same session log file appears — a task is
+    never dropped from the list while it is still running.  Completed
+    entries the user removed stay hidden via their dismissal keys, and
+    keys that can no longer match the loaded history window are pruned.
+    The current selection is preserved across the rebuild for rows that
+    survive (matched by task key or log file).
     """
     selection = app.dashboard_tasks_view.get_selection()
     model, pathlist = selection.get_selected_rows()
@@ -2280,10 +2335,12 @@ def _refresh_tasks_section(app, tasks=None, recent=None):
         _save_dismissed_task_keys(app, effective_dismissed)
     visible_recent = [e for e in recent if _completed_task_key(e) not in effective_dismissed]
 
-    rows = [_live_task_row(t) for t in tasks]
-    rows.extend(_completed_task_row(e) for e in visible_recent)
-    # Reverse chronological: timed rows newest-first, timeless rows on top.
-    rows.sort(key=lambda r: (r["sort_ts"] is not None, -(r["sort_ts"] or 0.0)))
+    live_rows = [_live_task_row(t) for t in tasks]
+    completed_rows = [_completed_task_row(e) for e in visible_recent]
+    # Live rows first: ascending by start (longest-running on top, timeless
+    # rows above them); completed rows newest-first below them.
+    completed_rows.sort(key=lambda r: (r["sort_ts"] is not None, -(r["sort_ts"] or 0.0)))
+    rows = _retain_unreported_live_rows(app, live_rows, completed_rows) + completed_rows
 
     app.dashboard_tasks_store.clear()
     if not rows:

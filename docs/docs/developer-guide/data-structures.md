@@ -915,7 +915,7 @@ beside the map so the pool-resident pair is self-contained for recovery.
 | `generated` | string | `date -Iseconds` timestamp of the export |
 | `host` | string | Short hostname of the storage host that wrote the map |
 | `iqn_prefix` / `storage_ip` | string | Node identity at export time (drift in these is reported by `--check`) |
-| `pools.<name>` | string | Pool GUID at export time — the pool-identity fence (a renamed or replaced pool reuses a name but never a GUID); additive key, maps written before it simply omit it |
+| `pools.<name>` | string | Pool GUID at export time — the pool-identity fence (a renamed or replaced pool reuses a name but never a GUID). Covers every configured pool plus any attached pool marked as an offsite candidate in the GUI config, so rotation pools stay fenced while connected; additive key, maps written before it simply omit it |
 | `targets.<iqn>.luns` | object | LUN number (string key) → backstore name for that target |
 | `targets.<iqn>.acls` | object | Initiator IQN → its recorded grant pairs: `mapped_lun` (string key) → `tpg_lun` (number), exactly as the initiator holds them live. A non-identity pair (`"8": 0` above — the initiator sees TPG LUN 0 at mapped LUN 8) is what the grants dimension exists for: identity rebuilds cannot express it. Maps written before version 2 carry a bare initiator-name array instead; readers accept both shapes and treat the legacy list as names with unrecorded grants |
 | `backstores.<name>.dev` | string | Zvol device path backing the backstore |
