@@ -63,7 +63,10 @@
 - **Checkagainst's busy-counterpart report.** The accumulation of
   locked counterpart datasets in the refusal warning never executed
   (a broken line continuation made bash treat the text as a command);
-  it is fixed and now covered by a regression test.
+  it is fixed and now covered by a regression test. A follow-up repair
+  fixes the list's duplicate check: counterpart names that prefix one
+  another (`pool/data` and `pool/data2`) are now all named instead of
+  the shorter one being swallowed.
 
 ### Changed
 

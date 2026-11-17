@@ -177,11 +177,16 @@ run_unarchive() {
         export _mock_sha_fail="${_mock_sha_fail:-}"
 
         # Mock zfs state. _mock_empty_archive stages the base dataset with
-        # no archived zvols (the empty-listing shape).
+        # no archived zvols (the empty-listing shape). _mock_skip_base_dataset
+        # registers nothing for the base itself (the "Not a ZFS dataset"
+        # FATAL shape: every base run_unarchive passes is registered by
+        # default, so the refusal needs this opt-out).
         local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
-        _mock_zfs_fs_list="${archive_base}"
-        _mock_zfs_datasets["${archive_base}"]=1
-        _mock_zfs_props["${archive_base}:mountpoint"]="${archive_base}"
+        if [[ "${_mock_skip_base_dataset:-}" != "1" ]]; then
+            _mock_zfs_fs_list="${archive_base}"
+            _mock_zfs_datasets["${archive_base}"]=1
+            _mock_zfs_props["${archive_base}:mountpoint"]="${archive_base}"
+        fi
         if [[ "${_mock_empty_archive:-}" != "1" ]]; then
             _mock_zfs_fs_list="${_mock_zfs_fs_list}
 ${arc_dataset}"
@@ -599,7 +604,8 @@ reset_unretire_mocks() {
         _mock_sha_fail \
         _mock_dest_zvol_present _mock_dest_zvol_marked _mock_two_node \
         _mock_iqn_prefix _mock_live_targets \
-        _mock_extra_archived_zvols _mock_empty_archive _mock_archive_send_size
+        _mock_extra_archived_zvols _mock_empty_archive _mock_archive_send_size \
+        _mock_skip_base_dataset
     rm -f "${_mock_zfs_state_dir}"/node.conf.bak-* 2>/dev/null || true
 }
 
@@ -1276,6 +1282,33 @@ y"
     fi
     if [[ "$out" != *"FATAL: Unknown archive method 'teleport'"* ]]; then
         test_fail "Unknown-method FATAL missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_missing_base_dataset_fatals() {
+    reset_unretire_mocks
+    test_start "Archive base that is not a ZFS dataset is fatal"
+
+    _mock_orig_vmid="904"
+    _mock_skip_base_dataset="1"
+    _mock_empty_archive="1"
+    local pve_dir="$_mock_zfs_state_dir/pve13"
+    local archive="$_mock_zfs_state_dir/archive13"
+    mkdir -p "$pve_dir"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Not a ZFS dataset:"* ]]; then
+        test_fail "Not-a-dataset FATAL missing; output:\n$out"
         return
     fi
 
@@ -2296,6 +2329,7 @@ test_copy_method_missing_vbs_sidecar_fatals
 test_legacy_missing_vbs_sidecar_warns_and_proceeds
 test_missing_disk_info_fatals
 test_unknown_method_fatals
+test_missing_base_dataset_fatals
 test_completed_restore_run_exits_cleanly
 test_resume_skips_marked_disk_and_finishes
 test_unmarked_dest_confirmed_redone

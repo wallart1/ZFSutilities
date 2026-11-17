@@ -548,7 +548,7 @@ EOF
                 _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"$arc_ds"
                 _mock_zfs_datasets["$arc_ds"]=1
                 _mock_zfs_props["${arc_ds}:volblocksize"]="1M"
-                _mock_zfs_snap_lists["$arc_ds"]="${arc_ds}@archive"
+                _mock_zfs_snaps["${arc_ds}@archive"]=1
                 echo "METHOD=copy" > "${archive_mount}/${zvol}.disk_info"
                 echo "8K" > "${archive_mount}/${zvol}.original_volblocksize"
             done

@@ -141,8 +141,7 @@ CPEOF
         target="${pool}/proxmox/vm-${check_vmid}-disk-${dnum}"
         marked_here=false
         if is_single_node; then
-            if zfs list -H -o name "$target" 2>/dev/null \
-                    | grep -qxF -- "$target" \
+            if zfs list -H -o name "$target" >/dev/null 2>&1 \
                     && zvol_marked_restored "$target" "$check_vmid"; then
                 marked_here=true
             fi
@@ -274,10 +273,13 @@ fi
         exit 1
     }
 
-# Validate the base exists as a ZFS dataset
+# Validate the base exists as a ZFS dataset. Exit-status probe (the
+# codebase's standard existence idiom): under the unit-test harness the
+# mock zfs is a shell function, and a `| grep` pipeline forks a pair whose
+# failure under parallel-suite load reads as "dataset missing"; a direct
+# call runs the function with no fork at all.
 if is_single_node; then
-    if ! zfs list -H -o name "$archive_base" 2>/dev/null \
-            | grep -qxF -- "$archive_base"; then
+    if ! zfs list -H -o name "$archive_base" >/dev/null 2>&1; then
         {
             log_msg "FATAL: Not a ZFS dataset: $archive_base"
             exit 1
@@ -507,8 +509,7 @@ for i in "${!new_zvols[@]}"; do
     restore_action[i]="restore"
     dest_exists=false
     if is_single_node; then
-        if zfs list -H -o name "${new_zvols[$i]}" 2>/dev/null \
-                | grep -qxF -- "${new_zvols[$i]}"; then
+        if zfs list -H -o name "${new_zvols[$i]}" >/dev/null 2>&1; then
             dest_exists=true
         fi
     else

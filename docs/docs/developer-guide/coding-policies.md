@@ -285,6 +285,14 @@ This initializes basic runtime variables and sources commonly-used functions.
   `zfs snapshot`. This prevents concurrent jobs from creating out-of-sequence
   snapshots that would force an incremental receive with `-F` to roll back.
 
+- Probe dataset existence with the command's exit status:
+  `zfs list -H -o name "$ds" >/dev/null 2>&1`. Do not pipe the listing into
+  `grep -qxF`. Real `zfs` already fails the listing for a missing dataset,
+  so the pipeline adds nothing in production. Under the test harness the
+  mock `zfs` is a shell function, and a piped call forks a producer and a
+  consumer; a fork failure under parallel-suite load then reads as
+  "dataset missing" (the one-per-batch flake class).
+
 - Use arrays for include/exclude lists: `includes=('proxmox')`,
   `excludes=('temp/temp')`; empty arrays are `includes=()`.
 

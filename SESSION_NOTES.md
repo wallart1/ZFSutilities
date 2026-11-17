@@ -352,72 +352,30 @@ cycle — templates remain as refreshed 2026-11-10.)
 
 ## Active / parked threads
 
-- **Concurrency-collisions fix campaign (2026-11-16) — every open gap in
-  docs/docs/developer-guide/concurrency-collisions.md closed, all affected
-  suites green, awaiting full-suite + commit cue.** Five fixes: (A)
-  same-PID lock conversion in `zfslock_acquire` (stronger-type request
-  rewrites the lock file in place; remote variant = new `convert`
-  subcommand on `zfslockmanager-remote`; `zfs-send-receive` now holds its
-  destination lock through `delfs`, killing the §10 release/reacquire
-  window); (B) `zfscheckagainst` takes non-blocking `r` locks on the
-  source + each counterpart, busy → rc 6 "deletion blocked" with
-  holder-naming WARN, refuse-never-wait so mirrored prunes cannot
-  deadlock; (C) per-file flocks for `expected-backstores.txt`
-  (`.iscsi_manifest.lock`) and `iscsi-encrypted-luns.conf`
-  (`.encrypted_luns.lock`) — every inline writer in nine scripts + three
-  ssh-heredocs converged on the locked idiom, regenerators re-list live
-  targetcli under the lock, dashboard reads take shared locks; (D)
-  `.rsync_log.lock` shared-append/exclusive-truncate for
-  `rsync-backup.log` + the bash twin in `command_builders` (golden files
-  regenerated); (E) `ScrubQueue.transaction()` — every mutator and all
-  three tick drivers (pools page, dashboard, profile loop) now do
-  transactional reload-mutate-save; scrub authority deliberately NOT
-  consolidated (ZFS rejects conflicting transitions). Tests added across
-  test-zfslockmanager(+remote), test-zfscheckagainst,
-  test-safe-iscsi-save (lib lock coverage), test-zfsretain
-  (lock-before-enumeration), test_zfs_lock_manager.py,
-  test_file_locking.py, test_backup_runner.py, test_scrub_manager.py;
-  9 goldens regenerated. Gotchas hit: bash `$$` is the parent pid inside
-  subshells (lock-manager re-entry treats subshell children as the
-  holder — smoke tests must use real separate processes); process
-  substitution kills array appends made inside it (retain's enumeration
-  recorder needed a file); ScrubQueue's constructor does a locked load,
-  so tests must arrange state before taking the lock.
-- **0.142.0 wrap-up review pass (2026-11-17, uncommitted on top of the
-  two campaigns).** PREEXISTING emptied (the one entry — ruff format nit
-  in test_zfs_repository.py as committed at 6a33526 — fixed, suite
-  green). Lint: dashboard_page import order fixed; SC2288 in
-  zfscheckagainst was a REAL bug (backslash join made the elif's
-  accumulation line a command word — never ran; fixed with += and pinned
-  by a new two-busy-counterparts test, red-proofed); unused-local SC2034
-  cleaned; product files back under the 100-col policy (data strings
-  left long per repo precedent). zfsdelsnap's rc-6 wording updated to
-  "counterpart unavailable (offline or locked)" (real + preview gate;
-  retain/delsnap/massdelsnaps tests follow). Docs: convert subcommand +
-  Same-PID Lock Conversion section (lock-manager.md, modules.md),
-  messages rows for conversion/checkagainst/scrub-busy, GLOSSARY gains
-  Product/Lane/Tree (the user's to-add list) — plus the campaign-authored
-  docs updates already in tree.
+(2026-11-17 cycle prune: the 0.142.0 campaigns — concurrency collisions
+(five fixes A-E), the campaign wrap-up pass, and the mint ITF template —
+are committed as 654d776; their thread entries were removed. Design lives
+in docs/ (concurrency-collisions, lock-manager, integrated-testing,
+itf-coverage, data-structures) and the gotchas in agent memory
+($$-in-subshell, process-substitution array appends, ScrubQueue's locked
+constructor load, the mint initrd/provision-boot laws).)
 
-- **Mint ITF template profile (2026-11-14 → 2026-11-16) — template
-  BUILT GREEN, code uncommitted.** Fourth baseline-template profile:
-  Linux Mint 22.3 "Zena" Cinnamon as a plain desktop-OS leg (no
-  product — journeys install it through the first-time-user path).
-  `itf-template-mint` = vmid 8000 on zfstestvm1, stamp `mint-iso=
-  itf-mint-22.3-cinnamon-64bit.iso version=6.6.9+zena kernel=7.0.0-43-
-  generic built=2026-11-16`. Mechanism (verified against the real ISO,
-  not assumptions): ubiquity preseed PREPENDED into the casper initrd
-  (appending dies at the initrd's trailing bytes), `automatic-ubiquity`
-  GUI install on `--vga std`, `ubiquity/use_nonfree` preseeded (the
-  codecs page otherwise stalls --automatic), and — because Mint's
-  automatic finish NEVER runs success_command — a serial-driven
-  provision boot (itf_mint_provision_boot) installs the guest agent +
-  sshd + keys/hostname/grub from the initramfs shell after the install
-  poweroff. Eight build attempts to green; the full law list lives in
-  the agent-memory mint topic. Remaining: nothing for the template
-  itself; the code (config/guest/template libs, stage, driver, 4 test
-  suites, docs, GLOSSARY) rides uncommitted in the pub tree awaiting
-  the user's commit instruction.
+- **0.142.0 release-gate wrap-up (2026-11-17, this commit).** The recorded
+  test-unarchive-vm load flake (Test 25, the one-per-batch fork-pair
+  class) is RESOLVED structurally: single-node zfs-existence probes
+  converted to the exit-status idiom (`zfs list -H -o name "$ds"
+  >/dev/null 2>&1`) in unarchive-vm, archive-vm, and archive-engine.sh —
+  a `zfs | grep -qxF` pipeline forks a producer+consumer pair under the
+  harness, and either fork failing under parallel-suite load read as
+  "dataset missing"; the direct call runs the mock function with zero
+  forks. The idiom is codified in coding-policies.md. The @archive
+  completion probe now asks for the specific snapshot (mock existence
+  model, not the list); test-archive-vm staging follows. Checkagainst's
+  busy-list dedup matches whole rows, so prefix-named counterparts are
+  all named (regression test added), and the "Not a ZFS dataset" FATAL
+  got its first test via a `_mock_skip_base_dataset` harness knob.
+  PREEXISTING emptied and re-checked empty; lint clean; docs integrity
+  green; full no-soak run green before freeze.
 
 - **Alignment guest-probe decode — live remainder (fix rode 0.139.0
   via the pub3 lane merge; committed on main at `4cc0998`).** The

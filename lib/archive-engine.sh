@@ -375,7 +375,7 @@ archive_create_parents() {
     local level="$parent"
     local created_root=""
     while [[ -n "$level" && "$level" != "." && "$level" != "/" ]]; do
-        if zfs list -H -o name "$level" 2>/dev/null | grep -qxF -- "$level"; then
+        if zfs list -H -o name "$level" >/dev/null 2>&1; then
             break
         fi
         created_root="$level"
@@ -458,8 +458,7 @@ archive_one_zvol() {
                     "zfs set snapdev=${snapdev_arg} ${zvol} 2>/dev/null || true"
             fi
         fi
-        if zfs list -H -o name "$archive_dataset" 2>/dev/null \
-                | grep -qxF -- "$archive_dataset"; then
+        if zfs list -H -o name "$archive_dataset" >/dev/null 2>&1; then
             log_msg "FATAL: Archive dataset already exists: ${archive_dataset}"
             log_msg "FATAL: Destroy it first to re-archive: zfs destroy -r ${archive_dataset}"
             if [[ "$snapdev_changed" == "1" ]]; then
@@ -599,13 +598,12 @@ archive_method_of() {
 # Usage: archive_completion_state <archive_dataset> <archive_mount> <zvol>
 archive_completion_state() {
     local archive_dataset="$1" archive_mount="$2" zvol="$3"
-    if ! zfs list -H -o name "$archive_dataset" 2>/dev/null \
-            | grep -qxF -- "$archive_dataset"; then
+    if ! zfs list -H -o name "$archive_dataset" >/dev/null 2>&1; then
         echo absent
         return 0
     fi
-    if ! zfs list -H -t snapshot -o name "$archive_dataset" 2>/dev/null \
-            | grep -qxF -- "${archive_dataset}@archive"; then
+    if ! zfs list -H -t snapshot -o name "${archive_dataset}@archive" \
+            >/dev/null 2>&1; then
         echo partial
         return 0
     fi

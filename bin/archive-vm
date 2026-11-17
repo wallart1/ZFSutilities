@@ -255,8 +255,7 @@ collect_referenced_zvols() {
                 # every pool) keeps replicated backup copies on other pools
                 # from ever being picked up as this VM's disk.
                 zvol_path="${storage}/proxmox/vm-${vmid}-disk-${disk_num}"
-                if ! zfs list -H -o name "$zvol_path" 2>/dev/null \
-                        | grep -qxF -- "$zvol_path"; then
+                if ! zfs list -H -o name "$zvol_path" >/dev/null 2>&1; then
                     log_msg "WARN: Config references vm-${vmid}-disk-${disk_num}" \
                         "but no zvol was found"
                     continue

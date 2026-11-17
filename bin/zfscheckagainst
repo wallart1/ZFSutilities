@@ -343,7 +343,7 @@ function checkagainst {
                         _ca_log_busy "$_candidate_dstocheck"
                         if [[ -z "$_busy_counterparts" ]]; then
                             _busy_counterparts="$_candidate_dstocheck (locked)"
-                        elif [[ "$_busy_counterparts" != *"$_candidate_dstocheck"* ]]; then
+                        elif [[ "$_busy_counterparts" != *"$_candidate_dstocheck ("* ]]; then
                             _busy_counterparts+=", $_candidate_dstocheck (locked)"
                         fi
                         continue

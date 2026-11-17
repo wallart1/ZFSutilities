@@ -639,6 +639,31 @@ test_busy_counterparts_accumulate() {
     fi
 }
 
+test_busy_counterparts_prefix_names_both_listed() {
+    test_start "Prefix-named busy counterparts are both named in the refusal"
+    reset_mocks
+    # z22tb/poolA/data is a string prefix of z22tb/poolA/data2 and arrives
+    # second: a substring dedup would swallow it (the first entry already
+    # "contains" the shorter name), so the refusal would under-name the
+    # busy set.
+    _zfscheckagainst_checkagainst_lines=(
+        "poolA/data z22tb/poolA/data2 offsite"
+        "poolA/data z22tb/poolA/data offsite"
+    )
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data2 z22tb/poolA/data
+    _ca_lock_conflict_ds="z22tb/poolA/data2 z22tb/poolA/data"
+    local rc=0
+    local out
+    out=$(checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 6 "$rc"
+    if [[ "$out" == *"locked: z22tb/poolA/data2 (locked), z22tb/poolA/data (locked)"* ]]; then
+        test_pass
+    else
+        test_fail "Prefix-named busy list incomplete; out='$out'"
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -677,6 +702,7 @@ test_busy_counterpart_blocks_deletion
 test_busy_source_blocks_deletion
 test_busy_counterpart_other_row_verifies
 test_busy_counterparts_accumulate
+test_busy_counterparts_prefix_names_both_listed
 
 rm -rf "$mock_base"
 
