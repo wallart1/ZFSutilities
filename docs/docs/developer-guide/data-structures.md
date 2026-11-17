@@ -22,10 +22,10 @@ after `buildfsarray` returns because scripts are sourced, not forked.
 
 ## `$zfspoolarray`
 
-Output of `poolarray` (from [`zfsconfig`](../commands-and-modules/modules.md#zfsconfig). 
-Plain indexed array of pool names as
-configured in the JSON config's `pools` key. This is a registry — it does not
-reflect import state; use `zpool list` output for that.
+Output of `poolarray` (from [`zfsconfig`](../commands-and-modules/modules.md#zfsconfig)).
+Plain indexed array of pool names as configured in the JSON config's `pools`
+key. This is a registry — it does not reflect import state; use `zpool list`
+output for that.
 
 ## Snapshot name persistence
 
@@ -44,21 +44,26 @@ place.
 
 ## Snapshot-name reservation
 
-To prevent two concurrent jobs from generating a snapshot name at the exact same
-instant, both `zfssnapbuild` and `feature_config.generate_snapshot_name()` acquire
-a brief global lock (`/run/lock/zfsutilities/.snapname.lock`) while building the name and
-recording it in a one-minute reservation file
-(`/run/lock/zfsutilities/.snapname.reserved`). The reservation records the most recently
-issued name for each label/bucket with a timestamp; stale entries expire after 60
-seconds. The lock is released immediately after the reservation is written.
+To keep two concurrent jobs from generating a snapshot name at the exact
+same instant, both name builders take a brief global lock:
+`/run/lock/zfsutilities/.snapname.lock`. The builders are `zfssnapbuild`
+and `feature_config.generate_snapshot_name()`. While holding the lock, each
+also records the name in a one-minute reservation file:
+`/run/lock/zfsutilities/.snapname.reserved`.
+
+The reservation stores the most recently issued name for each label/bucket
+with a timestamp. Stale entries expire after 60 seconds. The lock is
+released immediately after the reservation is written.
 
 ## `fss` table (in-memory rows from [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) JSON)
 
-Used by [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)
-to map a snapshot to the counterpart dataset that must still share a common
-snapshot with it before deletion is safe. Loaded at [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) time from
-`zfsconfig_get_checkagainst`. At runtime each row has three functional
-whitespace-separated fields; an optional fourth `comment` field is stored
+The fss table maps a snapshot to the counterpart dataset that must still
+share a common snapshot with it before deletion is safe.
+[`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)
+loads the rows from
+[`zfsconfig_get_checkagainst`](../commands-and-modules/modules.md#zfsconfig)
+when it runs. At runtime each row has three functional
+whitespace-separated fields. An optional fourth `comment` field is stored
 in the JSON config and ignored by the bash consumer:
 
 | Field | Variable name in script | Purpose                                                          |
@@ -103,9 +108,9 @@ Precedence is therefore `user_entries` > `offsite_derived` >
 `backup_derived` for the same `(source_root, label)` pair. Inactive derived
 sections are omitted entirely from the runtime rows.
 
-The GUI's Checkagainst tab lets you refresh the derived lists manually
-with **Get Entries** or automatically seed them after a successful run,
-while the bottom section remains your editable `user_entries` table.
+The GUI's Checkagainst tab refreshes the derived lists manually via
+**Get Entries**, and a successful run seeds them automatically. The bottom
+section remains your editable `user_entries` table.
 
 Derived rows are also refreshed automatically when the Backup or Offsite
 configuration is saved, so they stay in sync with the current send/receive
@@ -145,7 +150,7 @@ arrays hold the policy:
 | `$bktretain[i]` | Number of snapshots to keep in that bucket                                   |
 | `$minage[i]`    | Minimum age (days) before a snapshot in that bucket is eligible for deletion |
 
-`$bktlen=${#bktname[@]}` gives the count. [zfsretain](../commands-and-modules/modules.md#zfsretain) iterates these arrays
+`bktlen=${#bktname[@]}` gives the count. [zfsretain](../commands-and-modules/modules.md#zfsretain) iterates these arrays
 in Phase 2 to decide which snapshots exceed their bucket's cap. Order
 follows the JSON config entry order (typically `d, w, m, s`).
 
@@ -184,10 +189,11 @@ iscsi_teardown[<dataset>]="<target>:<lun_num>:<backstore_name>:<encrypted_flag>"
 | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Dataset name (e.g., `threeamigos/proxmox/vm-101-disk-0`) | Colon-separated quadruple: iSCSI target IQN, LUN number, backstore name, `Y` if the backstore was encrypted |
 
-Populated by `iscsi_teardown_zvol` before `zfs destroy`; consumed by
-`iscsi_rebuild_torn_down` (called from [`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive)) after the replacement
-`zfs receive` completes, which re-adds the LUN at the original LUN number so
-that by-path device symlinks on the compute node remain stable.
+`iscsi_teardown_zvol` populates the array before `zfs destroy`. After the
+replacement `zfs receive` completes, `iscsi_rebuild_torn_down` (called from
+[`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive))
+consumes the array and re-adds each LUN at its original LUN number. By-path
+device symlinks on the compute node therefore remain stable.
 
 ## `POOL_TARGET` (associative array)
 
@@ -261,9 +267,9 @@ the GUI. Override the path in the environment with `$ZFSCONFIG_PATH`.
 
 Written by the Settings → **Notifications…** dialog and read by
 `python/notifications.py` when a run finishes (scheduled profile, Run Now,
-or interactive GUI run). No migration seeds it: the key is absent until the
-dialog is first saved, and absence means both channels off with every
-run-type toggle enabled. The SMTP password is deliberately NOT stored here
+or interactive GUI run). No migration seeds the section: the key is absent
+until the dialog is first saved, and absence means both channels off with
+every run-type toggle enabled. The SMTP password is deliberately NOT stored here
 — it lives in the root-only file `/etc/zfsutilities/smtp-credentials.json`
 (mode `0600`).
 
@@ -281,7 +287,7 @@ run-type toggle enabled. The SMTP password is deliberately NOT stored here
 | `email.smtp_to`            | array of strings     | Recipient addresses (dialog accepts comma-separated input)                                    |
 
 A channel notifies only when its mode matches the result **and** the run
-type's toggle is on: `failures` covers result `failed`; `all` also covers
+type's toggle is on. `failures` covers result `failed`; `all` also covers
 `success` and `cancelled`. No-op skips (duplicate invocation, weekday
 ordinal) never notify.
 
@@ -302,12 +308,13 @@ Persisted by `UIStateManager` in `python/gui_helpers.py`.
 ### `paths` object
 
 Installation-specific file paths live here rather than hard-coded in the
-modules that use them. The section is seeded by the v27 migration (with the
-`rewrite_data_log` and `rsync_pull_log` keys added by v32); at runtime,
-missing keys are seeded on first access from the centralized path layer
-(`paths.py`, which honours `ZFSUTILITIES_*` environment overrides) and
-persisted by the GUI; user-set values always win. Headless readers derive
-without writing.
+modules that use them. The v27 migration seeds the section, and v32 adds
+the `rewrite_data_log` and `rsync_pull_log` keys.
+
+At runtime, missing keys are seeded on first access from the centralized
+path layer (`paths.py`) and persisted by the GUI. The path layer honours
+`ZFSUTILITIES_*` environment overrides, and user-set values always win.
+Headless readers derive without writing.
 
 | Key                  | Type   | Contents                                                                                          |
 | -------------------- | ------ | ------------------------------------------------------------------------------------------------- |
@@ -360,7 +367,13 @@ Properties are divided into two groups:
 - **Live properties** can be changed with `zfs set`: `recordsize`, `compression`, `atime`, `logbias`, `sync`, `primarycache`, `special_small_blocks`.
 - **Creation-only properties** are display-only and cannot be changed after dataset creation: `volblocksize`, `ashift`.
 
-The pure-logic helpers in `python/workload_profiles.py` (`properties_for_profile`, `match_profile`, `build_apply_plan`, `build_zfs_set_commands`, `profile_has_warning`, `warning_text`) decide which properties apply to a given dataset type and build the preview plan. The Disks tab **Advanced: Manage Profiles…** dialog edits this object directly; changes are persisted immediately through `feature_config.save_workload_profiles()`.
+The pure-logic helpers in `python/workload_profiles.py` decide which
+properties apply to a given dataset type and build the preview plan:
+`properties_for_profile`, `match_profile`, `build_apply_plan`,
+`build_zfs_set_commands`, `profile_has_warning`, `warning_text`. The Disks
+tab **Advanced: Manage Profiles…** dialog edits this object directly.
+Changes are persisted immediately through
+`feature_config.save_workload_profiles()`.
 
 ### `pool_profiles` object
 
@@ -379,17 +392,17 @@ the settings that shape a pool at creation. Each profile has this schema:
 The curated pool properties are `autotrim`, `autoexpand`, `autoreplace`,
 `failmode`, `multihost`, `listsnapshots`, `delegation` — written explicitly so
 pools never depend on `zpool create` defaults that drift between releases.
-Blocksize (`ashift`) is creation-only: it can only be chosen at create (Create
-Pool) or when the pool is rebuilt (Migrate Pool), which is why it lives here
-rather than in a workload profile.
+Blocksize (`ashift`) is creation-only: it can only be chosen at create
+(Create Pool) or when the pool is rebuilt (Migrate Pool). That is why it
+lives here rather than in a workload profile.
 
 The pure-logic helpers in `python/pool_profiles.py` resolve the blocksize,
 build the ordered `-o`/`-O` option pairs, validate profiles, and derive the
-"Match origin pool" pseudo-profile (never saved — built from the origin pool's
-ashift, curated pool properties, and root live properties each time Migrate
-Pool opens). The Disks tab **Advanced: Manage Pool Profiles…** dialog edits
-this object directly; changes are persisted immediately through
-`feature_config.save_pool_profiles()`.
+"Match origin pool" pseudo-profile. The pseudo-profile is never saved — it
+is built from the origin pool's ashift, curated pool properties, and root
+live properties each time Migrate Pool opens. The Disks tab **Advanced:
+Manage Pool Profiles…** dialog edits this object directly. Changes are
+persisted immediately through `feature_config.save_pool_profiles()`.
 
 ### `enclosures` object
 
@@ -404,22 +417,26 @@ sorted member-disk WWNs, stable across replug and port moves. Each value:
 | `name`     | string | User-set display name (empty = the id is shown)                             |
 | `max_rate` | string | Max transfer rate cap for the enclosure (rate value, e.g. `100M`; empty = unlimited) |
 
-Discovery is independent of this section — an enclosure with no entry is
+Discovery is independent of this section. An enclosure with no entry is
 simply uncapped, and a config entry whose enclosure is unplugged is inert.
+
 The rate resolver below reads this section, and every transfer pipeline
-consults it at transfer time: `lib/transfer-lib.sh` resolves per
-`transfer_do` from the send/receive targets, `lib/archive-engine.sh` once
-per archived/restored zvol, and the `zfsrestoresendstream` /
-`zfsreadthru` pacer stages per run. With the section empty every transfer
-behaves exactly as before caps existed.
+consults it at transfer time:
+
+- `lib/transfer-lib.sh` resolves per `transfer_do` from the send/receive
+  targets.
+- `lib/archive-engine.sh` resolves once per archived/restored zvol.
+- The `zfsrestoresendstream` / `zfsreadthru` pacer stages resolve per run.
+
+With the section empty, every transfer runs uncapped.
 
 ### Enclosure rate resolution
 
 `lib/enclosure_rate.py` is the single point of per-enclosure rate
 governance. One transfer's effective rate is the minimum of the per-activity
 rate limit and every configured cap of every enclosure touched by the source
-or destination pool — lower wins, because an enclosure may hold disks of
-several pools and a pool may span several enclosures.
+or destination pool. Lower wins because an enclosure may hold disks of
+several pools, and a pool may span several enclosures.
 
 Two entry points share one implementation, so the GUI and CLI pipelines can
 never disagree:
@@ -434,21 +451,23 @@ never disagree:
   is the routed-through-the-repository seam for GUI callers, returning the
   same effective-rate string (`""` = unlimited).
 
-Rate grammar and comparison: values use the pacer grammar
-(`lib/pace_stream.py` — digits plus an optional `k`/`m`/`g`/`t`/`p`/`e`
-multiplier with optional `i`/`b`, 1024-based; bare digits are bytes per
-second, and a rate of zero is refused everywhere because the pacer divides
-by the rate). Comparison is numeric through `pace_stream.parse_rate` so the
-grammar cannot drift from the pacer; `zfs_repository.valid_rate_limit`
-stays the GUI-side validator of values before they reach the config. A
-zero cap saved by an older version is invalid and fails open.
+Rate grammar and comparison: values use the pacer grammar from
+`lib/pace_stream.py` — digits plus an optional `k`/`m`/`g`/`t`/`p`/`e`
+multiplier with optional `i`/`b`, 1024-based. Bare digits are bytes per
+second. A rate of zero is refused everywhere, because the pacer divides by
+the rate.
 
-Fail-open policy: a resolver failure never blocks a
-transfer. On a nonzero exit the bash caller runs at its own activity limit
-and logs loudly; the Python seam logs a `WARN` and returns the activity rate
-unchanged. An invalid cap in the config fails open the same way. The only
-hard failure is an invalid rate in the
-pacer itself, which is a loud FATAL.
+Comparison is numeric through `pace_stream.parse_rate`, so the grammar
+cannot drift from the pacer. `zfs_repository.valid_rate_limit` stays the
+GUI-side validator of values before they reach the config. A zero cap saved
+by an older version is non-grammar and fails open like any other
+non-grammar cap.
+
+Fail-open policy: a resolver failure never blocks a transfer. On a nonzero
+exit, the bash caller runs at its own activity limit and logs loudly; the
+Python seam logs a `WARN` and returns the activity rate unchanged. A
+non-grammar cap in the config fails open the same way. One failure stays
+hard: a configured rate with the pacer itself missing is a loud FATAL.
 
 ### `backup` object
 
@@ -467,8 +486,7 @@ Persisted by the GUI Backup tab and read by [zfsdailybackup](../commands-and-mod
 
 ### `memory` object
 
-Persisted by the GUI Performance tab (the key name predates the tab's
-current name).
+Persisted by the GUI Performance tab.
 
 | Key              | Type    | Purpose                                                       |
 | ---------------- | ------- | ------------------------------------------------------------- |
@@ -605,7 +623,7 @@ Additional `ZfsRepository` methods:
 | `get_properties(dataset, props)` | `dict[str, str]` | Values for a list of ZFS properties; missing properties are returned as `"-"` |
 | `get_all_properties(dataset)` | `dict[str, str]` | All ZFS properties for *dataset* |
 | `set_property(dataset, prop, value)` | `bool` | Run `zfs set <prop>=<value> <dataset>`; returns success/failure |
-| `pool_properties_with_source(pool)` | `dict[str, tuple[str, str]]` | Every pool property as `{property: (value, source)}` from `zpool get -H -o property,value,source all`; Migrate Pool filters it with `pool_profiles.replayable_pool_properties()` to find the locally set properties to replay on the migrated pool |
+| `pool_properties_with_source(pool)` | `dict[str, tuple[str, str]]` | Every pool property as `{property: (value, source)}` from `zpool get -H -o property,value,source all`. Migrate Pool filters the result with `pool_profiles.replayable_pool_properties()` to find the locally set properties to replay on the migrated pool |
 | `pool_status_errors(pool)` | `dict` | Parses `zpool status <pool>` and returns `has_errors` (`bool`), `errors_summary` (`str`), `data_errors` (`list` of paths), and `vdev_errors` (`list` of `{name, read, write, cksum}` dicts). Used by the Dashboard and Pools tab to color the **Errors** column. |
 | `version_output()` | `str` | Raw `zfs version` text (empty on failure) |
 | `zdb_pool_config(pool)` | `str` | Raw `zdb -C <pool>` text (empty on failure) |
@@ -638,55 +656,65 @@ consumed by the Pools tab, Dashboard, and `ScrubQueue`.
 | `remaining_seconds` | `int` or `None` | Seconds remaining when `zpool status` reports `HH:MM:SS to go` (or `N days HH:MM:SS to go`) |
 | `eta` | `str` or `None` | Estimated completion timestamp (`YYYY-MM-DD HH:MM`) computed from `remaining_seconds` |
 
-`ScrubQueue` persists pending/active/paused/finished/paused_by_user pool sets
-and a concurrency target to `/var/lib/zfsutilities/scrub_state.json`. Every
-mutator (`add_pending`, `remove_pools`, `pause_pools`, `resume_pools`,
-`set_order`, `set_target`) and every driver tick runs as one transactional
-reload-mutate-save cycle under the state file's flock
-(`ScrubQueue.transaction()`), so a change made by one process (the GUI, a
-headless scrub profile) can never be overwritten by a stale in-memory copy in
-another. An
-explicit `target` passed to the constructor is authoritative: it overrides the
-persisted value and is re-persisted, so the GUI's scrub-config setting and a
-scrub profile's `simultaneous` setting always take effect; omitting `target`
-keeps the persisted value. The
-buckets are kept disjoint: a pool appears in at most one of
-pending/active/paused/finished (`add_pending()` removes a re-queued pool from
-`finished`, and `tick()` drops `finished` entries for pools that no longer
-exist). A pool absent from the live pool list (offline, exported, or a
-transient `zpool list` failure in that process) is dropped from the
-`active`/`paused`/`finished` buckets only after `MAX_POOL_MISSING_TICKS` (3)
-consecutive ticks, so a single missed observation cannot evict a scrubbing
-pool from the persisted state. `tick()` also heals stale `paused_by_user` entries (pools in
-`paused_by_user` must still be in `paused`). The `paused` bucket holds only
-user-intentional pauses (Pause button, external `zpool scrub -p`, backup step
-holds): when active scrubs exceed the target, `tick()` pauses the live scrub
-of the lowest-priority pool and requeues it as `pending`, so a scrub that is
-merely waiting for a slot is displayed and persisted as pending and resumes
-from its existing progress once a slot frees. `tick()` migrates any legacy
-non-user `paused` entry back to `pending` for the same reason. Every message
-`scrub_manager` issues — queue transitions, control commands,
-backup-coordinated holds — is also appended to the persistent event log
-(default `/var/log/zfsutilities/scrub-manager.log`, path from the
-[`paths` object](#paths-object)) regardless of which process
-(GUI, scrub profile, backup) produced it. A queued pool whose scrub fails to
-start or resume is retried a few times and then dropped to the in-memory
-`given_up` set after `MAX_SCRUB_START_FAILURES` (3) consecutive failures, so a
-profile cannot spin forever on a pool that refuses to start. Long-lived
-instances (GUI Pools tab, Dashboard, and the headless scrub-profile polling
-loop) call `reload()` before each `tick()` to
-pick up changes written by other processes, such as a headless scrub profile.
+`ScrubQueue` persists the pending/active/paused/finished/paused_by_user
+pool sets and a concurrency target to
+`/var/lib/zfsutilities/scrub_state.json`. Its rules:
+
+- **Transactional state changes.** Every mutator (`add_pending`,
+  `remove_pools`, `pause_pools`, `resume_pools`, `set_order`,
+  `set_target`) and every driver tick runs as one transactional
+  reload-mutate-save cycle under the state file's flock
+  (`ScrubQueue.transaction()`). A change made by one process (the
+  GUI, a headless scrub profile) can therefore never be overwritten
+  by a stale in-memory copy in another.
+- **Authoritative target.** An explicit `target` passed to the constructor
+  overrides the persisted value and is re-persisted. The GUI's scrub-config
+  setting and a scrub profile's `simultaneous` setting therefore always take
+  effect; omitting `target` keeps the persisted value.
+- **Disjoint buckets.** A pool appears in at most one of
+  pending/active/paused/finished. `add_pending()` removes a re-queued pool
+  from `finished`, and `tick()` drops `finished` entries for pools that no
+  longer exist.
+- **Missing pools are evicted slowly.** A pool absent from the live pool
+  list (offline, exported, or a transient `zpool list` failure in that
+  process) is dropped from the `active`/`paused`/`finished` buckets only
+  after `MAX_POOL_MISSING_TICKS` (3) consecutive ticks. A single missed
+  observation therefore cannot evict a scrubbing pool from the persisted
+  state.
+- **Paused means user-intentional.** The `paused` bucket holds only
+  Pause-button, external `zpool scrub -p`, and backup-step-hold pauses.
+  When active scrubs exceed the target, `tick()` pauses the live scrub of
+  the lowest-priority pool and requeues it as `pending`. A scrub that is
+  merely waiting for a slot is displayed and persisted as pending and
+  resumes from its existing progress once a slot frees. For the same
+  reason, `tick()` migrates any legacy non-user `paused` entry back to
+  `pending`. `tick()` also heals stale `paused_by_user` entries: pools in
+  `paused_by_user` must still be in `paused`.
+- **Persistent event log.** Every message `scrub_manager` issues — queue
+  transitions, control commands, backup-coordinated holds — is appended to
+  the persistent event log (default
+  `/var/log/zfsutilities/scrub-manager.log`, path from the
+  [`paths` object](#paths-object)) regardless of which process (GUI, scrub
+  profile, backup) produced it.
+- **Give-up guard.** A queued pool whose scrub fails to start or resume is
+  retried a few times and then dropped to the in-memory `given_up` set after
+  `MAX_SCRUB_START_FAILURES` (3) consecutive failures. A profile therefore
+  cannot spin forever on a pool that refuses to start.
+- **Cross-process reload.** Long-lived instances (GUI Pools tab, Dashboard,
+  and the headless scrub-profile polling loop) drive each cycle as one
+  transactional reload+tick, picking up changes written by other
+  processes, such as a headless scrub profile.
 
 ### Memory samples (`memory_stats.py`)
 
-Dataclasses behind the Performance tab. `collect_memory_sample()` probes three
-independent sources (`/proc/spl/kstat/zfs/arcstats`,
-`/proc/spl/kstat/zfs/zil`, `zpool iostat -v -y 1 1`) and each one degrades
-on its own — an unavailable source clears its `*_available` flag and
-leaves the rest of the sample intact, because ZFS/OS releases vary in what
-they expose (Proxmox, older OpenZFS, containers). Parsed kstat dicts
-contain only the fields the running kernel actually exposes; the UI
-renders absent fields as "—".
+Dataclasses behind the Performance tab. `collect_memory_sample()` probes
+three independent sources: `/proc/spl/kstat/zfs/arcstats`,
+`/proc/spl/kstat/zfs/zil`, and `zpool iostat -v -y 1 1`. Each source
+degrades on its own — an unavailable source clears its `*_available` flag
+and leaves the rest of the sample intact — because ZFS/OS releases vary in
+what they expose (Proxmox, older OpenZFS, containers). Parsed kstat dicts
+contain only the fields the running kernel actually exposes; the UI renders
+absent fields as "—".
 
 | Field | Type | Purpose |
 | ----- | ---- | ------- |
@@ -702,54 +730,59 @@ renders absent fields as "—".
 `compute_rates(prev, cur)` derives `MemoryRates` (ARC hits/s and misses/s,
 L2ARC read/write B/s, SLOG commits/s, writes/s, write B/s, per-vdev
 `VdevRates`, and interval hit rates). The kstat fields come from counter
-deltas between two samples; a counter that resets (reboot, module reload)
-is larger in the new sample's past, so the rate for that interval is
-`None` and the UI shows "—" rather than a bogus negative. `VdevRates`
-pass through the current sample's iostat window directly — no deltas, so
-they are live on the first sample too.
+deltas between two samples. A counter that resets (reboot, module reload)
+is larger in the new sample's past, so the rate for that interval is `None`
+and the UI shows "—" rather than a bogus negative. `VdevRates` pass through
+the current sample's iostat window directly — no deltas, so they are live
+on the first sample too.
 
 `rollup_enclosure_rates(rows, membership)` sums the data-section leaf rows
-into per-enclosure `EnclosureRates` (read/write B/s) using a mapping of
-leaf vdev names to enclosure ids (built by the Performance page from the
-shared enclosure discovery and disk inventory, which spell each member as
-kernel and by-id names, whole disks and partitions). A mapped enclosure
-with no leaf row in the report is absent from the result — its rates are
-unknown, not zero.
+into per-enclosure `EnclosureRates` (read/write B/s). The membership
+argument maps leaf vdev names to enclosure ids; the Performance page builds
+it from the shared enclosure discovery and disk inventory, which spell each
+member as kernel and by-id names, whole disks and partitions. A mapped
+enclosure with no leaf row in the report is absent from the result — the
+enclosure's rates are unknown, not zero.
 
 ### Alignment samples (`alignment_stats.py`)
 
 Dataclasses behind the Alignment view of the Performance tab.
-`collect_alignment_sample()` probes independent sources — `zpool list` /
-`get_ashift` / pool topology, `lsblk` sector geometry, dataset block
-properties, `zpool iostat -r` histograms, the arcstats/zfetchstats kstat
-files, per-dataset objset kstats, PVE VM configs (`/etc/pve/qemu-server`
-locally, or fetched from the compute node over ssh on two-node installs),
-and guest filesystem blocksizes through the QEMU guest agent
-(`alignment_guestfs`) — and each one degrades on its own exactly like the
-memory samples above.
+`collect_alignment_sample()` probes independent sources, and each one
+degrades on its own exactly like the memory samples above:
+
+- `zpool list` / `get_ashift` / pool topology
+- `lsblk` sector geometry
+- dataset block properties
+- `zpool iostat -r` histograms
+- the arcstats/zfetchstats kstat files
+- per-dataset objset kstats
+- PVE VM configs (`/etc/pve/qemu-server` locally, or fetched from the
+  compute node over ssh on two-node installs)
+- guest filesystem blocksizes through the QEMU guest agent
+  (`alignment_guestfs`)
 
 | Field | Type | Purpose |
 | ----- | ---- | ------- |
 | `AlignmentSample.monotonic` | `float` | `time.monotonic()` of the collection |
-| `AlignmentSample.pools` | `list[PoolAlignment]` | One entry per pool: name, `ashift_configured` (zfs-get string), `ashift_effective` (resolved power-of-two or `None`), `members`, `has_cache`, and `topology` (the typed `TopologyNode` vdev tree from `zpool status -P` with the effective ashift annotated on its root, or `None` when that pool's status read failed — the Alignment view renders the tree's classes and members and names failed pools in its availability note) |
+| `AlignmentSample.pools` | `list[PoolAlignment]` | One entry per pool: name, `ashift_configured` (zfs-get string), `ashift_effective` (resolved power-of-two or `None`), `members`, `has_cache`, and `topology`. `topology` is the typed `TopologyNode` vdev tree from `zpool status -P` with the effective ashift annotated on its root, or `None` when that pool's status read failed. The Alignment view renders the tree's classes and members and names failed pools in its availability note |
 | `PoolAlignment.members` | `list[MemberDisk]` | Member leaf paths with `logical_sector` / `physical_sector` bytes from `lsblk` (`None` when unreported) |
 | `AlignmentSample.datasets` | `list[DatasetBlocks]` | One entry per filesystem/volume: `name`, `kind`, `recordsize`/`volblocksize` (zfs-get strings) with per-property `source`, and `volsize` (volume byte size; feeds the guest prober's volsize disk matching) |
-| `AlignmentSample.dataset_read_failures` | `list[str]` | Pools whose per-pool dataset-property read failed this collection (dataset properties are read per pool, so a transient zfs failure costs only that pool's dataset rows; the others keep theirs) |
+| `AlignmentSample.dataset_read_failures` | `list[str]` | Pools whose per-pool dataset-property read failed this collection. Dataset properties are read per pool, so a transient zfs failure costs only that pool's dataset rows; the others keep theirs |
 | `AlignmentSample.histograms` | `dict[str, ReqHistogram]` | Since-boot request-size histogram per pool from `zpool iostat -r` |
 | `ReqHistogram.buckets` | `dict[int, dict[str, dict[str, int]]]` | `{bucket bytes: {"ind"/"agg": {column: op count}}}`; helpers `ops()`, `dominant_bucket()`, `top_buckets()` take column/kind filters |
 | `AlignmentSample.objset` | `dict[str, dict[str, int]]` | Since-boot per-dataset counters from `/proc/spl/kstat/zfs/<pool>/objset-*` (OpenZFS 2.2+; each file self-identifies via its `dataset_name` row): `nread`/`nwritten`/`reads`/`writes` plus the per-dataset ZIL counters |
-| `AlignmentSample.vm_disks` | `dict[str, VMOption]` | `{zvol short name: VMOption(vmid, disknum, bus, options, agent)}` from PVE VM configs — the local directory when this host runs PVE, otherwise the compute-node fetch; `agent` records the config's `agent:` switch (guest probing names the not-configured condition from PVE's own die string when it pings); two-node by-path disk lines resolve to their short names through the storage host's LIO LUN map (`lun_backstore_map` / `resolve_bypath_disks`) |
+| `AlignmentSample.vm_disks` | `dict[str, VMOption]` | `{zvol short name: VMOption(vmid, disknum, bus, options, agent)}` from PVE VM configs — the local directory when this host runs PVE, otherwise the compute-node fetch. `agent` records the config's `agent:` switch (guest probing names the not-configured condition from PVE's own die string when it pings). Two-node by-path disk lines resolve to their short names through the storage host's LIO LUN map (`lun_backstore_map` / `resolve_bypath_disks`) |
 | `AlignmentSample.pve_failure` | `str` | Why the PVE source came back empty (ssh exit/stderr, timeout, nothing parsed, no applicable source); empty when configs were read — consumers surface it when the VM layers are missing instead of guessing |
 | `AlignmentSample.pve_bypath_dropped` | `list[str]` | By-path disk devices the local LIO LUN map could not resolve to a zvol short name (recorded, never dropped silently) |
-| `AlignmentSample.guest_fs` | `dict[str, list[GuestFsEntry]]` | Probed guest filesystems per zvol short name: `GuestFsEntry(mount, fstype, blocksize)` from `alignment_guestfs.GuestFsProber` (QEMU guest agent on the compute node; each volume's guest disk identified by the deterministic chain — pinned `serial=`, then UUID/PARTUUID signature intersection with the zvol's own partitions, then size+bus position for blank zvols) |
-| `AlignmentSample.guest_fs_failures` | `dict[str, str]` | Per-volume probe degrades (short name → reason; `qm guest` failures classified against PVE's die strings: guest agent not configured in VM options, guest agent not running, agent error with the underlying description, VM not running; plus disk not matched, clone-identical signatures, non-Linux guest); probing never fails the sample that carries it |
+| `AlignmentSample.guest_fs` | `dict[str, list[GuestFsEntry]]` | Probed guest filesystems per zvol short name: `GuestFsEntry(mount, fstype, blocksize)` from `alignment_guestfs.GuestFsProber` (QEMU guest agent on the compute node). Each volume's guest disk is identified by the deterministic chain: pinned `serial=`, then UUID/PARTUUID signature intersection with the zvol's own partitions, then size+bus position for blank zvols |
+| `AlignmentSample.guest_fs_failures` | `dict[str, str]` | Per-volume probe degrades (short name → reason). `qm guest` failures are classified against PVE's die strings: guest agent not configured in VM options, guest agent not running, agent error with the underlying description, VM not running. Further reasons: disk not matched, clone-identical signatures, non-Linux guest. Probing never fails the sample that carries it |
 | `AlignmentSample.arc` / `prefetch` | `dict[str, int]` | arcstats / zfetchstats counters exposed by this host |
 | `AlignmentSample.*_available` | `bool` | Per-source probe results (`pools`, `datasets`, `iostat_r`, `arcstats`, `prefetch`, `objset`, `pve`, `guest_fs_probed`) |
 
 `compute_objset_rates(prev, cur)` deltas two samples' objset counters into
-`ObjsetRates` per dataset — reads/writes per second, read/write bytes per
-second, and the average read/write request size over the interval
-(Δbytes / Δops, the dataset-granularity counterpart of the pool-level `-r`
+`ObjsetRates` per dataset: reads/writes per second, read/write bytes per
+second, and the average read/write request size over the interval (Δbytes /
+Δops, the dataset-granularity counterpart of the pool-level `-r`
 histogram). The same reset/churn rules as `compute_rates` apply: a counter
 that moved backwards (re-import) yields `None` for that interval, and a
 dataset missing from either sample has no delta. `average_request_sizes()`
@@ -757,40 +790,45 @@ gives the same averages directly from one sample's since-boot counters.
 
 `alignment_analysis.analyse()` consumes a sample (plus the survey,
 workload profiles, and optionally the previous refresh's sample) and
-produces `Finding(layer, subject, severity,
-message, recommendation, key)` rows — severity is one of `OK` / `info` /
-`WARN`, and `key` is the emitting rule's stable identity, which the
-Alignment view pairs with the subject to reconcile findings rows in
-place across refreshes (message numbers drift; identity must not) —
-and `classify_workload()` produces `WorkloadVerdict(label,
+produces `Finding(layer, subject, severity, message, recommendation, key)`
+rows. Severity is one of `OK` / `info` / `WARN`. `key` is the emitting
+rule's stable identity; the Alignment view pairs it with the subject to
+reconcile findings rows in place across refreshes (message numbers drift;
+identity must not). `classify_workload()` produces `WorkloadVerdict(label,
 prefetch_rate, sync_share, confidence)`. Analysis thresholds are named
-module constants in `alignment_analysis.py`. The per-dataset observed
-request sizes prefer the interval between *prev_sample* and *sample*
-(Δbytes/Δops via `compute_objset_rates`, gated by
-`OBSERVATION_MIN_DATASET_OPS` operations in the window) and fall back
-to the since-boot averages (`average_request_sizes`, same floor); when
-the objset kstats are unavailable the histogram rules stay per-pool
-(subjects name pools, not datasets) and an `objset-unavailable`
-finding states that limit. Mixed member geometry is judged per vdev
-group when `PoolAlignment.topology` is present — via
-`alignment_analysis.vdev_groups` and `alignment_stats.topology_leaf_paths`
-— and falls back to a pool-wide range finding when the tree is missing.
+module constants in `alignment_analysis.py`.
+
+The per-dataset observed request sizes prefer the interval between
+*prev_sample* and *sample*: Δbytes/Δops via `compute_objset_rates`, gated
+by `OBSERVATION_MIN_DATASET_OPS` operations in the window. They fall back
+to the since-boot averages (`average_request_sizes`, same floor). When the
+objset kstats are unavailable, the histogram rules stay per-pool (subjects
+name pools, not datasets) and an `objset-unavailable` finding states that
+limit.
+
+Mixed member geometry is judged per vdev group when
+`PoolAlignment.topology` is present — via `alignment_analysis.vdev_groups`
+and `alignment_stats.topology_leaf_paths`. When the tree is missing, the
+analysis falls back to a pool-wide range finding.
 
 `alignment_analysis.blocksize_ladder()` derives the Alignment view's
 visual from the same sample: one `LadderPool(pool, ashift, block, bars)`
-per pool — `block` is the effective-ashift block in bytes, the dashed
-reference line, `None` when unresolved — carrying `LadderBar(layer,
+per pool. `block` is the effective-ashift block in bytes — the dashed
+reference line, `None` when unresolved. Each pool carries `LadderBar(layer,
 label, size, state)` rungs: device physical sectors, the ashift block,
 dataset `recordsize`/`volblocksize` groups, VM guest sectors, and the
-probed guest filesystem blocksizes (one rung per distinct
-`(fstype, blocksize)`, judged against the volume's `volblocksize` — a
-guest fs block below the volblock is the partial-block hazard — with
-several volumes under one rung rendering at the worst verdict earned),
-grouped by size (labels carry ×counts), in stack order. Rung `state`
-reuses the Finding severity ladder and the ladder renderers map it to
-their shared colour vocabulary; per-source degrade mirrors the tables
-(a failed source drops its rungs, an unresolved ashift drops the
-reference rung and downgrades the pool's rungs to `info`).
+probed guest filesystem blocksizes. Rungs are grouped by size (labels
+carry ×counts), in stack order.
+
+Guest-filesystem rungs get one rung per distinct `(fstype, blocksize)`,
+judged against the volume's `volblocksize` — a guest fs block below the
+volblock is the partial-block hazard. Several volumes under one rung
+render at the worst verdict earned.
+
+Rung `state` reuses the Finding severity ladder, and the ladder renderers
+map it to their shared colour vocabulary. Per-source degrade mirrors the
+tables: a failed source drops its rungs, and an unresolved ashift drops
+the reference rung and downgrades the pool's rungs to `info`.
 
 The survey itself lives in the JSON config as
 `alignment_survey: {dataset: workload-profile name}` (see the
@@ -821,23 +859,27 @@ number of active block backstores in `targetcli`. If fewer backstores are
 active than expected, the save is aborted to prevent overwriting
 `saveconfig.json` with a degraded (partial) configuration.
 
-Comments (`#`) and blank lines are ignored. Maintained by [new-vm-disk](../commands-and-modules/two-node.md#new-vm-disk-both)
-(adds), [unarchive-vm](../commands-and-modules/two-node.md#unarchive-vm-both) (adds restored backstores), and the
-`zfs-send-receive` rebuild path (re-adds after a torn-down destination is
-re-created). [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) (removes),
-[detach-vm-disk](../commands-and-modules/two-node.md#detach-vm-disk-both) (removes),
-[move-vm-disk](../commands-and-modules/two-node.md#move-vm-disk-both) source side (removes), and
-[zfsdelfs](../commands-and-modules/commands.md#zfsdelfs) iSCSI teardown (removes) keep the manifest in sync with
-removal or destructive operations.
+Comments (`#`) and blank lines are ignored. The manifest is kept in sync
+with creation and removal:
 
-[repair-iscsi-luns](../commands-and-modules/two-node.md#repair-iscsi-luns-storage-node) regenerates the entire
-manifest from the current targetcli backstore list,
-[reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node) regenerates it from
-the ensured set of the pool state map (so a post-restore reconcile cannot be
-blocked by the regressed manifest), and
-[safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) regenerates it after every
-successful save so the manifest stays authoritative when LUNs are moved or
-added.
+- **Adds:** [new-vm-disk](../commands-and-modules/two-node.md#new-vm-disk-both),
+  [unarchive-vm](../commands-and-modules/two-node.md#unarchive-vm-both)
+  (adds restored backstores), and the `zfs-send-receive` rebuild path
+  (re-adds after a torn-down destination is re-created).
+- **Removes:** [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both),
+  [detach-vm-disk](../commands-and-modules/two-node.md#detach-vm-disk-both),
+  [move-vm-disk](../commands-and-modules/two-node.md#move-vm-disk-both)
+  source side, and [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs)
+  iSCSI teardown.
+
+[repair-iscsi-luns](../commands-and-modules/two-node.md#repair-iscsi-luns-storage-node)
+regenerates the entire manifest from the current targetcli backstore list.
+[reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node)
+regenerates it from the ensured set of the pool state map, so a
+post-restore reconcile cannot be blocked by the regressed manifest.
+[safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node)
+regenerates it after every successful save, so the manifest stays
+authoritative when LUNs are moved or added.
 
 ## iSCSI encrypted-LUNs config
 
@@ -919,60 +961,65 @@ beside the map so the pool-resident pair is self-contained for recovery.
 | `generated` | string | `date -Iseconds` timestamp of the export |
 | `host` | string | Short hostname of the storage host that wrote the map |
 | `iqn_prefix` / `storage_ip` | string | Node identity at export time (drift in these is reported by `--check`) |
-| `pools.<name>` | string | Pool GUID at export time — the pool-identity fence (a renamed or replaced pool reuses a name but never a GUID). Covers every configured pool plus any attached pool marked as an offsite candidate in the GUI config, so rotation pools stay fenced while connected; additive key, maps written before it simply omit it |
+| `pools.<name>` | string | Pool GUID at export time — the pool-identity fence (a renamed or replaced pool reuses a name but never a GUID). Covers every configured pool plus any attached pool marked as an offsite candidate in the GUI config, so rotation pools stay fenced while connected. Additive key: maps written before it simply omit it |
 | `targets.<iqn>.luns` | object | LUN number (string key) → backstore name for that target |
-| `targets.<iqn>.acls` | object | Initiator IQN → its recorded grant pairs: `mapped_lun` (string key) → `tpg_lun` (number), exactly as the initiator holds them live. A non-identity pair (`"8": 0` above — the initiator sees TPG LUN 0 at mapped LUN 8) is what the grants dimension exists for: identity rebuilds cannot express it. Maps written before version 2 carry a bare initiator-name array instead; readers accept both shapes and treat the legacy list as names with unrecorded grants |
+| `targets.<iqn>.acls` | object | Initiator IQN → its recorded grant pairs: `mapped_lun` (string key) → `tpg_lun` (number), exactly as the initiator holds them live. A non-identity pair (`"8": 0` above — the initiator sees TPG LUN 0 at mapped LUN 8) is what the grants dimension exists for: identity rebuilds cannot express it. Maps written before version 2 carry a bare initiator-name array instead. Readers accept both shapes and treat the legacy list as names with unrecorded grants |
 | `backstores.<name>.dev` | string | Zvol device path backing the backstore |
 | `backstores.<name>.target` / `.lun` | string / number | Owning target IQN and LUN index; omitted when a loaded backstore has no LUN mapping |
 
 Semantics:
 
-- **Authoritative for recovery.** The map is written by
-  `export-iscsi-state` to every online pool in the node config (the
-  `zfsutilities` dataset is created on first use; offline pools are skipped
-  with a warning), installed atomically (temp file + `mv` in the destination
-  directory), and refreshed by
+- **Authoritative for recovery.** The map is written by `export-iscsi-state`
+  to every online pool in the node config (the `zfsutilities` dataset is
+  created on first use; offline pools are skipped with a warning). It is
+  installed atomically — temp file + `mv` in the destination directory —
+  and refreshed by
   [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node)
-  after every successful save — so it is as fresh as the last LUN change.
+  after every successful save, so it is as fresh as the last LUN change.
   Any surviving pool can serve recovery.
 - **History from pool policies.** Pool-wide snapshot/retention policies
   without explicit includes pick up the `zfsutilities` dataset automatically,
   giving the map point-in-time history on each pool.
 - **Never regressed by a degraded export.** `export-iscsi-state` refuses to
-  record a live state with fewer active backstores than the manifest (or the
-  newest map, when no manifest exists) expects, unless `--force` is given —
-  a half-restored LIO tree must not overwrite the recovery authority.
-- **Deterministic content.** Sections are sorted, so repeated exports of an
-  unchanged topology differ only in `generated`; `--check` compares the
-  recorded map with live state and reports `DRIFT:` lines for manual
-  `targetcli` edits (grant-pair drift included — a moved or deleted
-  MappedLUN is a `DRIFT:` line once the map records pairs; against a legacy
-  name-list map the grants comparison stays silent, since that map carries
-  no pairs to compare).
-- **Recovery consumer.** [reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node)
+  record a live state with fewer active backstores than the manifest (or
+  the newest map, when no manifest exists) expects, unless `--force` is
+  given. A half-restored LIO tree must not overwrite the recovery
+  authority.
+- **Deterministic content.** Sections are sorted, so repeated exports of
+  an unchanged topology differ only in `generated`. `--check` compares
+  the recorded map with live state and reports `DRIFT:` lines for manual
+  `targetcli` edits. Grant-pair drift is included: a moved or deleted
+  MappedLUN is a `DRIFT:` line once the map records pairs. Against a
+  legacy name-list map the grants comparison stays silent, since that map
+  carries no pairs to compare.
+- **Recovery consumer.**
+  [reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node)
   reads the newest map across online pools (or an explicit snapshot via
   `--from`) and recreates the recorded backstores/LUNs/ACLs create-only.
-  Recorded grant pairs are recreated exactly — an initiator whose record
-  carries a non-identity `mapped_lun 8 → tpg_lun 0` grant gets it back as
-  recorded, in either TPG mode (a demo-mode login self-generates identity
-  grants only, so the node is rebuilt for the pair; a pair already present
-  but mapping a different TPG LUN is refused, never remapped). Legacy
-  name-list records keep the identity-grant rebuild. After a partial
-  reconcile (refused, skipped, or failed entries) the map refresh is
-  suppressed so entries whose zvols are still missing survive in it.
+- **Grant pairs are recreated exactly.** An initiator whose record carries
+  a non-identity `mapped_lun 8 → tpg_lun 0` grant gets the grant back as
+  recorded, in either TPG mode. A demo-mode login self-generates identity
+  grants only, so the node is rebuilt for the pair. A pair already present
+  but mapping a different TPG LUN is refused, never remapped. Legacy
+  name-list records keep the identity-grant rebuild.
+- **Partial reconcile preserves the map.** After a partial reconcile
+  (refused, skipped, or failed entries) the map refresh is suppressed, so
+  entries whose zvols are still missing survive in it.
+- **Encrypted-LUN recovery reads it too.**
   [iscsi-recover-encrypted-luns](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
   also reads the newest map as its fallback LUN-index source when
-  `saveconfig.json`; its ACL grant heal uses the same
-  recorded pairs, and an initiator whose recorded grant set does not include
-  the LUN is left ungranted rather than blanket-granted at identity. A map
-  generated on another host is never consulted for it.
+  `saveconfig.json` records no index for the backstore. Its ACL grant heal
+  uses the same recorded pairs: an initiator whose recorded grant set does
+  not include the LUN is left ungranted rather than blanket-granted at
+  identity. A map generated on another host is never consulted for it.
 - **Pool identity, compared and never rewritten.** The `pools` GUIDs are
   recorded at export and compared by `export-iscsi-state --check` (a GUID
   change is a `DRIFT:` line), by the `detect_pool_identity` detector
   ([check-prerequisites](../commands-and-modules/commands.md#check-prerequisites)
-  `--two-node` and [setup-iscsi-targets](../commands-and-modules/two-node.md#setup-iscsi-targets-storage-node)),
-  and by the Dashboard — but no tool ever renames, re-creates, or rewrites
-  a pool identity automatically; a finding is human-resolved evidence.
+  `--two-node` and
+  [setup-iscsi-targets](../commands-and-modules/two-node.md#setup-iscsi-targets-storage-node)),
+  and by the Dashboard. No tool ever renames, re-creates, or rewrites a
+  pool identity automatically; a finding is human-resolved evidence.
 
 ## Session log index (`/var/log/zfsutilities/sessions/.log_index.json`)
 
@@ -1004,10 +1051,10 @@ Each entry has this schema:
   while the log is open in the viewer.
 - Deleting a log via the Logs tab removes its entry from the index.
 
-If a log file contains more than one `# END` trailer (for example because the
-file was reused or appended), the index treats the **last** trailer and the
-highest message level found anywhere in the file as authoritative. This keeps
-the Logs tab in sync with the final run rather than an earlier one.
+A log file can contain more than one `# END` trailer — for example when
+the file was reused or appended. The index treats the **last** trailer and
+the highest message level found anywhere in the file as authoritative. This
+keeps the Logs tab in sync with the final run rather than an earlier one.
 
 If the index file is missing or unreadable, the Logs tab scans log files
 directly and rebuilds the index. The file is written atomically (temp + rename)

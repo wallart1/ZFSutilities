@@ -379,6 +379,62 @@ test_template_protection_covers_compute_template() {
     unset ITF_TEMPLATE_NAME ITF_COMPUTE_TEMPLATE_NAME _QM_LIST_REPLY
 }
 
+test_template_protection_covers_ubuntu_template() {
+    test_start "the ubuntu probe template name is protected like the others"
+    reset_exec_calls
+    ITF_TEMPLATE_NAME=itf-template
+    ITF_COMPUTE_TEMPLATE_NAME=itf-template-pve
+    ITF_UBUNTU_TEMPLATE_NAME=itf-template-ubuntu
+    _QM_LIST_REPLY='      VMID NAME                 STATUS     MEM(MB)    BOOTDISK    PID
+ 8001 itf-template stopped    8192          0          0
+ 8004 itf-template-pve stopped    8192          0          0
+ 8007 itf-template-ubuntu stopped    8192          0          0
+ 8005 j05      running    8192      32768       1234'
+    local out rc
+    out="$(itf_qm testbase destroy 8007 --purge 2>&1)"
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_contains "$out" "baseline template 'itf-template-ubuntu'"
+    # The other two baselines keep their protection alongside.
+    itf_qm testbase snapshot 8001 snap1 > /dev/null 2>&1
+    assert_rc 22 $?
+    itf_qm testbase set 8004 --memory 512 > /dev/null 2>&1
+    assert_rc 22 $?
+    # Cloning the ubuntu template stays allowed — that is its purpose.
+    itf_qm testbase clone 8007 8005 --name g4 > /dev/null 2>&1
+    assert_rc 0 $?
+    unset ITF_TEMPLATE_NAME ITF_COMPUTE_TEMPLATE_NAME \
+        ITF_UBUNTU_TEMPLATE_NAME _QM_LIST_REPLY
+}
+
+test_template_protection_covers_mint_template() {
+    test_start "the mint desktop template name is protected like the others"
+    reset_exec_calls
+    ITF_TEMPLATE_NAME=itf-template
+    ITF_COMPUTE_TEMPLATE_NAME=itf-template-pve
+    ITF_MINT_TEMPLATE_NAME=itf-template-mint
+    _QM_LIST_REPLY='      VMID NAME                 STATUS     MEM(MB)    BOOTDISK    PID
+ 8001 itf-template stopped    8192          0          0
+ 8004 itf-template-pve stopped    8192          0          0
+ 8000 itf-template-mint stopped    8192          0          0
+ 8005 j05      running    8192      32768       1234'
+    local out rc
+    out="$(itf_qm testbase destroy 8000 --purge 2>&1)"
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_contains "$out" "baseline template 'itf-template-mint'"
+    # The other two baselines keep their protection alongside.
+    itf_qm testbase snapshot 8001 snap1 > /dev/null 2>&1
+    assert_rc 22 $?
+    itf_qm testbase set 8004 --memory 512 > /dev/null 2>&1
+    assert_rc 22 $?
+    # Cloning the mint template stays allowed — that is its purpose.
+    itf_qm testbase clone 8000 8005 --name g4 > /dev/null 2>&1
+    assert_rc 0 $?
+    unset ITF_TEMPLATE_NAME ITF_COMPUTE_TEMPLATE_NAME \
+        ITF_MINT_TEMPLATE_NAME _QM_LIST_REPLY
+}
+
 test_template_protection_clone_exempt() {
     test_start "cloning the template is allowed — that is its purpose"
     reset_exec_calls
@@ -447,6 +503,8 @@ test_snapshot_verbs_allowed
 test_description_values_exempt_from_storage_shape
 test_template_protection_blocks_mutation
 test_template_protection_covers_compute_template
+test_template_protection_covers_ubuntu_template
+test_template_protection_covers_mint_template
 test_template_protection_clone_exempt
 test_template_protection_override_and_scope
 test_template_protection_inactive_without_name

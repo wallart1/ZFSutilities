@@ -1806,7 +1806,7 @@ pickers:
 | Phy-sec   | Physical sector size                                                                                                                                                                                                                           |
 | Transport | Transport type (e.g. `sata`, `nvme`, `sas`)                                                                                                                                                                                                    |
 | Enclosure | Display name of the multi-bay enclosure holding the disk (blank for internal disks; see [Enclosures](#enclosures))                                                                                                                              |
-| Pools     | Pool membership determined from vdev topology (a pool built on partitions shows on the whole disk's row too)                                                                                                                                    |
+| Pools     | Pool membership determined from vdev topology. The name sits on the row that is the member: partition rows for pools built on partitions, and the disk row only when the disk itself is the member — a disk with partitions is never itself a member, even when its partitions belong to different pools |
 | SMART     | Overall SMART health (`PASSED`, `FAILED`, or `n/a`). Physical devices only — partition rows are blank, since SMART data never pertains to a partition.                                                                                          |
 | Wear/Test | For SSD/NVMe, the wear percentage from SMART data (`85%`). For HDDs, the surface self-test status (see [Surface Test](#surface-test)): `-`, `42% (1h 23m)` while running, or `Passed`/`Failed`/`Aborted`/`Canceled`. `-` when neither applies. Physical devices only — partition rows are blank. |
 
@@ -1814,11 +1814,13 @@ Device scans and SMART probes can be slow, so the inventory is loaded in a
 background thread and cached for a few seconds. Only SSD/NVMe disks get the
 extended SMART query that yields wear data — HDDs keep the quick health check —
 so the sweep stays fast even with many spinning disks. The two panes stay in sync
-visually: selecting a disk or partition tints every device that resides on it
-in the Pool Topology pane (drawn in teal), and selecting a pool, vdev, or
-device node in the topology pane tints the corresponding disk rows in the
-inventory. Neither pane ever changes the other's selection — the correlation
-is teal text only.
+visually: selecting a disk or partition that belongs to a pool tints every
+device that resides on it in the Pool Topology pane (drawn in teal), and
+selecting a pool, vdev, or device node in the topology pane tints the
+corresponding disk rows in the inventory. A selection whose Pools cell is
+blank — including a disk whose partitions carry the pool names — clears the
+topology pane's tints and the pool selection instead. Neither pane ever
+changes the other's selection — the correlation is teal text only.
 
 ### Enclosures
 

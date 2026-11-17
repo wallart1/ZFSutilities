@@ -375,7 +375,7 @@ def start_scrub(pool_name: str, repo=None) -> bool:
 
 
 def pause_scrub(pool_name: str, repo=None) -> bool:
-    """Pause a scrub. Returns True on success."""
+    """Pause a scrub. Returns True when the pool state confirms the pause."""
     repo = repo or get_default_repository()
     if not _scrub_action_allowed(
         pool_name,
@@ -384,19 +384,14 @@ def pause_scrub(pool_name: str, repo=None) -> bool:
     ):
         return False
     log_msg(f"INFO: Pausing scrub on pool '{pool_name}'")
-    try:
-        if repo.pause_scrub(pool_name, timeout=30):
-            log_msg(f"INFO: Scrub paused on '{pool_name}'")
-            return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        log_msg(f"WARN: cannot pause scrub on '{pool_name}': {exc}")
-        return False
-    log_msg(f"WARN: Failed to pause scrub on '{pool_name}'")
+    if _transition_scrub_verified(pool_name, "pause", repo, log_msg):
+        log_msg(f"INFO: Scrub paused on '{pool_name}'")
+        return True
     return False
 
 
 def resume_scrub(pool_name: str, repo=None) -> bool:
-    """Resume a scrub. Returns True on success."""
+    """Resume a scrub. Returns True when the pool state confirms the resume."""
     repo = repo or get_default_repository()
     if not _scrub_action_allowed(
         pool_name,
@@ -405,14 +400,9 @@ def resume_scrub(pool_name: str, repo=None) -> bool:
     ):
         return False
     log_msg(f"INFO: Resuming scrub on pool '{pool_name}'")
-    try:
-        if repo.resume_scrub(pool_name, timeout=30):
-            log_msg(f"INFO: Scrub resumed on '{pool_name}'")
-            return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        log_msg(f"WARN: cannot resume scrub on '{pool_name}': {exc}")
-        return False
-    log_msg(f"WARN: Failed to resume scrub on '{pool_name}'")
+    if _transition_scrub_verified(pool_name, "resume", repo, log_msg):
+        log_msg(f"INFO: Scrub resumed on '{pool_name}'")
+        return True
     return False
 
 
@@ -476,22 +466,96 @@ def _emit(log_func, msg):
 
 
 def _wait_for_scrub_state(
-    pool_name: str, desired_state: ScrubState, repo=None, timeout: float = 5.0
+    pool_name: str,
+    desired_state: ScrubState,
+    repo=None,
+    timeout: float = 5.0,
+    interval: float = 0.2,
 ) -> ScrubInfo:
     """Poll *pool_name* until its scrub state reaches *desired_state*.
 
-    Returns the last ScrubInfo observed.  The poll is bounded by *timeout*
-    seconds to avoid hanging forever when ZFS does not make the expected
-    transition.
+    Returns the last ScrubInfo observed.  The poll is bounded by
+    ``timeout / interval`` attempts (each attempt costs one zpool status
+    call plus *interval* seconds of sleep) so it cannot hang forever when
+    ZFS does not make the expected transition.  Attempt-bounding rather
+    than wall-clock-bounding keeps the loop finite when sleep is mocked
+    in tests.
     """
     repo = repo or get_default_repository()
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        info = get_pool_scrub_info(pool_name, repo=repo)
+    attempts = max(1, int(timeout / interval))
+    info = get_pool_scrub_info(pool_name, repo=repo)
+    for _ in range(attempts):
         if info.state == desired_state:
             return info
-        time.sleep(0.2)
-    return get_pool_scrub_info(pool_name, repo=repo)
+        time.sleep(interval)
+        info = get_pool_scrub_info(pool_name, repo=repo)
+    return info
+
+
+# Client-side wait for the zpool scrub pause/resume command.  The pause and
+# resume ioctls are synchronous and can block in-kernel for tens of seconds
+# under load (production 2026-11-16: the pause landed ~43 s after issue on a
+# busy pool).  The client is abandoned at this bound, but the kernel finishes
+# the transition anyway, so the state poll below — not the command's return —
+# judges the outcome.
+SCRUB_ACTION_COMMAND_TIMEOUT = 30
+
+# How long the state poll waits for the transition to show in zpool status:
+# ~3x the worst pause latency observed in production.
+SCRUB_STATE_VERIFY_TIMEOUT = 120.0
+
+# Sleep between state-poll attempts (one zpool status call per attempt).
+SCRUB_STATE_VERIFY_INTERVAL = 1.0
+
+
+def _transition_scrub_verified(
+    pool_name: str,
+    action: str,
+    repo,
+    emit: Callable[[str], None],
+) -> bool:
+    """Issue a zpool scrub pause/resume and judge it by the pool's state.
+
+    *action* is ``"pause"`` or ``"resume"``; *emit* receives the log lines.
+    The command runs with ``SCRUB_ACTION_COMMAND_TIMEOUT``; the transition is
+    then confirmed by polling zpool status for ``SCRUB_STATE_VERIFY_TIMEOUT``
+    regardless of how the command returned.  A timed-out or failed client does
+    not mean the transition failed — the kernel completes it without the
+    client — and a zero exit does not mean the state is visible yet.  Returns
+    True only when the live scrub state reaches the desired state.
+    """
+    command = repo.pause_scrub if action == "pause" else repo.resume_scrub
+    desired_state = ScrubState.PAUSED if action == "pause" else ScrubState.SCANNING
+    command_problem = None
+    try:
+        if not command(pool_name, timeout=SCRUB_ACTION_COMMAND_TIMEOUT):
+            command_problem = "failed"
+    except subprocess.TimeoutExpired:
+        command_problem = "timed out"
+    except (FileNotFoundError, OSError):
+        command_problem = "failed"
+    info = _wait_for_scrub_state(
+        pool_name,
+        desired_state,
+        repo=repo,
+        timeout=SCRUB_STATE_VERIFY_TIMEOUT,
+        interval=SCRUB_STATE_VERIFY_INTERVAL,
+    )
+    if info.state == desired_state:
+        if command_problem is not None:
+            emit(
+                f"VERB: {action} command {command_problem} on '{pool_name}'; "
+                f"state poll confirms {desired_state.value}"
+            )
+        return True
+    raw = repo.pool_status(pool_name, timeout=15)
+    emit(
+        f"WARN: Scrub on '{pool_name}' did not {action} "
+        f"(state: {info.state.value}); "
+        f"scan line: {info.scan_line!r}; "
+        f"raw status:\n{raw}"
+    )
+    return False
 
 
 def pause_scrubs_for_pools(
@@ -529,25 +593,9 @@ def pause_scrubs_for_pools(
             paused.append(name)
             continue
         _emit(_log, f"VERB: Pausing scrub on '{name}'")
-        try:
-            if repo.pause_scrub(name, timeout=30):
-                info_after = _wait_for_scrub_state(name, ScrubState.PAUSED, repo=repo)
-                if info_after.state == ScrubState.PAUSED:
-                    _emit(_log, f"VERB: Scrub paused on '{name}'")
-                    paused.append(name)
-                else:
-                    raw = repo.pool_status(name, timeout=15)
-                    _emit(
-                        _log,
-                        f"WARN: Scrub on '{name}' did not pause "
-                        f"(state: {info_after.state.value}); "
-                        f"scan line: {info_after.scan_line!r}; "
-                        f"raw status:\n{raw}",
-                    )
-            else:
-                _emit(_log, f"WARN: Failed to pause scrub on '{name}'")
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _emit(_log, f"WARN: cannot pause scrub on '{name}': {exc}")
+        if _transition_scrub_verified(name, "pause", repo, lambda msg: _emit(_log, msg)):
+            _emit(_log, f"VERB: Scrub paused on '{name}'")
+            paused.append(name)
 
     if not dry_run and paused:
         with scrub_state_lock_write():
@@ -605,25 +653,9 @@ def resume_scrubs_for_pools(
             continue
         if info.state == ScrubState.PAUSED:
             _emit(_log, f"VERB: Resuming scrub on '{name}'")
-            try:
-                if repo.resume_scrub(name, timeout=30):
-                    info_after = _wait_for_scrub_state(name, ScrubState.SCANNING, repo=repo)
-                    if info_after.state == ScrubState.SCANNING:
-                        _emit(_log, f"VERB: Scrub resumed on '{name}'")
-                        resumed.append(name)
-                    else:
-                        raw = repo.pool_status(name, timeout=15)
-                        _emit(
-                            _log,
-                            f"WARN: Scrub on '{name}' did not resume "
-                            f"(state: {info_after.state.value}); "
-                            f"scan line: {info_after.scan_line!r}; "
-                            f"raw status:\n{raw}",
-                        )
-                else:
-                    _emit(_log, f"WARN: Failed to resume scrub on '{name}'")
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-                _emit(_log, f"WARN: cannot resume scrub on '{name}': {exc}")
+            if _transition_scrub_verified(name, "resume", repo, lambda msg: _emit(_log, msg)):
+                _emit(_log, f"VERB: Scrub resumed on '{name}'")
+                resumed.append(name)
         elif info.state == ScrubState.SCANNING:
             _emit(_log, f"VERB: Scrub on '{name}' is already running; no resume needed")
             already_running.append(name)

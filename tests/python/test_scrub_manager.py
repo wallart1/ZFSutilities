@@ -1,6 +1,7 @@
 """Tests for scrub_manager.py — scrub parsing, queue logic, system timers."""
 
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -61,7 +62,12 @@ class TestScrubControlStateChecking(unittest.TestCase):
         repo = MagicMock()
         repo.pause_scrub.return_value = True
         with patch.object(
-            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+            sm,
+            "get_pool_scrub_info",
+            side_effect=[
+                self._info(sm.ScrubState.SCANNING),
+                self._info(sm.ScrubState.PAUSED),
+            ],
         ):
             self.assertTrue(sm.pause_scrub("tank", repo=repo))
         repo.pause_scrub.assert_called_once_with("tank", timeout=30)
@@ -99,7 +105,9 @@ class TestScrubControlStateChecking(unittest.TestCase):
             self.assertFalse(sm.pause_scrub("tank", repo=repo))
         repo.pause_scrub.assert_not_called()
 
-    def test_pause_scrub_returns_false_on_repo_failure(self):
+    @patch.object(sm.time, "sleep")
+    def test_pause_scrub_returns_false_on_repo_failure(self, _mock_sleep):
+        """A failed command whose state never confirms paused is a failure."""
         repo = MagicMock()
         repo.pause_scrub.return_value = False
         with patch.object(
@@ -107,7 +115,9 @@ class TestScrubControlStateChecking(unittest.TestCase):
         ):
             self.assertFalse(sm.pause_scrub("tank", repo=repo))
 
-    def test_pause_scrub_returns_false_on_exception(self):
+    @patch.object(sm.time, "sleep")
+    def test_pause_scrub_returns_false_on_exception(self, _mock_sleep):
+        """A command exception whose state never confirms paused is a failure."""
         repo = MagicMock()
         repo.pause_scrub.side_effect = OSError("no zpool")
         with patch.object(
@@ -115,10 +125,34 @@ class TestScrubControlStateChecking(unittest.TestCase):
         ):
             self.assertFalse(sm.pause_scrub("tank", repo=repo))
 
+    def test_pause_scrub_succeeds_when_command_times_out_but_state_confirms(self):
+        """The pause ioctl can outlive its 30s client timeout (production
+        2026-11-16: pause landed ~43s in). The pool state, not the command's
+        return, judges the outcome."""
+        repo = MagicMock()
+        repo.pause_scrub.side_effect = subprocess.TimeoutExpired("zpool scrub -p", 30)
+        with patch.object(
+            sm,
+            "get_pool_scrub_info",
+            side_effect=[
+                self._info(sm.ScrubState.SCANNING),
+                self._info(sm.ScrubState.PAUSED),
+            ],
+        ):
+            self.assertTrue(sm.pause_scrub("tank", repo=repo))
+        repo.pause_scrub.assert_called_once_with("tank", timeout=sm.SCRUB_ACTION_COMMAND_TIMEOUT)
+
     def test_resume_scrub_succeeds_when_paused(self):
         repo = MagicMock()
         repo.resume_scrub.return_value = True
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.PAUSED)):
+        with patch.object(
+            sm,
+            "get_pool_scrub_info",
+            side_effect=[
+                self._info(sm.ScrubState.PAUSED),
+                self._info(sm.ScrubState.SCANNING),
+            ],
+        ):
             self.assertTrue(sm.resume_scrub("tank", repo=repo))
         repo.resume_scrub.assert_called_once_with("tank", timeout=30)
 
@@ -143,17 +177,37 @@ class TestScrubControlStateChecking(unittest.TestCase):
             self.assertFalse(sm.resume_scrub("tank", repo=repo))
         repo.resume_scrub.assert_not_called()
 
-    def test_resume_scrub_returns_false_on_repo_failure(self):
+    @patch.object(sm.time, "sleep")
+    def test_resume_scrub_returns_false_on_repo_failure(self, _mock_sleep):
+        """A failed command whose state never confirms scanning is a failure."""
         repo = MagicMock()
         repo.resume_scrub.return_value = False
         with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.PAUSED)):
             self.assertFalse(sm.resume_scrub("tank", repo=repo))
 
-    def test_resume_scrub_returns_false_on_exception(self):
+    @patch.object(sm.time, "sleep")
+    def test_resume_scrub_returns_false_on_exception(self, _mock_sleep):
+        """A command exception whose state never confirms scanning is a failure."""
         repo = MagicMock()
         repo.resume_scrub.side_effect = OSError("no zpool")
         with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.PAUSED)):
             self.assertFalse(sm.resume_scrub("tank", repo=repo))
+
+    def test_resume_scrub_succeeds_when_command_times_out_but_state_confirms(self):
+        """A resume client killed at its timeout can still have resumed the
+        scrub in-kernel; the state poll judges the outcome."""
+        repo = MagicMock()
+        repo.resume_scrub.side_effect = subprocess.TimeoutExpired("zpool scrub", 30)
+        with patch.object(
+            sm,
+            "get_pool_scrub_info",
+            side_effect=[
+                self._info(sm.ScrubState.PAUSED),
+                self._info(sm.ScrubState.SCANNING),
+            ],
+        ):
+            self.assertTrue(sm.resume_scrub("tank", repo=repo))
+        repo.resume_scrub.assert_called_once_with("tank", timeout=sm.SCRUB_ACTION_COMMAND_TIMEOUT)
 
     def test_stop_scrub_succeeds_when_scanning(self):
         repo = MagicMock()
@@ -1504,6 +1558,65 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                 self.assertNotIn("src", queue.paused)
                 self.assertNotIn("src", queue.paused_by_user)
 
+    def test_pause_scrubs_for_pools_confirms_pause_after_command_timeout(self):
+        """A pause command killed at its timeout can land anyway (production
+        2026-11-16): the state poll must record the pause so the post-step
+        resume runs, instead of stranding the scrub paused."""
+        repo = MagicMock()
+        repo.pause_scrub.side_effect = subprocess.TimeoutExpired("zpool scrub -p", 30)
+        states = {"src": self._state(sm.ScrubState.SCANNING)}
+        custom_log = MagicMock()
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
+                    with patch.object(
+                        sm,
+                        "get_pool_scrub_info",
+                        return_value=self._state(sm.ScrubState.PAUSED),
+                    ):
+                        paused = sm.pause_scrubs_for_pools(
+                            ["src"], repo=repo, dry_run=False, log_func=custom_log
+                        )
+                self.assertEqual(paused, ["src"])
+                repo.pause_scrub.assert_called_once_with(
+                    "src", timeout=sm.SCRUB_ACTION_COMMAND_TIMEOUT
+                )
+                # Honest VERB about the timed-out command; no failure WARN.
+                self.assertTrue(
+                    any(
+                        "state poll confirms paused" in call[0][0]
+                        for call in custom_log.call_args_list
+                    )
+                )
+                self.assertFalse(
+                    any("did not pause" in call[0][0] for call in custom_log.call_args_list)
+                )
+                queue = sm.ScrubQueue()
+                self.assertIn("src", queue.paused)
+                self.assertIn("src", queue.paused_by_user)
+
+    @patch.object(sm.time, "sleep")
+    def test_pause_scrubs_for_pools_waits_out_slow_pause(self, _mock_sleep):
+        """A pause that takes longer than the old 5s confirmation window
+        still counts: the poll keeps trying for the full verify window."""
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.SCANNING)}
+        # 40 non-matching polls exceed the previous 25-attempt (5s/0.2s)
+        # window; the widened window must still confirm the pause.
+        slow_flip = [self._state(sm.ScrubState.SCANNING)] * 40 + [self._state(sm.ScrubState.PAUSED)]
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
+                    with patch.object(sm, "get_pool_scrub_info", side_effect=slow_flip):
+                        paused = sm.pause_scrubs_for_pools(["src"], repo=repo, dry_run=False)
+                self.assertEqual(paused, ["src"])
+                queue = sm.ScrubQueue()
+                self.assertIn("src", queue.paused)
+                self.assertIn("src", queue.paused_by_user)
+
     def test_resume_scrubs_for_pools_clears_queue_when_already_running(self):
         """If a paused scrub resumed externally, log it and clean the queue."""
         repo = MagicMock()
@@ -1577,6 +1690,47 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                     ):
                         sm.resume_scrubs_for_pools(["src"], repo=repo)
                 repo.resume_scrub.assert_called_once_with("src", timeout=30)
+                queue = sm.ScrubQueue()
+                self.assertNotIn("src", queue.paused)
+                self.assertNotIn("src", queue.paused_by_user)
+
+    def test_resume_scrubs_for_pools_confirms_resume_after_command_timeout(self):
+        """A resume command killed at its timeout can land anyway; the state
+        poll must record the resume and clear the queue, not leave the pool
+        marked user-paused."""
+        repo = MagicMock()
+        repo.resume_scrub.side_effect = subprocess.TimeoutExpired("zpool scrub", 30)
+        states = {"src": self._state(sm.ScrubState.PAUSED)}
+        custom_log = MagicMock()
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                queue = sm.ScrubQueue()
+                queue.paused.add("src")
+                queue.paused_by_user.add("src")
+                queue._save()
+
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
+                    with patch.object(
+                        sm,
+                        "get_pool_scrub_info",
+                        return_value=self._state(sm.ScrubState.SCANNING),
+                    ):
+                        sm.resume_scrubs_for_pools(
+                            ["src"], repo=repo, dry_run=False, log_func=custom_log
+                        )
+                repo.resume_scrub.assert_called_once_with(
+                    "src", timeout=sm.SCRUB_ACTION_COMMAND_TIMEOUT
+                )
+                self.assertTrue(
+                    any(
+                        "state poll confirms scanning" in call[0][0]
+                        for call in custom_log.call_args_list
+                    )
+                )
+                self.assertFalse(
+                    any("did not resume" in call[0][0] for call in custom_log.call_args_list)
+                )
                 queue = sm.ScrubQueue()
                 self.assertNotIn("src", queue.paused)
                 self.assertNotIn("src", queue.paused_by_user)

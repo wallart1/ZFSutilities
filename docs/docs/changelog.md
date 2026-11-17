@@ -67,6 +67,21 @@
   fixes the list's duplicate check: counterpart names that prefix one
   another (`pool/data` and `pool/data2`) are now all named instead of
   the shorter one being swallowed.
+- **Scrub pause and resume are judged by the pool's state, not the
+  zpool client's return.** The pause and resume ioctls can block
+  in-kernel for tens of seconds under load and still complete after the
+  client gives up; a timed-out pause used to go uncounted, so the
+  post-step resume never ran and the scrub stayed stranded at its pause
+  point. The manager now polls the live scrub state for up to two
+  minutes after issuing the command: a slow transition still counts,
+  and a client that timed out while the state landed logs a note
+  instead of a failure.
+- **Partitioned disks no longer borrow their partitions' pools.** A
+  disk with partitions is never itself a pool member: the partition
+  rows carry the pool names and the disk's own row stays pool-less.
+  Selecting such a disk row no longer tints pool topology; the wipe
+  fence still reads the partitions and refuses while any sibling is in
+  use.
 
 ### Changed
 
@@ -102,6 +117,11 @@
   mint boot flow (no HTTP seed, real VGA device, patched initrd), the
   provision-boot gates, the template stamp/freshness/build threading,
   and the Cinnamon boot gate.
+- Scrub pause/resume judged by state poll: timeout-but-confirmed cases
+  for the wrapper and the coordinated paths, plus the slow-flip window;
+  Disks-page partition rows keep their pool names and the wipe fence
+  refuses on a partitioned disk; the ubuntu and mint baseline template
+  names join the itf guard's protected set.
 
 ### Documentation
 
@@ -116,6 +136,11 @@
   *worktree*, *Wayland*, *Product*, *Lane*, and *Tree*; the profile
   guide documents that running `zfsscruball` alongside managed scrubs
   is safe.
+- The data-structures and integrated-testing guides were rewritten to
+  the documentation writing rules with every claim re-verified against
+  the tree; the architecture guide gained five C4 diagrams (system
+  context, containers, components, deployment) under C4-ordered
+  sections.
 
 ## 0.141.0
 
