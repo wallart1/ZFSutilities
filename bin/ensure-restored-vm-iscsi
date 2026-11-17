@@ -395,15 +395,27 @@ if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; th
     ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
 fi
 
-if [[ -f "$ISCSI_MANIFEST" ]] && ! grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
-    echo "$bsname" >> "$ISCSI_MANIFEST"
-fi
+# Both appends run under the shared file locks (lib/iscsi-lib.sh,
+# python/file_locking.py) so concurrent flows cannot interleave.
+_mlock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+mkdir -p "$(dirname "$_mlock")"
+(
+    flock -x 9 || exit 1
+    if [[ -f "$ISCSI_MANIFEST" ]] && ! grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
+        echo "$bsname" >> "$ISCSI_MANIFEST"
+    fi
+) 9>>"$_mlock"
 
-if [[ "$encrypted" == "Y" && -f "$ISCSI_ENCRYPTED_CONF" ]] && \
-   ! awk -v p="${bsname}:" 'index($0, p) == 1 { f=1 } END { exit !f }' \
-       "$ISCSI_ENCRYPTED_CONF"; then
-    echo "${bsname}:${zvol_dev}:${target_short}" >> "$ISCSI_ENCRYPTED_CONF"
-fi
+_elock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
+mkdir -p "$(dirname "$_elock")"
+(
+    flock -x 9 || exit 1
+    if [[ "$encrypted" == "Y" && -f "$ISCSI_ENCRYPTED_CONF" ]] && \
+       ! awk -v p="${bsname}:" 'index($0, p) == 1 { f=1 } END { exit !f }' \
+           "$ISCSI_ENCRYPTED_CONF"; then
+        echo "${bsname}:${zvol_dev}:${target_short}" >> "$ISCSI_ENCRYPTED_CONF"
+    fi
+) 9>>"$_elock"
 MANIFESTEOF
 }
 

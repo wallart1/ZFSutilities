@@ -957,16 +957,23 @@ for i in "${!new_zvols[@]}"; do
         echo "LUN_CREATED:${disknum}:${new_lun}"
     fi
 
-    # Add to expected-backstores manifest
+    # Add to expected-backstores manifest under its shared file lock
+    # (lib/iscsi-lib.sh, python/file_locking.py).
     manifest="/etc/rtslib-fb-target/expected-backstores.txt"
     if [[ -f "$manifest" ]]; then
-        if ! grep -qxF -- "${backstore}" "$manifest"; then
-            echo "$backstore" >> "$manifest"
-            echo "MANIFEST_ADDED:${backstore}"
-        fi
+        _mlock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+        mkdir -p "$(dirname "$_mlock")"
+        (
+            flock -x 9 || exit 1
+            if ! grep -qxF -- "${backstore}" "$manifest"; then
+                echo "$backstore" >> "$manifest"
+                echo "MANIFEST_ADDED:${backstore}"
+            fi
+        ) 9>>"$_mlock"
     fi
 
-    # Check encryption status and add to encrypted-luns.conf if needed
+    # Check encryption status and add to encrypted-luns.conf if needed,
+    # under that file's shared lock.
     enc_status=$(zfs get -H -o value encryption "$new_zvol" 2>/dev/null || echo "-")
     if [[ "$enc_status" != "-" && "$enc_status" != "off" ]]; then
         enc_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
@@ -974,13 +981,18 @@ for i in "${!new_zvols[@]}"; do
             enc_conf="/etc/iscsi-encrypted-luns.conf"
         fi
         target_short="${target##*:}"
-        if [[ -f "$enc_conf" ]] \
-            && cut -d: -f1 "$enc_conf" | grep -qxF -- "${backstore}"; then
-            echo "ENCRYPTED_ALREADY:${backstore}"
-        else
-            echo "${backstore}:${zvol_dev}:${target_short}" >> "$enc_conf"
-            echo "ENCRYPTED_ADDED:${backstore}"
-        fi
+        _elock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
+        mkdir -p "$(dirname "$_elock")"
+        (
+            flock -x 9 || exit 1
+            if [[ -f "$enc_conf" ]] \
+                && cut -d: -f1 "$enc_conf" | grep -qxF -- "${backstore}"; then
+                echo "ENCRYPTED_ALREADY:${backstore}"
+            else
+                echo "${backstore}:${zvol_dev}:${target_short}" >> "$enc_conf"
+                echo "ENCRYPTED_ADDED:${backstore}"
+            fi
+        ) 9>>"$_elock"
     fi
 done
 

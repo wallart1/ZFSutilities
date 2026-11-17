@@ -422,5 +422,94 @@ class TestCheckLocal(unittest.TestCase):
         self.assertFalse(zlm.check_local("threeamigos/pve", "w"))
 
 
+class TestSamePidConversion(unittest.TestCase):
+    """Same-PID acquire strengthens a held lock in place, never weakens it."""
+
+    def setUp(self):
+        self.lock_dir = tempfile.mkdtemp()
+        self._orig_dir = zlm.ZFSLOCK_DIR
+        zlm.ZFSLOCK_DIR = self.lock_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self.lock_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self.lock_dir, ".pids")
+        os.makedirs(zlm.ZFSLOCK_LOCKS_DIR, exist_ok=True)
+        os.makedirs(zlm.ZFSLOCK_PIDS_DIR, exist_ok=True)
+        zlm._node_config_cache = _TWO_NODE_CFG
+        zlm._remote_holds.clear()
+        zlm._lock_refcounts.clear()
+
+    def tearDown(self):
+        zlm.ZFSLOCK_DIR = self._orig_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self._orig_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self._orig_dir, ".pids")
+        zlm._node_config_cache = None
+        zlm._remote_holds.clear()
+        zlm._lock_refcounts.clear()
+
+    def _read_lock(self, dataset):
+        with open(zlm._lock_file(dataset), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_stronger_acquire_converts_in_place(self):
+        lock_w = zlm.acquire("localpool/fs", "w", "initial write")
+        self.assertTrue(os.path.isfile(lock_w))
+        pid_before = self._read_lock("localpool/fs")["pid"]
+
+        lock_x = zlm.acquire("localpool/fs", "x", "destroy upgrade")
+        self.assertEqual(lock_x, lock_w)
+        data = self._read_lock("localpool/fs")
+        self.assertEqual(data["type"], "x")
+        self.assertEqual(data["description"], "destroy upgrade")
+        self.assertEqual(data["pid"], pid_before)
+        self.assertEqual(data["dataset"], "localpool/fs")
+
+        # Two acquisitions, two releases; the file survives the first.
+        self.assertTrue(zlm.release(lock_x))
+        self.assertTrue(os.path.isfile(lock_x))
+        self.assertTrue(zlm.release(lock_x))
+        self.assertFalse(os.path.isfile(lock_x))
+
+    def test_weaker_acquire_keeps_stronger_type(self):
+        lock_x = zlm.acquire("localpool/fs", "x", "held destroy")
+        lock_w = zlm.acquire("localpool/fs", "w", "weaker request")
+        self.assertEqual(lock_w, lock_x)
+        self.assertEqual(self._read_lock("localpool/fs")["type"], "x")
+        zlm.release(lock_w)
+        zlm.release(lock_x)
+
+    def test_equal_acquire_keeps_description(self):
+        zlm.acquire("localpool/fs", "w", "first desc")
+        zlm.acquire("localpool/fs", "w", "second desc")
+        self.assertEqual(self._read_lock("localpool/fs")["description"], "first desc")
+        zlm.release("localpool/fs")
+        zlm.release("localpool/fs")
+
+    def test_foreign_descendant_read_blocks_conversion(self):
+        zlm.acquire("localpool/fs", "w", "initial write")
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.terminate)
+        self._write_foreign_lock("localpool/fs/child", "r", holder.pid)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            zlm.acquire("localpool/fs", "x", "blocked upgrade")
+        self.assertIn("cannot convert", str(ctx.exception))
+        # The held lock is untouched by the refusal.
+        self.assertEqual(self._read_lock("localpool/fs")["type"], "w")
+        zlm.release("localpool/fs")
+
+    def _write_foreign_lock(self, dataset, lock_type, pid):
+        data = {
+            "dataset": dataset,
+            "type": lock_type,
+            "pid": pid,
+            "script": "sleep",
+            "acquired": "2026-11-16T00:00:00-05:00",
+            "description": "foreign reader",
+        }
+        with open(zlm._lock_file(dataset), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.write("\n")
+
+
 if __name__ == "__main__":
     unittest.main()

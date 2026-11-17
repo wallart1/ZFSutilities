@@ -17,13 +17,13 @@ encounter.
 
 ```
 dev (itf orchestrator)
-  └── base PVE hosts (PROTECTED)
+  └── base PVE VMs (PROTECTED)
         │   guarded guest-lifecycle commands only, via ssh + sudo -n
         └── nested guest (DISPOSABLE — anything goes)
               └── ZFSutilities under test (release or dev tarball)
 ```
 
-Cycle 2 adds a second base host in the **compute role** (see
+There is a second base host in the **compute role** (see
 [Two-node topology](#two-node-topology)): the storage-role base hosts
 Debian-based guests as before, the compute-role base hosts guests
 installed from the Proxmox VE ISO, and two-node journeys drive one guest
@@ -52,13 +52,13 @@ The base Proxmox hosts are protected by construction, not by convention:
 - Base-PVE configuration beyond guest lifecycle (storages, bridges, the
   audit log) is prepared by a human from orchestrator-emitted
   instructions (`itf manual-steps`, `itf preflight` verifies).
-- Guests are disposable: any guest state may be destroyed or rolled back
+- Nested guests are disposable: any guest state may be destroyed or rolled back
   at any time.
 
 ## Site configuration
 
 Everything environment-specific lives in `tests/integrated/site/config`
-(gitignored), created from the committed `site/config.example`. Loading
+(gitignored), created from `site/config.example`. Loading
 is fail-closed: a missing or invalid file aborts with a pointer at the
 example. Validated keys cover the base hosts, SSH user, reserved VMID
 range, itf storages, ISO sources, guest sizing, and the software source
@@ -68,7 +68,10 @@ compute-role machinery only when present; the role bases must be members
 of `ITF_BASE_HOSTS`. The optional Ubuntu pair
 (`ITF_UBUNTU_ISO_URL` + `ITF_UBUNTU_ISO_NAME`, both-or-neither, plus
 the `ITF_UBUNTU_TEMPLATE_NAME` override) activates the ubuntu probe
-template; it lives on the storage base like the Debian one. The
+template, and the optional Mint pair
+(`ITF_MINT_ISO_URL` + `ITF_MINT_ISO_NAME`, both-or-neither, plus the
+`ITF_MINT_TEMPLATE_NAME` override) activates the mint desktop template;
+both live on the storage base like the Debian one. The
 optional keystore pair
 (`ITF_KEYSTORE_PASSPHRASE` + `ITF_KEYFILE_NAME`, both-or-neither) feeds
 the LUKS key-device lab below — the passphrase is a secret and lives
@@ -91,18 +94,20 @@ tests/integrated/itf journey run <name> --rerun
                                     # (rollback to as-cloned — no clone)
 tests/integrated/itf journey run j21-zfs-probes --template ubuntu
                                     # start from a chosen baseline profile
-                                    # (storage|compute|ubuntu; default
+                                    # (storage|compute|ubuntu|mint; default
                                     # storage — supported by j21)
 tests/integrated/itf watch            # tail the active run — NOT a console
 tests/integrated/itf status           # guests + template + runs overview
 ```
 
 `iso fetch`/`iso upload` take an optional selector (`debian`, the
-default, `pve`, or `ubuntu`), and `template build` takes `--base`
-(target base host) and `--profile storage|compute|ubuntu` (storage =
+default, `pve`, `ubuntu`, or `mint`), and `template build` takes `--base`
+(target base host) and `--profile storage|compute|ubuntu|mint` (storage =
 Debian + product, the default; compute = Proxmox VE from the ISO,
 see below; ubuntu = Ubuntu Server LTS via autoinstall, a plain
-OpenZFS-version leg for the j21 probe matrix — no product install).
+OpenZFS-version leg for the j21 probe matrix — no product install;
+mint = Linux Mint Cinnamon via ubiquity, the plain desktop-OS leg
+— no product install, see below).
 
 Every run produces a progressive report under
 `tests/integrated/results/run-<timestamp>-<tag>/` (gitignored):
@@ -163,7 +168,23 @@ OS installation inside the guest is automated with a Debian preseed
 and serial-console machinery) served over HTTP from the development
 machine and driven over the serial console (`qm terminal`,
 `lib/serial_console.py`) — the substrate under test is ZFSutilities'
-installer experience, not the OS installer's.
+installer experience, not the OS installer's. The mint profile is the
+one exception on the seed channel: casper (the live-boot layer) only
+fetches a network preseed in netboot mode, so the ubiquity preseed is
+baked into a patched initrd instead — a cpio segment carrying
+`preseed.cfg` is prepended to the casper initrd (prepended, never
+appended: the pristine initrd ends with trailing bytes the kernel
+cannot identify, and unpacking stops there), and the installer runs
+GUI-automated on a real VGA device (`--vga std`) with the serial line
+carrying kernel output and the final `reboot: Power down` as the
+completion signal. Mint also never invokes the installer's post-install
+hook on the automatic path, so the mint flow adds a **provision boot**
+between the install poweroff and the first disk boot: the casper kernel
+boots with no live medium, casper parks in its initramfs shell, and the
+driver feeds the provisioning over the serial line (DHCP via
+`configure_networking`, chroot apt install of the guest agent and
+sshd, the dev key, hostname, serial grub) — every step marker-gated on
+the transcript.
 
 Guests are disposable and their addresses are DHCP-recycled, so all
 guest ssh/scp traffic uses `StrictHostKeyChecking=no` with a throwaway
@@ -187,9 +208,13 @@ live once in `tests/python/e2e_support.py` and run in three contexts:
   with a stated reason. Entry point: `share/dev/run-e2e-container`.
 - **Dev host under sudo** (`tests/python/test_offsite_e2e.py`,
   `tests/python/test_backup_payload_e2e.py`): the full matrix against the
-  host's zfstest1/2/3 pools. Scenarios create and destroy only
-  `test-e2e-*` datasets inside those pools and verify they leave nothing
-  behind.
+  host's zfstest1/2/3 pools, run as root by the operator. Scenarios create
+  and destroy only `test-e2e-*` datasets inside those pools and verify they
+  leave nothing behind. Where sudo demands a password — the usual
+  interactive posture — an unattended `tests/run-tests` cannot elevate:
+  the preflight reports root and the test pools missing, every pool
+  scenario skips with that reason, and the runner mechanics still run.
+  The container and the journey below then carry the rest of the matrix.
 - **ITF guest** (journey `j11-payload-e2e`): a template clone with the
   j04 pool recipe and today's tree, running
   `tests/integrated/e2e/payload-e2e-driver.py` — the same matrix, executed
@@ -252,8 +277,8 @@ The universe has two halves:
 
 - **CLI** — every command documented on the commands pages, minus two
   recorded exclusion tables (the misc commands declared not worth
-  testing on 2026-10-26, and the lifecycle/dev commands owned by the
-  dedicated install/upgrade journeys, 2026-11-04). The tables are
+  testing, and the lifecycle/dev commands owned by the
+  dedicated install/upgrade journeys). The tables are
   parsed rows in `tests/integrated/survey/universe.tsv`; the sampler
   test fails on drift in either direction, so a newly documented
   command must be consciously added or excluded.
@@ -297,10 +322,9 @@ user path (OS install → product install → OS package updates → boot
 health gate) and converted to a Proxmox template (`itf template build`).
 `itf_journey_stage_from_template` clones it — linked by default (see the
 bullet below), which is metadata-only and instant — so the journey is at
-the post-install point in seconds instead of repeating the
-~15–20-minute install.
+the post-install point in seconds instead of repeating the install.
 
-Three profiles share the build machinery. **storage** (the default) is
+Four profiles share the build machinery. **storage** (the default) is
 that Debian + product baseline; **compute** is a Proxmox VE host built
 from the configured PVE ISO by its auto-installer (no product — the
 installer's deploy push to the compute host is part of what the
@@ -308,21 +332,26 @@ two-node journeys exercise); **ubuntu** is an Ubuntu Server LTS guest
 built from the configured Ubuntu ISO by autoinstall, carrying the ZFS
 userland but no product — it exists as a plain OpenZFS-version leg for
 the j21 probe matrix (Debian ≈ 2.3, PVE ≈ 2.4-pve, Ubuntu LTS ≈ 2.2),
-with freshness keyed on the ISO name like the compute profile. Journeys
-that support profile selection take it at run time
-(`itf journey run j21-zfs-probes --template ubuntu`).
+with freshness keyed on the ISO name like the compute profile; **mint**
+is a Linux Mint Cinnamon desktop guest built from the configured Mint
+ISO by the ubiquity preseed plus the serial-driven provision boot (no
+product — the plain desktop-OS leg for journeys that exercise the GUI,
+which install the product through the first-time-user path; its clones
+carry a real VGA device for a real Cinnamon session, and freshness keys
+on the ISO name like ubuntu/compute). Journeys that support profile
+selection take it at run
+time (`itf journey run j21-zfs-probes --template ubuntu`).
 
 - **Linked clones, by design.** The itf guest storage is LVM-thin, which
   supports Proxmox linked clones: each guest clones from the template's
-  base- volume as an LVM thin snapshot — metadata-only and instant
-  instead of an allocated-block copy. The link is not tracked in volume
+  base volume as an LVM thin snapshot 
+  instead of a full copy. The link is not tracked in volume
   IDs, and a thin snapshot keeps its blocks when the origin is destroyed,
   so a template rebuild can never break a running journey's guest.
-  `ITF_CLONE_MODE=full` in the site config opts back into full copies
+  `ITF_CLONE_MODE=full` in the site config opts into full copies
   for guest storages without linked-clone support.
 - **Rebuilds are from scratch, never in-place upgrades.** The baseline
-  must keep first-time-user fidelity — no version-dir drift, no
-  upgrade-path contamination. `itf template build` refuses when the
+  must keep first-time-user fidelity. `itf template build` refuses when the
   existing template already reflects the current release (or repo rev,
   for dev tarballs); `--force` overrides. A rebuild costs one
   unattended install and doubles as a smoke run.
@@ -332,66 +361,46 @@ that support profile selection take it at run time
   module loadable, product wiring intact. Every clone inherits a
   current, proven-bootable OS — this also proves an installed system
   survives a routine `apt full-upgrade`.
-- **The stamp rides in the PVE description field** (`qm set
-  --description`, read via `qm config`): software source, product
-  version, repo rev, kernel, and build time travel with the template
-  with no new write paths on the base host. `itf template status` and
-  `itf preflight` surface it.
+- **The stamp rides in the PVE description field** (`qm set --description`,
+  read via `qm config`): 
+  - software source 
+  - product
+  - version
+  - repo rev
+  - kernel
+  - build time 
+  All travel with the template. `itf template status` and `itf preflight` 
+  surface the stamp.
 - **The template is protected by the guard.** Mutating qm verbs against
   the VMID carrying the template's name are refused (clone is exempt —
   reading the template is its purpose); `itf template build`/`destroy`
   are the sanctioned management paths and are audit-logged like every
   other mutation.
-- **The template's *product* version is allowed to go stale — j10
-  depends on it.** A clone of a stale template is a genuinely installed
+  
+- **The template's *product* version is allowed to go stale — j10 depends on it.** 
+  A clone of a stale template is a genuinely installed
   system running an older release, the exact starting state the
   release-upgrade journey needs. **j10-release-upgrade** walks the real
-  user upgrade path on such a clone: download the new release (the
-  upgrader runs from the downloaded tree — deployments older than
-  0.125.0 predate the `upgrade-zfsutilities` PATH command), decline the
-  download offer (system must stay untouched), inject local
-  modifications into the deployed old tree, run
-  `./bin/upgrade-zfsutilities` (the change scan must
-  detect them, the upgrade lists and — after approval — salvages them
-  under `salvaged-changes/`, deploys the new version via
-  `deploy-version`, and stops *without activating*), activate with the
-  printed `switch-version` command, verify wiring/config/version
-  retention, and rerun the upgrade to see "Nothing to upgrade". Under
-  `ITF_SW_SOURCE=dev-tarball` the journey serves a fake "latest
-  release" (latest.json plus a release-shaped tarball of the dev tree)
-  and points the guest's upgrade at it via `ZFSUTILITIES_RELEASE_API`;
-  the old version's change scan falls back to the pristine GitHub tag
-  tarball when the deployed tree predates `MANIFEST.sha256`, or — when
-  the tag is missing (many historical releases were never tagged) — to
-  a baseline the journey serves via `ZFSUTILITIES_TAG_TARBALL_URL`
-  (the upgrade itself captures a baseline manifest when no baseline is
-  obtainable; F-025, repair plan 021). j10 fails
-  fast with a PREP hint when the template is no longer strictly older
-  than the tree under test — the fix is running it from a newer tree,
-  not rebuilding the template.
-
-  **j12-interrupted-upgrade** shares that staging (factored into
-  `itf_journey_stage_upgrade_env` in `journeys/common.sh`) and adds the
-  failure injection an interrupted upgrade deserves: a guest-side
-  wrapper backgrounds the upgrader under `setsid` and signals its
-  process group — the user-visible effect of a lost terminal session.
-  A SIGTERM in the early phase must run the upgrader's EXIT trap
-  (staging cleaned) and leave nothing deployed, salvaged, or activated;
-  a SIGKILL the moment the transcript shows the deploy marker must
-  leave the running system untouched next to a *partial*
-  `versions/<v>` directory (no `MANIFEST.sha256` — it is written last)
-  and the salvage archive the killed run already made. The recovery is
-  simply re-running the same `upgrade-zfsutilities`: it re-detects and
-  re-salvages the injected modifications (a full upgrade, not a
-  degraded one), repairs the partial version dir in place, deploys
-  without activating, and the journey finishes with `switch-version`,
-  wiring verification, and the "Nothing to upgrade" rerun.
+  user upgrade path on such a clone: 
+  - download the new release 
+  - decline the download offer (system must stay untouched), 
+  - inject local modifications into the deployed old tree
+  - run `./bin/upgrade-zfsutilities` 
+  - the change scan detects the modifications 
+  - the upgrade lists and — after approval — salvages the modifications
+    under `salvaged-changes/`
+  - deploys the new version via `deploy-version`
+  - and stops *without activating*
+  - manually activate with the printed `switch-version` command
+  - verify wiring/config/version retention
+  - rerun the upgrade to see "Nothing to upgrade". 
+  
+  **j12-interrupted-upgrade** shares that staging and adds the
+  failure injection to cause an interrupted upgrade. The recovery is
+  simply re-running the same `upgrade-zfsutilities`.
 
   **j19-baseline-capture** exercises the trust-on-first-upgrade
-  capture path itself — the F-025 behavior the other two upgrade
-  journeys bypass, because their shared staging always provisions a
-  pristine scan source (the GitHub tag tarball, or the as-deployed
-  tree via `ZFSUTILITIES_TAG_TARBALL_URL`). j19 runs the same staging
+  capture path. j19 runs the staging
   with `ITF_UPGRADE_BASELINE=none`: no tag tarball, no override, so
   the first upgrade on the untagged old tree cannot obtain any
   baseline and must capture one from the active tree itself.
@@ -400,9 +409,8 @@ that support profile selection take it at run time
   flagged, nothing salvageable — and the manifest lands additively in
   the still-active old tree, which every later upgrade then scans
   against. The journey's second upgrade proves exactly that: new
-  modifications (modified, added, and removed — the removal
-  classification's first journey exercise) are detected against the
-  captured baseline, salvaged with their local content, and diffing
+  modifications are detected against the
+  captured baseline, salvaged with their local content. Diffing
   degrades honestly (no pristine source exists for an untagged
   version). Then `switch-version` and wiring verification, as in j10.
 
@@ -410,24 +418,24 @@ that support profile selection take it at run time
   above touches: the upgrade driven from a storage host whose
   `deploy.conf` groups name a compute host. The journey composes the
   j05 lab, then stages the never-upgraded site — the stale template's
-  old tree is pushed to the compute host and `switch-version`'d on
+  old product tree is pushed to the compute host and `switch-version`'d on
   both hosts, so every deployment target runs old-active. A declined
   download offer must change nothing on either target — the deployed
-  `MANIFEST.sha256` timestamps recorded beforehand prove no re-deploy
-  (the j05 install already left the target version dir in place, so
-  its mere existence proves nothing). Pass 1 walks
-  trust-on-first-upgrade with no pristine source: baseline manifests
+  `MANIFEST.sha256` timestamps recorded beforehand prove no re-deploy. 
+  Pass 1 walks
+  trust-on-first-upgrade with no pristine source: 
+  - baseline manifests
   are captured on the local tree *and* over ssh on the compute host,
-  the new version deploys to every target without activation — proven
-  by that manifest being rewritten on both hosts — and both printed
-  switch-version commands are then run unmodified (the printed form is
-  the absolute path, which needs no login-shell PATH wiring). Pass 2
+  - the new version deploys to every target without activation
+  - both printed switch-version commands are then run unmodified
+  Pass 2
   re-labels the served release one patch newer (the VERSION/tag
-  mismatch WARN asserted as honest) and injects per-host modifications
-  — storage modified+added, compute modified+added+removed. The scan
+  mismatch WARN asserted as honest) and injects per-host modifications. 
+  The scan
   must list each host under its own section, pull the compute host's
   changed files back over rsync to render unified diffs, and archive
-  salvage copies carrying local content on each host. The journey
+  salvage copies carrying local content on each host. 
+  The journey
   finishes with per-host activation, version retention, and the
   up-to-date rerun. It runs under `ITF_SW_SOURCE=dev-tarball` only:
   both passes point at an itf-served "latest release", and pass 2
@@ -505,7 +513,7 @@ journeys like j01/j08/j09). `itf journey run
   exists and carries its checkpoint, rolls it back (`qm rollback`, a
   guarded verb), starts it, and re-discovers its IP — the report reads
   "guest rolled back to as-cloned … no re-clone" (or "… to
-  os-installed … no reinstall"). Everything after replays in full; a
+  os-installed … no reinstall"). Everything after replays in full. A
   rolled-back install-start guest is a clean Debian with the
   prerequisites genuinely missing, so failure-path journeys keep their
   coverage.
@@ -524,12 +532,14 @@ journeys like j01/j08/j09). `itf journey run
   rollback reverts VM config (hot-plugged NICs, the pool disk), which
   the journey re-attaches — a rerun is indistinguishable from a fresh
   staging in coverage.  An install-start guest's checkpoint config
-  still carries the installer-time CPU freeze, so the `stage_os` rerun
-  clears it between the rollback and the start (clones get the same
-  clearing in `itf_guest_clone`). When the loop is done, nothing to
-  remember: a green verdict destroys the run's own guests at verdict
-  time — pass `--keep` on the runs you expect to iterate past, and
-  settle anything deliberately kept with `itf guest sweep --apply`.
+  still carries the installer-time CPU freeze (Proxmox stops the VM
+  just before passing control to it), so the `stage_os` rerun
+  clears the checkpoing between the rollback and the start (clones 
+  get the same clearing in `itf_guest_clone`). When the loop is done, 
+  there is nothing to keep: a green verdict destroys the run's own 
+  guests at verdict time. Pass `--keep` on the runs you expect to 
+  iterate past, and settle anything deliberately kept with 
+  `itf guest sweep --apply`.
 
 ## One run at a time: the run lock
 
@@ -578,23 +588,20 @@ operator lost track of guests that are still consuming the base.
 
 ## Guest lifecycle: verdict-time teardown and the sweep
 
-The disposition is automatic, in the driver
-(`itf_guest_verdict_teardown`, called between the journey's verdict and
-`itf_report_finish`):
+The disposition of the test VMs is automatic:
 
 - **Green verdict, no `--keep`** — the run's own guests are destroyed
   and their `guest*.txt` records deleted. The audit trail is the INFO
   steps this records; the invariant it preserves is that a run dir with
   guest records is a lab that may still exist, which is exactly what
   rerun sourcing and the orphan fence rely on (after a teardown, the
-  next `--rerun` refuses with the run-fresh remedy — the designed
-  degradation, never a silent fallback).
+  next `--rerun` refuses with the run-fresh remedy).
 - **`--keep` / `ITF_KEEP_GUESTS=1`** — the lab is retained for the
   `--rerun` loop; pass it on runs you expect to iterate past.
 - **Red verdict** — the lab is always kept: post-mortem reading and the
   fix-then-rerun loop need it.
 
-Ownership follows the fence's NAME law (`itf_guest_records_resolve`):
+Ownership follows the NAME law (`itf_guest_records_resolve`):
 one `qm list` per involved base is the authority; a guest is destroyed
 only when the live VMID still carries the record's run-tagged name. A
 different live name (a legitimately recycled VMID), a vacated VMID, a
@@ -605,7 +612,7 @@ fires only on a name match, and a successful template build renames its
 VM away from the run-tagged record name before the run finishes.
 
 `itf guest sweep [--apply] [--force] [--age HOURS]` settles the
-remainder — the backlog that predates the hook, `--keep` labs whose loop
+remainder — `--keep` labs whose loop
 ended, and red labs after triage. It walks this tree's run records only
 (each lane sweeps its own), takes the machine-global run lock so it can
 never race a live journey in any lane, selects done green runs past the
@@ -615,7 +622,7 @@ plan-only until `--apply` — the printed plan is the exact destroy list.
 
 ## Two-node topology
 
-The cycle-2 journeys model the production two-node layout (storage node
+Many of the journeys model the production two-node layout (storage node
 + compute/Proxmox node) on the base VMs:
 
 - **Role split across base hosts.** `ITF_STORAGE_BASE` hosts the
@@ -961,11 +968,11 @@ tests/run-tests test-itf-config test-itf-base-guard test-itf-report \
 
 They cover fail-closed site-config loading, example-file validity, the
 confinement guard's refusals (VMID range, non-itf storages, non-allow-
-listed verbs, path confinement, baseline-template protection for both
-template names), dry-run behavior, audit ordering, the run-report
+listed verbs, path confinement, baseline-template protection for every
+template name), dry-run behavior, audit ordering, the run-report
 writer, the dev-host HTTP serve/fetch/stop round-trip used to deliver
 preseeds and dev tarballs to guests, the template
-stamp/resolution/clone/freshness logic for both profiles, the driver's
+stamp/resolution/clone/freshness logic for every profile, the driver's
 dispatch/usage surface (journey listing, ISO selector, profile flags),
 and the lab-layer stages themselves (`test-itf-lab-stages`: the test
 pools stage, the single-node lab, the VM-OS build/dump/self-verify

@@ -28,9 +28,18 @@ function checkagainst {
 # 0     Snapshot is ok to delete. It has sufficient counterparts.
 # 4     Did not find any counterpart snapshots (candidate is not common with destination).
 # 5     Did not find any eligible entries in the fss array.
-# 6     Counterpart pool(s) offline - cannot verify, deletion blocked.
+# 6     Counterpart unavailable (pool offline or dataset locked by another
+#       operation) - cannot verify, deletion blocked.
 # 7     This is the last remaining common snapshot — deletion blocked.
 # 8     Fatal error. Script was terminated. See message in stdout.
+#
+# Concurrency: the candidate's dataset and every counterpart dataset it
+# reads take a non-blocking shared 'r' lock for the duration of the check.
+# The lock is never waited for — a busy dataset is treated exactly like an
+# offline pool (rc 6, deletion blocked for safety) — so concurrent prunes on
+# mirrored trees can refuse each other but never deadlock. A caller that
+# already holds a lock on the dataset (zfsdelsnap's 'w') re-enters and
+# proceeds.
 
     local _local_bashinit
     _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
@@ -43,8 +52,37 @@ function checkagainst {
     unset _local_bashinit
 
     source_helper zfscommsnap
+    source_helper zfslockmanager
+
+    # Shared read locks for the duration of the check. Acquired strictly
+    # non-blocking; released at every return path.
+    local -a _ca_lock_ids=()
+    _ca_unlock() {
+        local _id
+        for _id in "${_ca_lock_ids[@]}"; do
+            zfslock_release "$_id"
+        done
+        _ca_lock_ids=()
+    }
+    # Try to take the 'r' lock; rc 1 = dataset busy or lock error.
+    _ca_try_rlock() {
+        if zfslock_acquire "$1" "r" "checkagainst: $2"; then
+            _ca_lock_ids+=("$zfslock_id")
+            return 0
+        fi
+        return 1
+    }
+    # Log the holder named in $zfslock_conflict_info (set on rc 1).
+    _ca_log_busy() {
+        local _lf="$zfslock_conflict_info" _hp _hs _ha
+        _hp=$(_zfslock_read_field "$_lf" "pid" 2>/dev/null) || _hp="?"
+        _hs=$(_zfslock_read_field "$_lf" "script" 2>/dev/null) || _hs="unknown"
+        _ha=$(_zfslock_read_field "$_lf" "acquired" 2>/dev/null) || _ha="?"
+        log_msg "WARN: cannot read $1 — locked by $_hs (pid $_hp, since $_ha)."
+    }
 
     local \
+        _busy_counterparts="" \
         _ca_from_offsite_ds=() \
         _candidate_dstocheck \
         _candidate_pool \
@@ -90,6 +128,16 @@ function checkagainst {
     # expanded from an <offsite> source-root placeholder.
     _source_pool=$(echo "${snaptocheck%%@*}" | awk -F'/' '{print $1}')
     _source_dataset="${snaptocheck%%@*}"
+
+    # Read-lock the candidate's own dataset so the snapshot list cannot be
+    # mutated under the check. Callers already holding the dataset (a prune's
+    # 'w') re-enter and proceed.
+    if ! _ca_try_rlock "$_source_dataset" "$snaptocheck"; then
+        _ca_log_busy "$_source_dataset"
+        log_msg "WARN: Cannot verify $snaptocheck — source dataset is locked." \
+            "\nDeletion blocked for safety."
+        return 6
+    fi
 
 # =======================  Backup Series  ==============================
 # Each < or > is one line in the fss table.
@@ -287,6 +335,20 @@ function checkagainst {
                         continue
                     fi
 
+                    # Read-lock the counterpart for the comparison. A busy
+                    # counterpart is an unverifiable one: accumulate it like
+                    # an offline pool and let the entry-level verdict stand
+                    # only if another counterpart verified cleanly.
+                    if ! _ca_try_rlock "$_candidate_dstocheck" "$snaptocheck"; then
+                        _ca_log_busy "$_candidate_dstocheck"
+                        if [[ -z "$_busy_counterparts" ]]; then
+                            _busy_counterparts="$_candidate_dstocheck (locked)"
+                        elif [[ "$_busy_counterparts" != *"$_candidate_dstocheck"* ]]; then
+                            _busy_counterparts+=", $_candidate_dstocheck (locked)"
+                        fi
+                        continue
+                    fi
+
                     commsnap_find_another='Y'
                     if [[ $maxcommsnapperiod = '' ]]; then maxcommsnapperiod=130; fi
                     commsnap=$(getcommonsnap "$snaptocheck" "$_candidate_dstocheck")
@@ -311,6 +373,7 @@ function checkagainst {
                     else
                         log_msg "FATAL: Unexpected RC=$rc from $mydir/zfscommsnap." \
                             "\nSnapshot: $snaptocheck. Other dataset: $_candidate_dstocheck."
+                        _ca_unlock
                         exit 8
                     fi
                 done
@@ -339,13 +402,23 @@ function checkagainst {
 
     if [[ $last_remaining_common = true ]]; then
         log_msg "WARN: Deletion blocked — $snaptocheck is the last remaining common snapshot."
+        _ca_unlock
         return 7
     fi
     if [[ $foundcounterpart = '' ]]; then
-        if [[ $matched_fss_entry = true && -n "$offline_pools" ]]; then
-            log_msg "WARN: Cannot verify counterpart - pool(s) offline: $offline_pools" \
+        if [[ $matched_fss_entry = true \
+            && ( -n "$offline_pools" || -n "$_busy_counterparts" ) ]]; then
+            local _unavailable=""
+            [[ -n "$offline_pools" ]] && _unavailable="offline: $offline_pools"
+            if [[ -n "$_busy_counterparts" ]]; then
+                [[ -n "$_unavailable" ]] && _unavailable="$_unavailable; "
+                _unavailable="${_unavailable}locked: $_busy_counterparts"
+            fi
+            log_msg "WARN: Cannot verify counterpart - $_unavailable" \
                 "\nSnapshot: $snaptocheck" \
-                "\nDeletion blocked for safety. Bring the counterpart pool(s) online to verify."
+                "\nDeletion blocked for safety. Bring the counterpart pool(s) online or" \
+                "let the locking operation finish, then re-run."
+            _ca_unlock
             return 6
         fi
         log_msg "WARN: No eligible enteries in the checkagainst array for $snaptocheck."
@@ -356,11 +429,14 @@ function checkagainst {
                 echo "$fullfs"
             done
         fi
+        _ca_unlock
         return 5
     fi
     if [[ $foundcounterpart = true ]]; then
+        _ca_unlock
         return 0
     fi
     log_msg "FATAL: Internal error = $foundcounterpart"
+    _ca_unlock
     exit 8
 }

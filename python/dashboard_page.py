@@ -14,6 +14,7 @@ import node_config
 import paths
 
 gi.require_version("Gtk", "3.0")
+import file_locking
 from backup_history import load_history
 from config_core import get_dashboard_config, save_dashboard_config
 from gi.repository import GLib, Gtk
@@ -954,7 +955,10 @@ def _compute_iscsi_missing_luns():
 
     if use_manifest:
         try:
-            with open(manifest_path) as f:
+            # Shared file lock: the manifest's bash writers mutate it under
+            # the same lock (lib/iscsi-lib.sh), so this read never catches a
+            # mid-rewrite state.
+            with file_locking.iscsi_manifest_lock_read(), open(manifest_path) as f:
                 for line in f:
                     name = line.strip()
                     if name and not name.startswith("#"):
@@ -964,7 +968,7 @@ def _compute_iscsi_missing_luns():
     else:
         # Fallback to encrypted-luns.conf for older installations
         try:
-            with open(fallback_path) as f:
+            with file_locking.encrypted_luns_lock_read(), open(fallback_path) as f:
                 for line in f:
                     m = _ENCRYPTED_LUN_RE.match(line.strip())
                     if m:
@@ -1010,7 +1014,7 @@ def _compute_iscsi_missing_luns():
     target_map = {}
     if os.path.exists(fallback_path):
         try:
-            with open(fallback_path) as f:
+            with file_locking.encrypted_luns_lock_read(), open(fallback_path) as f:
                 for line in f:
                     m = _ENCRYPTED_LUN_RE.match(line.strip())
                     if m:
@@ -2581,11 +2585,10 @@ def _collect_running_tasks(app):
 
         scrub_states = get_all_pool_scrub_states()
         # Pick up queue changes made by other processes (e.g., a headless
-        # scrub profile) before reconciling against live zpool status so
-        # finished or paused scrubs are not still shown as running when the
-        # in-memory queue is stale.
-        queue.reload()
-        queue.tick(scrub_states)
+        # scrub profile) and reconcile against live zpool status as ONE
+        # transaction, so a concurrent writer's state change cannot be
+        # overwritten.
+        queue.tick_locked(scrub_states)
         for pool_name in queue.active:
             info = scrub_states.get(pool_name)
             status = "Running"

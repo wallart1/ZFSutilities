@@ -390,6 +390,42 @@ class TestScrubQueue(unittest.TestCase):
         self.assertIn("tank", q.pending)
         self.assertEqual(q.target, 1)
 
+    def test_stale_instance_cannot_overwrite_concurrent_change(self):
+        """Two queue instances mutating in sequence lose no entry.
+
+        The pre-transaction bug: instance two saved its stale in-memory copy
+        and clobbered instance one's entry. Mutators now reload inside the
+        lock, so both writes survive.
+        """
+        q1 = sm.ScrubQueue(target=1)
+        q2 = sm.ScrubQueue(target=1)  # Loaded before q1 mutates — stale copy.
+        q1.add_pending(["tank"])
+        q2.add_pending(["data"])
+        fresh = sm.ScrubQueue(target=1)
+        self.assertIn("tank", fresh.pending)
+        self.assertIn("data", fresh.pending)
+
+    def test_tick_locked_skips_cycle_under_foreign_lock(self):
+        """tick_locked returns (does not raise) when the lock is held."""
+        import fcntl
+
+        # Arrange before taking the lock: the constructor's own locked load
+        # would otherwise wait on the foreign holder too.
+        q = sm.ScrubQueue(target=1)
+        q.pending.add("tank")
+        q._save()
+        lock_fd = os.open(file_locking.SCRUB_STATE_LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            # Contended: skips the cycle and returns cleanly.
+            q.tick_locked({"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}, timeout_s=0.2)
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            # Uncontended now: the same call reconciles.
+            q.tick_locked({"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)})
+            self.assertIn("tank", q.active)
+        finally:
+            os.close(lock_fd)
+
     def test_add_pending_moves_paused_to_pending(self):
         q = sm.ScrubQueue(target=1)
         q.paused.add("tank")
@@ -689,6 +725,9 @@ class TestScrubQueue(unittest.TestCase):
         q = sm.ScrubQueue(target=1)
         q.paused.add("tank")
         q.paused_by_user.add("tank")
+        # Mutators are transactional: they reload persisted state under the
+        # lock, so the arrangement must be saved before the call.
+        q._save()
         q.resume_pools(["tank"])
         self.assertIn("tank", q.pending)
         self.assertNotIn("tank", q.paused)
@@ -697,6 +736,7 @@ class TestScrubQueue(unittest.TestCase):
     def test_pause_pools_marks_user_paused(self):
         q = sm.ScrubQueue(target=1)
         q.active.add("tank")
+        q._save()
         q.pause_pools(["tank"])
         self.assertIn("tank", q.paused)
         self.assertIn("tank", q.paused_by_user)
@@ -705,6 +745,7 @@ class TestScrubQueue(unittest.TestCase):
         """A pool paused by the user must stay paused when below target."""
         q = sm.ScrubQueue(target=1)
         q.active.add("tank")
+        q._save()
         q.pause_pools(["tank"])
         states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
         with patch.object(sm, "resume_scrub") as mock_resume:
@@ -723,6 +764,7 @@ class TestScrubQueue(unittest.TestCase):
         q = sm.ScrubQueue(target=2)
         q.active.add("tank")
         q.active.add("data")
+        q._save()
         states = {
             "tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
             "data": sm.ScrubInfo(state=sm.ScrubState.SCANNING),

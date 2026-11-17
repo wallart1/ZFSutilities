@@ -83,6 +83,11 @@ to run without a site configuration (fail-closed by design)."
     ITF_UBUNTU_ISO_URL="${ITF_UBUNTU_ISO_URL:-}"
     ITF_UBUNTU_ISO_NAME="${ITF_UBUNTU_ISO_NAME:-}"
     ITF_UBUNTU_TEMPLATE_NAME="${ITF_UBUNTU_TEMPLATE_NAME:-itf-template-ubuntu}"
+    # Optional Mint desktop-template keys (the Cinnamon desktop leg; the
+    # ISO pair is both-or-neither like the PVE/Ubuntu pairs).
+    ITF_MINT_ISO_URL="${ITF_MINT_ISO_URL:-}"
+    ITF_MINT_ISO_NAME="${ITF_MINT_ISO_NAME:-}"
+    ITF_MINT_TEMPLATE_NAME="${ITF_MINT_TEMPLATE_NAME:-itf-template-mint}"
 
     itf_config_validate \
         || itf_config_die "site configuration validation failed (see messages above)"
@@ -271,6 +276,32 @@ itf_config_validate() {
             && ! "${ITF_UBUNTU_TEMPLATE_NAME:-}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
         echo "itf-config: ITF_UBUNTU_TEMPLATE_NAME has invalid characters:" \
             "$ITF_UBUNTU_TEMPLATE_NAME" >&2
+        problems=1
+    fi
+
+    # Mint desktop-template ISO (optional: the Cinnamon desktop leg).
+    # Both-or-neither, and the same shape rules as the other ISO pairs.
+    if [[ -n "${ITF_MINT_ISO_URL:-}" || -n "${ITF_MINT_ISO_NAME:-}" ]]; then
+        if [[ -z "${ITF_MINT_ISO_URL:-}" || -z "${ITF_MINT_ISO_NAME:-}" ]]; then
+            echo "itf-config: ITF_MINT_ISO_URL and ITF_MINT_ISO_NAME must be set together" >&2
+            problems=1
+        fi
+        if [[ -n "${ITF_MINT_ISO_URL:-}" && ! "${ITF_MINT_ISO_URL:-}" =~ ^https?:// ]]; then
+            echo "itf-config: ITF_MINT_ISO_URL must be an http(s) URL" >&2
+            problems=1
+        fi
+        if [[ -n "${ITF_MINT_ISO_NAME:-}" && ! "${ITF_MINT_ISO_NAME:-}" =~ ^itf- ]]; then
+            echo "itf-config: ITF_MINT_ISO_NAME must start with 'itf-' (upload guard)" >&2
+            problems=1
+        fi
+    fi
+
+    # The Mint template name follows the same hostname/volid-safe rule as
+    # the other template names (it doubles as a guest hostname).
+    if [[ -n "${ITF_MINT_TEMPLATE_NAME:-}" \
+            && ! "${ITF_MINT_TEMPLATE_NAME:-}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+        echo "itf-config: ITF_MINT_TEMPLATE_NAME has invalid characters:" \
+            "$ITF_MINT_TEMPLATE_NAME" >&2
         problems=1
     fi
 

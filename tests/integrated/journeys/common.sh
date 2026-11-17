@@ -93,6 +93,141 @@
 # function returns, so the stage functions publish their pidfiles there
 # and clear them once stopped.
 
+# itf_mint_provision_boot <base-host> <vmid> <hostname>
+#
+# The mint profile's post-install provisioning boot.  Mint's automatic
+# ubiquity finish never runs success_command (observed live 2026-11-14),
+# so the work a preseed hook would do — guest agent + sshd, dev key,
+# hostname, serial grub — happens HERE instead, in a boot the driver
+# fully controls: the casper kernel + patched initrd boot with NO live
+# medium attached, casper drops to its (initramfs) shell, and the serial
+# driver feeds a provisioning script one command at a time (each ending
+# in a PROVn= marker so a step's transcript line proves its exit code).
+# Every command and its output land in provision-serial.log — the whole
+# phase is visible, unlike a preseed hook.  The script ends with a clean
+# poweroff; the caller then boots the installed disk for real.
+itf_mint_provision_boot() {
+    local base="$1" vmid="$2" hostname="$3"
+    local sshkey=""
+    [[ -f "$ITF_SSH_KEY" ]] && sshkey="$(tr -d '\n' < "$ITF_SSH_KEY")"
+    if [[ -z "$sshkey" ]]; then
+        itf_step fail "mint provision key" \
+            "no public key at $ITF_SSH_KEY — guests would be unreachable"
+        return 1
+    fi
+
+    itf_step_start "stage: mint provision boot" "agent + sshd + keys onto $vmid"
+    # Same direct-kernel-boot shape as the install, minus the ISO: the
+    # initrd finds no live medium and parks in its shell.  ip=dhcp feeds
+    # configure_networking, which the first shell command invokes from
+    # /scripts/functions (klibc ipconfig does DHCP; the initramfs busybox
+    # has no udhcpc applet, and nothing runs configure_networking
+    # unattended on this boot path — observed live: both apt legs died on
+    # DNS until the shell sourced it explicitly).
+    local prov_args="-kernel $ITF_ISO_DIR/itf-mint-vmlinuz"
+    prov_args+=" -initrd $ITF_ISO_DIR/itf-mint-initrd"
+    prov_args+=" -append 'console=ttyS0,115200n8 ip=dhcp'"
+    if ! itf_qm "$base" set "$vmid" --args "$prov_args"; then
+        itf_step fail "provision kernel args set" "qm set --args failed on vmid $vmid"
+        return 1
+    fi
+
+    local serial_log="$ITF_RUN_DIR/provision-serial.log"
+    : > "$serial_log"
+    # Frozen start + attach + resume (the install-watch pattern): the
+    # driver sees the shell prompt from its first byte.
+    local -a serial_args=(
+        --host "$base" --user "$ITF_SSH_USER" --vmid "$vmid"
+        --timeout 900
+        --log "$serial_log"
+    )
+    # One --wait/--send pair per provisioning command, interleaved
+    # (wait, send, wait, send, ...).  The waits match each marker's
+    # RESULT line ('PROVn=' followed by a digit — the command's own echo
+    # shows the literal '$?' and never matches), so a command is sent
+    # only after the previous one FINISHED: nothing queues on the shell's
+    # stdin, where apt would otherwise swallow it (observed live: PROV6
+    # printed, the prompt returned, and every queued command after it was
+    # eaten by apt's input read).  The apt legs also take stdin from
+    # /dev/null as belt-and-braces.
+    local -a steps=(
+        '(initramfs)'
+        "modprobe virtio_scsi; modprobe virtio_net; sleep 2; echo PROV1=\$?"
+        'PROV1=[0-9]'
+        "mkdir -p /pm; mount -t ext4 -o rw /dev/sda3 /pm; echo PROV2=\$?"
+        'PROV2=[0-9]'
+        "mount --bind /proc /pm/proc; mount --bind /sys /pm/sys; mount --bind /dev /pm/dev; echo PROV3=\$?"
+        'PROV3=[0-9]'
+        ". /scripts/functions; configure_networking; cp /etc/resolv.conf /pm/etc/resolv.conf; echo PROV4=\$?"
+        'PROV4=[0-9]'
+        "chroot /pm apt-get update -qq < /dev/null; echo PROV5=\$?"
+        'PROV5=[0-9]'
+        "DEBIAN_FRONTEND=noninteractive chroot /pm apt-get -y -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install openssh-server qemu-guest-agent < /dev/null; echo PROV6=\$?"
+        'PROV6=[0-9]'
+        "mkdir -p /pm/root/.ssh; echo '$sshkey' > /pm/root/.ssh/authorized_keys; chmod 700 /pm/root/.ssh; chmod 600 /pm/root/.ssh/authorized_keys; echo PROV7=\$?"
+        'PROV7=[0-9]'
+        "mkdir -p /pm/home/itfadmin/.ssh; echo '$sshkey' > /pm/home/itfadmin/.ssh/authorized_keys; chown -R 1000:1000 /pm/home/itfadmin/.ssh; chmod 700 /pm/home/itfadmin/.ssh; chmod 600 /pm/home/itfadmin/.ssh/authorized_keys; echo PROV8=\$?"
+        'PROV8=[0-9]'
+        "printf 'PasswordAuthentication no\\n' > /pm/etc/ssh/sshd_config.d/99-itf.conf; printf 'PasswordAuthentication no\\n' >> /pm/etc/ssh/sshd_config; echo PROV9=\$?"
+        'PROV9=[0-9]'
+        "echo '$hostname' > /pm/etc/hostname; sed -i 's/^127\\.0\\.1\\.1.*/127.0.1.1\\t$hostname/' /pm/etc/hosts; echo PROV10=\$?"
+        'PROV10=[0-9]'
+        "sed -i 's/^#\\?GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX=\"console=tty0 console=ttyS0,115200n8\"/' /pm/etc/default/grub; chroot /pm update-grub < /dev/null; echo PROV11=\$?"
+        'PROV11=[0-9]'
+        "umount /pm/dev /pm/proc /pm/sys; umount /pm; poweroff -f"
+    )
+    local i
+    for (( i = 0; i < ${#steps[@]}; i += 2 )); do
+        serial_args+=(--wait "${steps[$i]}" --send "${steps[$((i + 1))]}"$'\n')
+    done
+    serial_args+=(--exit-after 'reboot: Power down')
+
+    if itf_qm "$base" start "$vmid" > "$ITF_RUN_DIR/provision-start.log" 2>&1; then
+        itf_step pass "provision guest started (frozen)" "vmid $vmid"
+    else
+        itf_step fail "provision guest started" "see provision-start.log"
+        return 1
+    fi
+    itf_step_start "mint provision (serial watch)" "$vmid — up to 900s"
+    python3 "$ITF_ROOT/lib/serial_console.py" "${serial_args[@]}" \
+        > "$ITF_RUN_DIR/provision-console.log" 2>&1 &
+    local driver_pid=$!
+    sleep 5
+    if ! itf_qm "$base" resume "$vmid" > "$ITF_RUN_DIR/provision-resume.log" 2>&1; then
+        itf_step fail "provision guest resumed" "see provision-resume.log"
+        kill "$driver_pid" 2>/dev/null
+        return 1
+    fi
+    local driver_rc=0
+    wait "$driver_pid" || driver_rc=$?
+    itf_artifact "provision-transcript" "$serial_log"
+    if (( driver_rc != 0 )); then
+        itf_step fail "mint provision driven" \
+            "driver rc=$driver_rc — see provision-serial.log"
+        return 1
+    fi
+    # Gate on the markers that must have succeeded: the network, the
+    # mount, BOTH apt legs, the root key, and the final poweroff (absent
+    # = the exit pattern matched a reboot instead, or the transcript
+    # lies).
+    local m
+    for m in PROV2 PROV4 PROV5 PROV6 PROV7; do
+        if ! grep -q "$m=0" "$serial_log"; then
+            itf_step fail "mint provision gate" \
+                "$m did not report success — see provision-serial.log"
+            return 1
+        fi
+    done
+    if ! grep -q 'reboot: Power down' "$serial_log"; then
+        itf_step fail "mint provision gate" \
+            "no 'reboot: Power down' in the transcript — see provision-serial.log"
+        return 1
+    fi
+    itf_step pass "mint provision complete" \
+        "agent + sshd installed, keys/hostname/grub set — see provision-serial.log"
+    return 0
+}
+
 itf_journey_stage_os() {
     local gname="$1"
     local guest_hostname="$2"
@@ -109,8 +244,8 @@ itf_journey_stage_os() {
         esac
     done
     case "$distro" in
-        debian|ubuntu) ;;
-        *) echo "itf: --distro must be 'debian' or 'ubuntu'" >&2; return 2 ;;
+        debian|ubuntu|mint) ;;
+        *) echo "itf: --distro must be 'debian', 'ubuntu' or 'mint'" >&2; return 2 ;;
     esac
     # Per-guest record file: guest.txt by default, guest-<role>.txt when
     # the journey labels the stage's role.
@@ -118,6 +253,13 @@ itf_journey_stage_os() {
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local vmid guest_ip dev_ip preseed_file serve_dir qname
     local seed_rel=""
+    # The HTTP-server pid globals start EMPTY for every distro: mint
+    # never starts the seed server at all, and the stage's abort paths
+    # call itf_http_stop on these unguarded (the EXIT trap guards with
+    # ${J_PIDFILE:-}; the direct calls do not — an unset global once
+    # crashed the driver under set -u at the serial-watch timeout).
+    J_PIDFILE=""
+    J_PIDFILE2=""
     itf_step_start "stage: OS guest install" "$gname ($distro)"
 
     # --rerun: replay on the previous run's guest — a rollback to the
@@ -235,10 +377,12 @@ itf_journey_stage_os() {
 
     serve_dir="$ITF_RUN_DIR/serve"
     mkdir -p "$serve_dir"
-    # The unattended-install seed: a d-i preseed file (debian) or a
-    # nocloud seed directory holding user-data + meta-data (ubuntu).
-    # seed_rel is the URL part under the HTTP root shared by the serve
-    # gate, the self-check, and the guest-GET assertion below.
+    # The unattended-install seed: a d-i preseed file (debian), a nocloud
+    # seed directory holding user-data + meta-data (ubuntu), or a ubiquity
+    # preseed baked into the patched casper initrd (mint — never served
+    # over HTTP).  seed_rel is the URL part under the HTTP root shared by
+    # the serve gate, the self-check, and the guest-GET assertion below
+    # (debian/ubuntu only).
     if [[ "$distro" == ubuntu ]]; then
         seed_rel="seed-${gname}/user-data"
         preseed_file="$serve_dir/seed-${gname}"
@@ -248,6 +392,14 @@ itf_journey_stage_os() {
             itf_step pass "autoinstall seed rendered" "$preseed_file"
         else
             itf_step fail "autoinstall seed rendered"
+            return 1
+        fi
+    elif [[ "$distro" == mint ]]; then
+        preseed_file="$ITF_RUN_DIR/ubiquity-${gname}.cfg"
+        if itf_ubiquity_preseed_render "$preseed_file"; then
+            itf_step pass "ubiquity preseed rendered" "$preseed_file"
+        else
+            itf_step fail "ubiquity preseed rendered"
             return 1
         fi
     else
@@ -261,24 +413,6 @@ itf_journey_stage_os() {
         fi
     fi
 
-    dev_ip="$(itf_dev_ip)"
-    if [[ -n "$dev_ip" ]]; then
-        itf_step pass "dev IP discovered" "$dev_ip"
-    else
-        itf_step fail "dev IP discovered" "set ITF_DEV_IP in the site config"
-        return 1
-    fi
-
-    J_PIDFILE="$ITF_RUN_DIR/http.pid"
-    if itf_http_serve "$serve_dir" "$J_PIDFILE"; then
-        itf_step info "install seed HTTP serving" \
-            "http://${dev_ip}:${ITF_HTTP_PORT}/${seed_rel}"
-    else
-        itf_step fail "install seed HTTP serving" \
-            "port $ITF_HTTP_PORT unavailable — see $ITF_RUN_DIR/http.log"
-        J_PIDFILE=""
-        return 1
-    fi
     # Abort paths (set -u, Ctrl-C, failed steps) must not leak the HTTP
     # server onto the port — the next run would fail its serve gate.
     # The globals outlive the stage function, unlike its locals.
@@ -291,18 +425,41 @@ itf_journey_stage_os() {
         return 0
     }
     trap _journey_exit_cleanup EXIT
-    # Fetch the URL ourselves before spending a guest install on it: a
-    # 404 here is exactly what sends d-i (or casper's datasource fetch)
-    # into interactive prompting.
-    if curl -fsS --max-time 10 -o /dev/null \
-        "http://127.0.0.1:${ITF_HTTP_PORT}/${seed_rel}"; then
-        itf_step pass "install seed URL serves" \
-            "200 OK from http://${dev_ip}:${ITF_HTTP_PORT}/${seed_rel}"
-    else
-        itf_step fail "install seed URL serves" "fetch failed — see $ITF_RUN_DIR/http.log"
-        itf_http_stop "$J_PIDFILE"
-        J_PIDFILE=""
-        return 1
+
+    # Mint needs no install-seed HTTP server: its ubiquity preseed rides
+    # the patched casper initrd (itf_mint_boot_setup), not the network.
+    if [[ "$distro" != mint ]]; then
+        dev_ip="$(itf_dev_ip)"
+        if [[ -n "$dev_ip" ]]; then
+            itf_step pass "dev IP discovered" "$dev_ip"
+        else
+            itf_step fail "dev IP discovered" "set ITF_DEV_IP in the site config"
+            return 1
+        fi
+
+        J_PIDFILE="$ITF_RUN_DIR/http.pid"
+        if itf_http_serve "$serve_dir" "$J_PIDFILE"; then
+            itf_step info "install seed HTTP serving" \
+                "http://${dev_ip}:${ITF_HTTP_PORT}/${seed_rel}"
+        else
+            itf_step fail "install seed HTTP serving" \
+                "port $ITF_HTTP_PORT unavailable — see $ITF_RUN_DIR/http.log"
+            J_PIDFILE=""
+            return 1
+        fi
+        # Fetch the URL ourselves before spending a guest install on it: a
+        # 404 here is exactly what sends d-i (or casper's datasource fetch)
+        # into interactive prompting.
+        if curl -fsS --max-time 10 -o /dev/null \
+            "http://127.0.0.1:${ITF_HTTP_PORT}/${seed_rel}"; then
+            itf_step pass "install seed URL serves" \
+                "200 OK from http://${dev_ip}:${ITF_HTTP_PORT}/${seed_rel}"
+        else
+            itf_step fail "install seed URL serves" "fetch failed — see $ITF_RUN_DIR/http.log"
+            itf_http_stop "$J_PIDFILE"
+            J_PIDFILE=""
+            return 1
+        fi
     fi
 
     # The installer's syslog target: d-i streams its log via UDP to the
@@ -342,6 +499,25 @@ itf_journey_stage_os() {
         boot_append+=" boot=casper"
         boot_iso="$(itf_ubuntu_boot_setup "$base" \
             2>"$ITF_RUN_DIR/iso-customize.log")"
+    elif [[ "$distro" == mint ]]; then
+        # Same direct-kernel-boot model (itf_mint_boot_setup): the pristine
+        # Mint ISO is the casper medium, the patched initrd carries the
+        # ubiquity preseed, and automatic-ubiquity drives the installer
+        # GUI on the virtual display with zero keystrokes.  The hostname
+        # and locale answers ride the command line — casper's 24preseed
+        # turns any */*=* token into a debconf answer.  console=tty0
+        # mirrors onto the VGA too, so a look-only screendump of a live
+        # boot shows kernel text instead of an untouched framebuffer.
+        # The preseed's success_command powers off at the end (same
+        # -kernel-args rule as ubuntu: a finishing reboot would re-enter
+        # the installer).
+        boot_append="boot=casper automatic-ubiquity console=tty0 console=ttyS0,115200n8"
+        boot_append+=" earlyprintk=serial,ttyS0,115200"
+        boot_append+=" netcfg/get_hostname=${guest_hostname}"
+        boot_append+=" debian-installer/locale=en_US.UTF-8 keyboard-configuration/layoutcode=us"
+        boot_append+=" noprompt"
+        boot_iso="$(itf_mint_boot_setup "$base" "$preseed_file" \
+            2>"$ITF_RUN_DIR/iso-customize.log")"
     else
         boot_append="auto=true url=http://${dev_ip}:${ITF_HTTP_PORT}/preseed-${gname}.cfg"
         boot_append+=" netcfg/get_hostname=${guest_hostname} netcfg/get_domain=localdomain"
@@ -361,10 +537,16 @@ itf_journey_stage_os() {
 
     # Run-tagged qm NAME (the fence's ownership evidence — see
     # itf_guest_qname); preseed filenames and step labels keep the bare
-    # guest name.
+    # guest name.  Mint gets a real VGA device: its installer is a GUI on
+    # the virtual display (every other distro installs over serial).
+    local -a create_args=(--base "$base" --iso "$boot_iso"
+        --sysdisk "$sysdisk" --freeze)
+    if [[ "$distro" == mint ]]; then
+        create_args+=(--vga std)
+    fi
     qname="$(itf_guest_qname "$gname")"
-    vmid="$(itf_guest_create "$qname" --base "$base" --iso "$boot_iso" \
-        --sysdisk "$sysdisk" --freeze 2>"$ITF_RUN_DIR/guest-create.log")"
+    vmid="$(itf_guest_create "$qname" "${create_args[@]}" \
+        2>"$ITF_RUN_DIR/guest-create.log")"
     if [[ -n "$vmid" ]]; then
         itf_step pass "guest created (CPU-frozen)" "vmid $vmid"
     else
@@ -373,12 +555,18 @@ itf_journey_stage_os() {
         J_PIDFILE=""
         return 1
     fi
-    if [[ "$distro" == ubuntu ]]; then
-        # The direct-kernel boot: qemu -kernel/-initrd/-append (the ISO
+    if [[ "$distro" == ubuntu || "$distro" == mint ]]; then
+        # The direct kernel boot: qemu -kernel/-initrd/-append (the ISO
         # stays attached as the casper medium).  The inner quotes keep
         # the append one -append argument when qemu parses the string.
+        # Mint's initrd is the PATCHED one (preseed baked in by
+        # itf_mint_boot_setup).
         local kargs="-kernel $ITF_ISO_DIR/itf-ubuntu-vmlinuz"
         kargs+=" -initrd $ITF_ISO_DIR/itf-ubuntu-initrd"
+        if [[ "$distro" == mint ]]; then
+            kargs="-kernel $ITF_ISO_DIR/itf-mint-vmlinuz"
+            kargs+=" -initrd $ITF_ISO_DIR/itf-mint-initrd"
+        fi
         kargs+=" -append '$boot_append'"
         if itf_qm "$base" set "$vmid" --args "$kargs" \
                 > "$ITF_RUN_DIR/kernel-args.log" 2>&1; then
@@ -432,17 +620,36 @@ itf_journey_stage_os() {
         return 1
     fi
 
+    local serial_timeout=3600
+    if [[ "$distro" == mint ]]; then
+        serial_timeout=10800
+    fi
     local -a serial_args=(
         --host "$base" --user "$ITF_SSH_USER" --vmid "$vmid"
-        --wait 'Installation complete' --send $'\n'
-        --exit-after 'Restarting system|Power down|login:'
-        --timeout 3600
+        --timeout "$serial_timeout"
         --log "$serial_log"
     )
-    if [[ "$distro" == debian ]]; then
-        serial_args+=(--kick $'\x1b[B' --kick-delay 8)
+    if [[ "$distro" == mint ]]; then
+        # A Cinnamon install copies ~10x a server install through nested
+        # virt onto the thin LV (measured: ~19 MiB/min — a ~2.5 h run
+        # where Debian/Ubuntu finish well inside 3600 s), so the mint
+        # watch gets triple the serial timeout.
+        serial_args+=(--timeout 10800)
+        # The GUI installer draws on the virtual display; the serial line
+        # carries kernel output only, so there is nothing to wait for or
+        # send — the driver just watches for a finish line.  BOTH a
+        # poweroff and a reboot end the watch; the gate below rejects a
+        # reboot (it would re-enter the installer through the persistent
+        # -kernel args — only the poweroff is a valid ending).
+        serial_args+=(--exit-after 'reboot: Power down|Restarting system')
+    else
+        serial_args+=(--wait 'Installation complete' --send $'\n'
+            --exit-after 'Restarting system|Power down|login:')
+        if [[ "$distro" == debian ]]; then
+            serial_args+=(--kick $'\x1b[B' --kick-delay 8)
+        fi
     fi
-    itf_step_start "guest install (serial watch)" "$gname — up to 3600s"
+    itf_step_start "guest install (serial watch)" "$gname — up to ${serial_timeout}s"
     python3 "$ITF_ROOT/lib/serial_console.py" "${serial_args[@]}" \
         > "$ITF_RUN_DIR/serial-console.log" 2>&1 &
     driver_pid=$!
@@ -475,17 +682,36 @@ itf_journey_stage_os() {
         J_PIDFILE=""
         return 1
     fi
+    if [[ "$distro" == mint ]] && ! grep -q 'reboot: Power down' "$serial_log"; then
+        # The exit pattern also matches a reboot — which for mint is a
+        # hazard, not an ending: the persistent -kernel args would boot
+        # the INSTALLER again while the stage assumes the installed disk.
+        itf_step fail "installer powered off" \
+            "transcript shows no 'reboot: Power down' — the installer rebooted" \
+            "instead (see serial-install.log); vm left for post-mortem"
+        itf_http_stop "$J_PIDFILE"
+        J_PIDFILE=""
+        return 1
+    fi
     itf_http_stop "$J_PIDFILE"
     J_PIDFILE=""
 
-    if [[ "$distro" == ubuntu ]]; then
-        # The installer powered off at the end of the autoinstall (the
-        # seed's shutdown: poweroff — a finishing reboot would boot the
-        # installer kernel again while the -kernel args sit in the
-        # config).  Drop the args, drop the install-time CPU freeze (a
-        # fresh start re-applies the config's freeze flag — the debian
-        # flow never sees this because its installer's finishing reboot
-        # keeps the VM running), and boot the installed disk.
+    if [[ "$distro" == mint ]]; then
+        # Mint's ubiquity never ran the preseed's post-install hook (see
+        # itf_mint_provision_boot), so the provisioning happens in a
+        # driver-controlled boot before the installed disk is trusted.
+        itf_mint_provision_boot "$base" "$vmid" "$guest_hostname" || return 1
+    fi
+
+    if [[ "$distro" == ubuntu || "$distro" == mint ]]; then
+        # The installer powered off at the end of the install (the ubuntu
+        # seed's shutdown: poweroff / the mint preseed's success_command
+        # poweroff — a finishing reboot would boot the installer kernel
+        # again while the -kernel args sit in the config).  Drop the
+        # args, drop the install-time CPU freeze (a fresh start re-applies
+        # the config's freeze flag — the debian flow never sees this
+        # because its installer's finishing reboot keeps the VM running),
+        # and boot the installed disk.
         if itf_qm "$base" set "$vmid" --delete args \
                 > "$ITF_RUN_DIR/kernel-args-clear.log" 2>&1 \
                 && itf_qm "$base" set "$vmid" --freeze 0 \
@@ -513,8 +739,12 @@ itf_journey_stage_os() {
 
     # The guest itself must have fetched the install seed (the
     # 127.0.0.1 GETs are our own probe and URL check; anything else is
-    # the installer).
-    if grep -v '^127\.0\.0\.1' "$ITF_RUN_DIR/http.log" \
+    # the installer) — debian/ubuntu only: mint's preseed rides the
+    # patched initrd, so there is no HTTP fetch to assert.
+    if [[ "$distro" == mint ]]; then
+        itf_step info "install seed delivered in-boot" \
+            "ubiquity preseed rode the patched initrd (no HTTP fetch)"
+    elif grep -v '^127\.0\.0\.1' "$ITF_RUN_DIR/http.log" \
             | grep -q "GET /${seed_rel}"; then
         itf_step pass "install seed fetched by guest" "GET logged in http.log"
     else

@@ -471,6 +471,75 @@ test_concurrent_access() {
 }
 
 # ---------------------------------------------------------------------------
+# Same-PID Lock Conversion
+# ---------------------------------------------------------------------------
+
+test_same_pid_conversion() {
+    echo ""
+    echo "=== Same-PID Lock Conversion Tests ==="
+    cleanup_test_locks
+
+    test_start "Same-PID stronger acquire converts the held lock in place"
+    zfslock_acquire "test/conv" "w" "initial write" || true
+    local lock_w="$zfslock_id"
+    local held_pid
+    held_pid=$(_zfslock_read_field "$lock_w" "pid")
+    clear_test_log_file
+    zfslock_acquire "test/conv" "x" "destroy upgrade"
+    local rc=$?
+    local lock_x="$zfslock_id"
+    local log_file
+    log_file=$(get_test_log_file)
+    if [[ $rc -eq 0 && "$lock_x" == "$lock_w" && -f "$lock_x" ]] \
+        && [[ $(_zfslock_read_field "$lock_x" "type") == "x" ]] \
+        && [[ $(_zfslock_read_field "$lock_x" "description") == "destroy upgrade" ]] \
+        && [[ $(_zfslock_read_field "$lock_x" "pid") == "$held_pid" ]] \
+        && grep -q "Converted lock on test/conv from 'w' to 'x'" "$log_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc type=$(_zfslock_read_field "$lock_x" "type")"
+    fi
+
+    test_start "Converted lock releases normally"
+    zfslock_release "$lock_x"
+    if [[ ! -f "$lock_x" ]]; then
+        test_pass
+    else
+        test_fail "Converted lock file still exists after release"
+    fi
+    zfslock_release_all
+
+    test_start "Weaker same-PID acquire keeps the stronger held type"
+    zfslock_acquire "test/conv" "x" "held destroy" || true
+    local lock_x2="$zfslock_id"
+    zfslock_acquire "test/conv" "w" "weaker request"
+    local rc2=$?
+    if [[ $rc2 -eq 0 && "$zfslock_id" == "REENTRY:$lock_x2" ]] \
+        && [[ $(_zfslock_read_field "$lock_x2" "type") == "x" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc2 id=$zfslock_id type=$(_zfslock_read_field "$lock_x2" "type")"
+    fi
+    zfslock_release_all
+
+    test_start "Foreign descendant read lock blocks w-to-x conversion"
+    _bg_lock_start "test/conv2/child" "r" "foreign reader"
+    _bg_lock_wait_rc > /dev/null
+    zfslock_acquire "test/conv2" "w" "initial write" || true
+    local lock_w2="$zfslock_id"
+    zfslock_acquire "test/conv2" "x" "blocked upgrade"
+    local rc3=$?
+    if [[ $rc3 -eq 1 && $(_zfslock_read_field "$lock_w2" "type") == "w" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc3 type=$(_zfslock_read_field "$lock_w2" "type")"
+    fi
+    _bg_lock_kill
+    zfslock_release_all
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
 # Path encoding
 # ---------------------------------------------------------------------------
 
@@ -1721,6 +1790,7 @@ test_same_dataset_conflicts
 test_hierarchy_conflicts
 test_stale_detection
 test_concurrent_access
+test_same_pid_conversion
 test_path_encoding
 test_noninteractive_abort
 test_headless_wait_logs_holder_details

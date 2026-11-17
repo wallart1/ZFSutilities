@@ -163,6 +163,68 @@ test_cleanup_removes_stale_locks() {
     fi
 }
 
+test_convert_strengthens_held_lock() {
+    test_start "convert strengthens a live-held lock and prints CONVERTED"
+    _cleanup_remote_locks
+    _start_holder "threeamigos/conv" "w" "holder"
+    local lockfile="$REMOTE_LOCK_DIR/.locks/threeamigos%2Fconv.lock"
+    _wait_for_lock "$lockfile"
+
+    local output rc
+    output=$(_run_agent convert "$lockfile" x "destroy upgrade") && rc=0 || rc=$?
+    # Snapshot the file before stopping the holder — its EXIT trap releases
+    # (removes) the lock.
+    local content
+    content=$(cat "$lockfile" 2>/dev/null || echo "")
+    _stop_holder
+    assert_rc 0 "$rc"
+    assert_contains "$output" "CONVERTED"
+    assert_contains "$content" '"type":"x"'
+    assert_contains "$content" '"description":"destroy upgrade"'
+    _cleanup_remote_locks
+}
+
+test_convert_refuses_weakening() {
+    test_start "convert refuses to weaken a held lock"
+    _cleanup_remote_locks
+    _start_holder "threeamigos/weak" "x" "holder"
+    local lockfile="$REMOTE_LOCK_DIR/.locks/threeamigos%2Fweak.lock"
+    _wait_for_lock "$lockfile"
+
+    local output rc
+    output=$(_run_agent convert "$lockfile" w "weaker") && rc=0 || rc=$?
+    local content
+    content=$(cat "$lockfile" 2>/dev/null || echo "")
+    _stop_holder
+    assert_rc 1 "$rc"
+    assert_contains "$output" "only strengthens"
+    assert_contains "$content" '"type":"x"'
+    _cleanup_remote_locks
+}
+
+test_convert_refuses_stale_lock() {
+    test_start "convert refuses a stale lock file"
+    _cleanup_remote_locks
+    local lockfile="$REMOTE_LOCK_DIR/.locks/stale%2Fconv.lock"
+    echo '{"dataset":"stale/conv","type":"w","pid":"99999","script":"test",'\
+'"acquired":"2026-01-01T00:00:00","description":""}' > "$lockfile"
+    local output rc
+    output=$(_run_agent convert "$lockfile" x "upgrade") && rc=0 || rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$output" "stale"
+    _cleanup_remote_locks
+}
+
+test_convert_refuses_outside_lock_dir() {
+    test_start "convert refuses a lock file outside the lock directory"
+    _cleanup_remote_locks
+    local output rc
+    output=$(_run_agent convert "/etc/passwd" x "upgrade") && rc=0 || rc=$?
+    assert_rc 2 "$rc"
+    assert_contains "$output" "must be inside"
+    _cleanup_remote_locks
+}
+
 test_hold_acquires_lock
 test_hold_conflict
 test_check_available
@@ -170,6 +232,10 @@ test_check_locked
 test_list_locks
 test_release_removes_lock
 test_cleanup_removes_stale_locks
+test_convert_strengthens_held_lock
+test_convert_refuses_weakening
+test_convert_refuses_stale_lock
+test_convert_refuses_outside_lock_dir
 
 test_summary
 teardown_test_env

@@ -3,7 +3,6 @@
 **Items to be added by Zcode:**
 
 
-
 Plain-language definitions of terms as they are actually used in this
 repository — in agent work reports, SESSION_NOTES.md, CI output, and the
 docs. Entries are added alphabetically as jargon comes to light, without
@@ -60,6 +59,16 @@ target absorbs a classic horizontal scrollbar so the 20th row stays
 visible. A caller can instead pin a constant window
 (`fixed_rows=True`), but every shipped table uses the natural-sizing
 default.
+
+## casper
+
+The live-boot layer inside Ubuntu-based installer media (Ubuntu Server,
+Linux Mint). It unpacks the live system from the ISO, and it decides how
+a preseed reaches the installer: casper loads a `/preseed.cfg` found in
+the initrd unconditionally, but fetches one from a `url=` boot parameter
+only in netboot mode — which is why the itf mint template bakes its
+ubiquity preseed into a patched initrd instead of serving it over HTTP
+like the Debian and Ubuntu profiles do.
 
 ## CI
 
@@ -153,6 +162,16 @@ every dataset below it, so an offsite transfer receiving into a pool
 fences mounting inside that pool until it finishes. When an action is
 refused because another operation holds the lock, the Datasets page
 names the holder in a warning dialog instead of failing silently.
+
+## dataset lock conversion
+
+A same process that already holds a dataset lock and asks for a stronger
+one (read → write → destroy) gets its lock upgraded in place: the lock
+file is rewritten with the new type instead of being released and
+re-acquired. That matters because a release-and-reacquire gap is exactly
+where a second job could slip in — a restore destroying the destination
+another restore is preparing. A weaker request never weakens the held
+lock.
 
 ## deferred destruction
 
@@ -367,6 +386,14 @@ the upgrade path must not write iSCSI state — the pool map stays the
 recovery authority until the key ceremony. j25 exercises the whole
 posture.
 
+## Lane
+
+One of the parallel development repositories this project is worked in
+(pub, pub2, pub3). Each lane is a full checkout of the same project with
+its own history; finished work is merged from a lane into the main
+repository, and the lanes are then fast-forwarded to match. Lanes let
+several sessions work at the same time without stepping on each other.
+
 ## LIO
 
 Linux-I/O target: the Linux kernel's built-in iSCSI target subsystem —
@@ -538,6 +565,14 @@ matrix") across the three baseline templates to measure the OpenZFS
 behaviors the backup engine's design rests on; `probes.tsv` in the run
 report is the recorded outcome. Unrelated to the GUI's guest-filesystem
 probe (the Alignment view's validator, journey j06).
+
+## Product
+
+ZFSutilities itself — the scripts, libraries, and GUI that make up a
+release — as opposed to the operating system underneath, the ZFS pools
+being managed, or the documentation. "The product is installed on the
+guest" names the ZFSutilities release; "product version" is the release
+number in the VERSION file.
 
 ## property manifest
 
@@ -792,6 +827,15 @@ manifest, and the thing the 2026-10-27 incident silently lost (33
 backstores defined, only 3 mapped, because the gates counted
 backstores instead of TPG mappings).
 
+## Tree
+
+A checked-out copy of the repository — the folder of files you can read
+and edit (what git calls the working tree). "The dev tree" is the
+checkout on the development host; "the deployed tree" is the installed
+copy under `/usr/local/lib/zfsutilities`. The itf journeys install the
+product from a tarball of the dev tree. See also
+[worktree](#worktree) for the several-checkouts-of-one-repository case.
+
 ## trust-on-first-upgrade
 
 How upgrade-zfsutilities handles an active version that has neither a
@@ -812,8 +856,46 @@ probes at 600 s — so the periodic auto-refresh does not rescan everything
 each tick, and ssh-based checks stay within their churn budgets. Failures
 are never cached, and repair paths reset or bypass the cache so the UI
 shows fresh state. "The TTL flake" is the CI-only failure class where a
-leaked real refresh thread outlived a test and wrote a stale entry into a
-cache the next test read.
+leaked real refresh thread outlived a test and wrote a stale entry into
+a cache the next test read.
+
+## ubiquity
+
+The graphical installer inside Linux Mint's live media (a Mint-kept fork
+of Ubuntu's old desktop installer). It answers to debconf preseed keys
+(`passwd/*`, `partman-auto/*`, `ubiquity/*`) and, when booted with the
+`automatic-ubiquity` kernel parameter, installs unattended — the itf
+mint template profile's install path. Its post-install hook
+(`ubiquity/success_command`) is where the profile lands the ssh key,
+packages, hostname, serial grub, and the finishing poweroff.
+
+## Wayland
+
+The display-server protocol modern Linux desktops use to put windows
+on screen — the successor to X11, with XWayland as the compatibility
+layer that lets X11-only programs keep working inside a Wayland
+session. The GUI is a GTK3 application, so it can draw under either
+protocol, and the prerequisites advertise "X11 or Wayland". The gap is
+the plumbing around the GUI: finding the logged-in desktop user for
+run-completion notifications works by asking who owns the X11 display
+socket, and there is no Wayland equivalent of X11's ask-every-window
+query. Wayland-session support is a parked thread in SESSION_NOTES.md.
+
+## worktree
+
+A second working directory checked out from the same repository: git
+keeps branches and history in one shared store while each worktree
+folder holds its own checkout, so several trees of the same project
+can be open and edited at the same time. The developer guide uses
+the word for the parallel repo lanes (pub, pub2, pub3), and that is
+why the itf run lock is machine-wide rather than per-tree: a journey
+started from ANY worktree on the dev host must serialize against
+the others, because the lab — its ports, guests, and RAM — belongs
+to the host, not to whichever tree launched the run. Nothing in the
+product itself uses worktrees; when another tool's changelog or UI
+offers a worktree checkbox, it means "run this session or task in
+its own checkout, so its edits and builds cannot collide with the
+main working directory."
 
 ## world
 

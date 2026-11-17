@@ -85,6 +85,16 @@ tests/integrated/itf iso upload <compute-base> pve
 tests/integrated/itf template build --base <compute-base> --profile compute
 ```
 
+OS-variant templates (opt-in via the site config's ISO pairs) build the
+same way — the ubuntu probe leg and the mint desktop leg, both on the
+storage base:
+
+```bash
+tests/integrated/itf iso fetch mint           # Linux Mint Cinnamon ISO
+tests/integrated/itf iso upload <storage-base> mint
+tests/integrated/itf template build --profile mint   # (or ubuntu)
+```
+
 Every run (journey or preflight) writes a progressive report under
 `results/run-<timestamp>-<tag>/` (gitignored): `steps.tsv` for tooling,
 `report.md` for humans, plus artifacts captured along the way. Every
@@ -101,7 +111,7 @@ is running right now, not just what already finished.
 | `lib/ssh-lib.sh` | dev↔base, dev↔guest transports; preseed HTTP server |
 | `lib/base-lib.sh` | **the guard**: allow-listed qm verbs, VMID range, itf-only storages, audit log, dry-run, baseline-template protection |
 | `lib/guest-lib.sh` | guest lifecycle (create/clone/start/stop/snapshot/destroy), ISO fetch/upload (Debian + PVE), preseed/answer rendering, IP discovery |
-| `lib/template-lib.sh` | post-install baseline templates: storage profile (Debian + product) and compute profile (PVE from the ISO) — build/stamp/status/destroy |
+| `lib/template-lib.sh` | post-install baseline templates — four profiles sharing one build/stamp/status/destroy machinery: storage (Debian + product), compute (PVE from the ISO), ubuntu (Ubuntu Server probe leg), mint (Linux Mint Cinnamon desktop leg) |
 | `lib/report-lib.sh` | progressive PASS/FAIL/SKIP run reports |
 | `lib/runlock-lib.sh` | **the serialization fence**: `journey run` and `template build` take a machine-wide kernel lock (flock) so only one run executes per dev host at a time — concurrent starters from ANY repo worktree wait with heartbeats (or refuse with `ITF_RUNLOCK_WAIT=0`), and the holder (journey, pid, start time, repo) is recorded for `itf status`. Acquire also runs the **orphan fence**: guests recorded by INTERRUPTED runs that still exist on a base (a dev restart frees the lock but not the guests) refuse the new start, naming each leftover and its recovery (`journey run <same> --rerun` to reuse, `itf guest destroy` to discard); a rerun exempts its own takeover guests, and an unreachable base fails closed |
 | `lib/serial_console.py` | `qm terminal` driver for OS-install automation (python3 stdlib) |

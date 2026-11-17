@@ -175,16 +175,23 @@ def parse_rsync_endpoint(endpoint):
 def _rsync_log_setup_script(log_path):
     """Return a bash snippet that ensures the log dir exists and truncates stale logs.
 
-    The log file is reset when it does not exist or its mtime is not from today.
+    The log file is reset when it does not exist or its mtime is not from
+    today. The truncate runs under an exclusive flock on a lock file next
+    to the log, and every appender to the same log holds the shared lock
+    for its append window, so the daily reset can never land under a live
+    appender.
     """
     log_dir = shlex.quote(str(Path(log_path).parent))
     log_path_quoted = shlex.quote(log_path)
+    lock_quoted = shlex.quote(f"{log_path}.lock")
     return (
         f"mkdir -p {log_dir}; "
+        f"( flock -x 9 || exit 1; "
         f"if [ ! -f {log_path_quoted} ] || "
         f'[ "$(date -r {log_path_quoted} +%Y%m%d 2>/dev/null || echo 0)" '
         f'!= "$(date +%Y%m%d)" ]; then '
-        f": > {log_path_quoted}; fi"
+        f": > {log_path_quoted}; fi "
+        f") 9>>{lock_quoted}"
     )
 
 
@@ -264,7 +271,11 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
             bash_script = (
                 f"_rh={host_quoted}; _rl={log_quoted}; _t=$(mktemp); "
                 f"{setup_cmd} && "
-                f'{rsync_cmd} 2>&1 | tee "$_t" | ssh -q root@$_rh "cat >> $_rl"; '
+                f'{rsync_cmd} 2>&1 | tee "$_t" | '
+                # The remote append holds the shared half of the log's file
+                # lock so the remote daily truncate waits for it.
+                f'ssh -q root@$_rh "( flock -s 9 || exit 1; cat >> $_rl )'
+                f' 9>> $_rl.lock"; '
                 f"{_rsync_failure_tail_script()}"
             )
             cmd = ["bash", "-c", bash_script]
@@ -279,10 +290,15 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
         if remote_log_path:
             bash_script = (
                 f"{_rsync_log_setup_script(remote_log_path)}; _t=$(mktemp); "
+                # The append pipeline holds the shared half of the log's
+                # file lock; the subshell keeps PIPESTATUS visible to the
+                # rc-capture snippet.
+                f"( flock -s 9 || exit 1; "
                 f"{shlex.join(rsync_opts)} "
                 f"{shlex.quote(src_path)} {shlex.quote(dst_path)} "
                 f'2>&1 | tee "$_t" >> {shlex.quote(remote_log_path)}; '
-                f"{_rsync_failure_tail_script()}"
+                f"{_rsync_failure_tail_script()} "
+                f") 9>>{shlex.quote(remote_log_path + '.lock')}"
             )
             cmd = ["bash", "-c", bash_script]
             output_location = remote_log_path

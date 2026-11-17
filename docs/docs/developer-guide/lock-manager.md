@@ -204,6 +204,27 @@ into place.  Other processes therefore never see a partially-written or
 truncated lock file, even if the writer is interrupted between `open()` and
 `close()`.
 
+### Same-PID Lock Conversion
+
+A process that already holds a lock and asks for a **stronger** type (`r` →
+`w` → `x`) gets the lock converted in place. The manager first runs the normal
+conflict check against every *other* holder; if nothing conflicts, it rewrites
+the lock file with the new type, description, and acquired timestamp. The
+holder's pid and script stay, so stale detection keeps matching.
+
+A weaker request never weakens the held lock. The lock keeps its stronger type
+and the acquire returns as a re-entry.
+
+This closes the release/re-acquire window: `zfs-send-receive` holds its
+destination `w` lock through `zfsdelfs`, whose `x` acquisition converts it,
+so no second job can slip between a release and a re-acquisition.
+
+The Python client follows the same rule for local locks. For a forwarded
+(two-node) lock, the compute side asks the storage-side agent to convert it;
+an agent older than this feature keeps the held, weaker type and the compute
+side logs a VERB note. The fence never drops — it stays at the previous
+strength until both nodes run this version.
+
 ### Interactive Conflict Resolution
 
 When conflict detected, options are offered:
@@ -355,11 +376,19 @@ used by the compute side:
 - `list` — return a JSON array of active locks.
 - `release <lockfile>` — force-remove a lock file.
 - `cleanup` — remove stale locks.
+- `convert <lockfile> <type> [description]` — rewrite a lock held by a live
+  agent process to a strictly stronger type (`r` < `w` < `x`); prints
+  `CONVERTED <lockfile>`. The lock file must sit inside the lock directory,
+  and the conversion never weakens a held lock.
 
 ### Compute-side forwarding
 
 - `zfslock_acquire` spawns `zfslockmanager-remote hold ...` via SSH, records the
   SSH session PID, and returns a `REMOTE:<lockfile>` lock id.
+- A same-PID request for a stronger type on a forwarded lock asks the agent to
+  `convert` it, keeping the SSH-held lock continuous on the storage node. An
+  older agent refuses; the compute side keeps the held, weaker type and notes
+  it at VERB.
 - `zfslock_release` terminates the SSH session and also sends a `release`
   command to the storage node to ensure the lock file is removed.
 - `zfslock_check` runs the remote `check` command and converts a conflict into a
@@ -401,6 +430,7 @@ Scripts and modules that have lock integration:
 | zfsretain             | `w`       | filesystem being retained                       |
 | zfscleanup            | `w`       | per dataset (via `zfsretain`)                   |
 | zfsdelsnap            | `w`       | snapshot's parent dataset                       |
+| zfscheckagainst       | `r`       | candidate dataset and each counterpart it reads (non-blocking; busy → deletion blocked) |
 | zfsdelallsnaps        | `w`       | parent dataset (via `zfsdelsnap`)               |
 | zfsmassdelsnaps       | `w`       | each parent dataset                             |
 | zfsdelfs              | `x`       | top-level dataset being destroyed               |

@@ -34,6 +34,18 @@ SURFACE_STATE_LOCK_PATH = os.environ.get(
     "ZFSUTILITIES_SURFACE_STATE_LOCK_PATH",
     os.path.join(_DEFAULT_LOCK_DIR, ".surface_test_state.lock"),
 )
+ISCSI_MANIFEST_LOCK_PATH = os.environ.get(
+    "ZFSUTILITIES_ISCSI_MANIFEST_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".iscsi_manifest.lock"),
+)
+ENCRYPTED_LUNS_LOCK_PATH = os.environ.get(
+    "ZFSUTILITIES_ENCRYPTED_LUNS_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".encrypted_luns.lock"),
+)
+RSYNC_LOG_LOCK_PATH = os.environ.get(
+    "ZFSUTILITIES_RSYNC_LOG_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".rsync_log.lock"),
+)
 
 
 @contextmanager
@@ -145,4 +157,40 @@ def surface_state_lock_read():
 def surface_state_lock_write():
     """Exclusive lock for writing the disk surface-test state."""
     with file_lock(SURFACE_STATE_LOCK_PATH, fcntl.LOCK_EX):
+        yield
+
+
+@contextmanager
+def iscsi_manifest_lock_read():
+    """Shared lock for reading the expected-backstores manifest."""
+    with file_lock(ISCSI_MANIFEST_LOCK_PATH, fcntl.LOCK_SH):
+        yield
+
+
+@contextmanager
+def iscsi_manifest_lock_write():
+    """Exclusive lock for mutating the expected-backstores manifest.
+
+    Bash writers take the same lock with the system ``flock`` command
+    (lib/iscsi-lib.sh), so GUI and CLI mutations serialize with each other.
+    """
+    with file_lock(ISCSI_MANIFEST_LOCK_PATH, fcntl.LOCK_EX):
+        yield
+
+
+@contextmanager
+def encrypted_luns_lock_read():
+    """Shared lock for reading the encrypted-LUNs config."""
+    with file_lock(ENCRYPTED_LUNS_LOCK_PATH, fcntl.LOCK_SH):
+        yield
+
+
+@contextmanager
+def encrypted_luns_lock_write():
+    """Exclusive lock for mutating the encrypted-LUNs config.
+
+    Bash writers take the same lock with the system ``flock`` command
+    (lib/iscsi-lib.sh), so GUI and CLI mutations serialize with each other.
+    """
+    with file_lock(ENCRYPTED_LUNS_LOCK_PATH, fcntl.LOCK_EX):
         yield

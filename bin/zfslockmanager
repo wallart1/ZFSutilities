@@ -82,6 +82,7 @@ _zfslock_this_host=""
 declare -gA _zfslock_pool_target=()
 declare -gA _zfslock_remote_pids=()
 declare -gA _zfslock_remote_hosts=()
+declare -gA _zfslock_remote_types=()
 _zfslock_remote_conflict_seq=0
 
 # Extract a scalar value from the right-hand side of a KEY=value line in a
@@ -365,6 +366,52 @@ _zfslock_types_conflict() {
         w|x) [[ "$type2" == "r" || "$type2" == "w" || "$type2" == "x" ]] ;;
         *)  return 1 ;;
     esac
+}
+
+# Rank a lock type by strength: r=1, w=2, x=3. Empty/unknown ranks 0 so a
+# malformed lock file never blocks a conversion.
+_zfslock_type_rank() {
+    case "$1" in
+        r) echo 1 ;;
+        w) echo 2 ;;
+        x) echo 3 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# True when $1 is strictly stronger than $2 (r < w < x).
+_zfslock_type_stronger() {
+    [[ $(_zfslock_type_rank "$1") -gt $(_zfslock_type_rank "$2") ]]
+}
+
+# Rewrite an existing lock file in place with a stronger type. Keeps the
+# holder's pid and script (the owning process is unchanged, and the stale
+# check matches on that script); only type, description, and the acquired
+# timestamp move. The caller must already hold the lock with the same PID.
+# Usage: _zfslock_convert_lock_file <lockfile> <new_type> [description]
+_zfslock_convert_lock_file() {
+    local lockfile="$1" new_type="$2" description="${3:-}"
+    local dataset pid script timestamp tmpfile
+
+    dataset=$(_zfslock_read_field "$lockfile" "dataset") || dataset=""
+    pid=$(_zfslock_read_field "$lockfile" "pid") || pid=$$
+    script=$(_zfslock_read_field "$lockfile" "script")
+    [[ -n "${script:-}" ]] || script=$(_zfslock_scriptname)
+    timestamp=$(date -Iseconds)
+    tmpfile="${lockfile}.tmp.$$"
+    {
+        printf '{"dataset":"%s","type":"%s","pid":%s,"script":"%s",' \
+            "$dataset" "$new_type" "$pid" "$script"
+        printf '"acquired":"%s","description":"%s"}\n' \
+            "$timestamp" "$description"
+    } > "$tmpfile" || {
+        rm -f "$tmpfile"
+        return 1
+    }
+    mv -f "$tmpfile" "$lockfile" || {
+        rm -f "$tmpfile"
+        return 1
+    }
 }
 
 # Check if requested type conflicts with existing lock considering hierarchy
@@ -735,13 +782,34 @@ _zfslock_remote_acquire() {
 
     remote_lockfile="$zfslock_locks_dir/$(_zfslock_encode "$dataset").lock"
 
+    remote_agent=$(_zfslock_remote_agent "$host") || return 2
+
     # Re-entrant remote lock (same process already holds it).
     if [[ -n "${_zfslock_remote_pids[$remote_lockfile]:-}" ]]; then
+        local held_type="${_zfslock_remote_types[$remote_lockfile]:-}"
+        if _zfslock_type_stronger "$type" "$held_type"; then
+            # Same-process conversion, remote variant: ask the storage-side
+            # agent to rewrite the held lock's type. Keeps the SSH-held lock
+            # continuous — no release/re-acquire window on the storage node.
+            local convert_output
+            if convert_output=$(_zfslock_remote_exec "$host" \
+                    "$remote_agent convert $(printf '%q' "$remote_lockfile")" \
+                    "$(printf '%q' "$type") $(printf '%q' "$description")" 2>/dev/null) \
+                && [[ "$convert_output" == CONVERTED\ * ]]; then
+                _zfslock_remote_types[$remote_lockfile]="$type"
+                log_msg "VERB: Converted remote lock on $dataset from" \
+                    "'${held_type:-?}' to '$type'."
+            else
+                # Older agent or convert refusal: keep the held (weaker)
+                # lock — the fence never drops, it just stays at the
+                # previous strength until both nodes run this version.
+                log_msg "VERB: Remote agent cannot convert lock on $dataset" \
+                    "to '$type'; keeping held '${held_type:-?}'."
+            fi
+        fi
         zfslock_id="REENTRY:REMOTE:$remote_lockfile"
         return 0
     fi
-
-    remote_agent=$(_zfslock_remote_agent "$host") || return 2
 
     tmpfile=$(mktemp "${zfslock_locks_dir}/.remote-acquire.XXXXXX") || return 2
 
@@ -784,6 +852,7 @@ _zfslock_remote_acquire() {
         remote_lockfile="${line#LOCKED }"
         _zfslock_remote_pids[$remote_lockfile]=$ssh_pid
         _zfslock_remote_hosts[$remote_lockfile]=$host
+        _zfslock_remote_types[$remote_lockfile]=$type
         zfslock_id="REMOTE:$remote_lockfile"
         return 0
     fi
@@ -894,6 +963,25 @@ zfslock_acquire() {
 
     # Handle re-entrant locking (same PID already holds the lock)
     if [[ -n "$zfslock_reentry" ]]; then
+        local reentry_type
+        reentry_type=$(_zfslock_read_field "$zfslock_reentry" "type" || echo "")
+        if _zfslock_type_stronger "$type" "$reentry_type"; then
+            # Same-process conversion to a stronger type: the caller needs
+            # destroy-strength exclusion while it already holds a write lock
+            # (zfs-send-receive's full-copy destination, for example). The
+            # conflict check above already ran against every other holder,
+            # so rewriting the type here keeps the lock continuous — there
+            # is no release/re-acquire window for another job to slip into.
+            if ! _zfslock_convert_lock_file "$zfslock_reentry" "$type" "$description"; then
+                log_msg "WARN: Failed to convert lock $zfslock_reentry to type '$type'."
+                return 2
+            fi
+            log_msg "VERB: Converted lock on $dataset from '${reentry_type:-?}' to '$type'."
+            # A real lock again: release works normally and the pidfile
+            # already lists this path from the original acquisition.
+            zfslock_id="$zfslock_reentry"
+            return 0
+        fi
         # Mark as reentry so release knows not to actually release
         zfslock_id="REENTRY:$zfslock_reentry"
         return 0  # Reuse existing lock
@@ -1069,6 +1157,7 @@ zfslock_release() {
             _zfslock_remote_force_release "$remote_host" "$remote_lockfile" 2>/dev/null || true
         fi
         unset "_zfslock_remote_hosts[$remote_lockfile]"
+        unset "_zfslock_remote_types[$remote_lockfile]"
         rm -f "$lock_id"
         return 0
     fi
@@ -1126,6 +1215,7 @@ zfslock_release_all() {
     done
     _zfslock_remote_pids=()
     _zfslock_remote_hosts=()
+    _zfslock_remote_types=()
 }
 
 # Determine whether interactive conflict resolution is safe.

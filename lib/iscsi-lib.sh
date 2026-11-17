@@ -59,6 +59,15 @@ declare -gA iscsi_teardown=()
 : "${ISCSI_ENCRYPTED_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}"\
 "/iscsi-encrypted-luns.conf}"
 
+# File-scoped advisory locks serializing read-modify-write access to the
+# two shared iSCSI authority files. The lock files carry the same names the
+# Python side uses (python/file_locking.py), so bash and GUI writers
+# interoperate through the system flock. Separate locks per file keep
+# unrelated operations concurrent; only same-file edits serialize.
+: "${ISCSI_MANIFEST_LOCK:=${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock}"
+: "${ISCSI_ENCRYPTED_CONF_LOCK:=${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}"\
+"/.encrypted_luns.lock}"
+
 # Legacy fallback: if the new path does not exist and the legacy path does, use
 # the legacy path so existing installs keep working before the Step 5 migration.
 if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
@@ -930,15 +939,25 @@ detect_pool_identity() {
 }
 
 # Remove a backstore name from the expected-backstores manifest if present.
+# The read-modify-write runs under the manifest's file lock; the drop uses a
+# tmp file and an atomic rename (mode copied from the original) so unlocked
+# readers never observe a partial file.
 function manifest_remove_backstore {
     local bsname="$1"
     if [[ -f "$ISCSI_MANIFEST" ]] && grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
-        # Drop the exact-line match with awk (fixed string, no regex);
-        # cat back into the original path keeps the file inode and mode.
-        awk -v b="$bsname" '$0 != b' "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.tmp"
-        cat -- "${ISCSI_MANIFEST}.tmp" > "$ISCSI_MANIFEST"
-        rm -f -- "${ISCSI_MANIFEST}.tmp"
-        log_msg "INFO: Removed ${bsname} from expected-backstores manifest"
+        mkdir -p -- "$(dirname -- "$ISCSI_MANIFEST_LOCK")"
+        (
+            flock -x 9 || exit 1
+            # Re-check under the lock: a concurrent writer may have removed
+            # the line between the outer guard and here.
+            if grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
+                # Drop the exact-line match with awk (fixed string, no regex).
+                awk -v b="$bsname" '$0 != b' "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.tmp"
+                chmod --reference="$ISCSI_MANIFEST" "${ISCSI_MANIFEST}.tmp" 2>/dev/null || true
+                mv -f -- "${ISCSI_MANIFEST}.tmp" "$ISCSI_MANIFEST"
+                log_msg "INFO: Removed ${bsname} from expected-backstores manifest"
+            fi
+        ) 9>>"$ISCSI_MANIFEST_LOCK"
     fi
 }
 
@@ -946,8 +965,13 @@ function manifest_remove_backstore {
 function manifest_add_backstore {
     local bsname="$1"
     if [[ -f "$ISCSI_MANIFEST" ]] && ! grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
-        echo "$bsname" >> "$ISCSI_MANIFEST"
-        log_msg "INFO: Added ${bsname} to expected-backstores manifest"
+        mkdir -p -- "$(dirname -- "$ISCSI_MANIFEST_LOCK")"
+        (
+            flock -x 9 || exit 1
+            grep -qxF -- "$bsname" "$ISCSI_MANIFEST" \
+                || echo "$bsname" >> "$ISCSI_MANIFEST"
+            log_msg "INFO: Added ${bsname} to expected-backstores manifest"
+        ) 9>>"$ISCSI_MANIFEST_LOCK"
     fi
 }
 
@@ -963,12 +987,21 @@ _encrypted_conf_has_prefix() {
 function encrypted_conf_remove_backstore {
     local bsname="$1"
     if _encrypted_conf_has_prefix "$bsname"; then
-        # Drop the anchored line (prefix match via index, no regex).
-        awk -v b="${bsname}:" 'index($0, b) != 1' "$ISCSI_ENCRYPTED_CONF" \
-            > "${ISCSI_ENCRYPTED_CONF}.tmp"
-        cat -- "${ISCSI_ENCRYPTED_CONF}.tmp" > "$ISCSI_ENCRYPTED_CONF"
-        rm -f -- "${ISCSI_ENCRYPTED_CONF}.tmp"
-        log_msg "INFO: Removed ${bsname} from encrypted LUNs config"
+        mkdir -p -- "$(dirname -- "$ISCSI_ENCRYPTED_CONF_LOCK")"
+        (
+            flock -x 9 || exit 1
+            # Re-check under the lock: a concurrent writer may have removed
+            # the entry between the outer guard and here.
+            if _encrypted_conf_has_prefix "$bsname"; then
+                # Drop the anchored line (prefix match via index, no regex).
+                awk -v b="${bsname}:" 'index($0, b) != 1' "$ISCSI_ENCRYPTED_CONF" \
+                    > "${ISCSI_ENCRYPTED_CONF}.tmp"
+                chmod --reference="$ISCSI_ENCRYPTED_CONF" \
+                    "${ISCSI_ENCRYPTED_CONF}.tmp" 2>/dev/null || true
+                mv -f -- "${ISCSI_ENCRYPTED_CONF}.tmp" "$ISCSI_ENCRYPTED_CONF"
+                log_msg "INFO: Removed ${bsname} from encrypted LUNs config"
+            fi
+        ) 9>>"$ISCSI_ENCRYPTED_CONF_LOCK"
     fi
 }
 
@@ -979,8 +1012,13 @@ function encrypted_conf_add_backstore {
     local zvol_dev="$2"
     local target_short="$3"
     if ! _encrypted_conf_has_prefix "$bsname"; then
-        echo "${bsname}:${zvol_dev}:${target_short}" >> "$ISCSI_ENCRYPTED_CONF"
-        log_msg "INFO: Added ${bsname} to encrypted LUNs config"
+        mkdir -p -- "$(dirname -- "$ISCSI_ENCRYPTED_CONF_LOCK")"
+        (
+            flock -x 9 || exit 1
+            _encrypted_conf_has_prefix "$bsname" \
+                || echo "${bsname}:${zvol_dev}:${target_short}" >> "$ISCSI_ENCRYPTED_CONF"
+            log_msg "INFO: Added ${bsname} to encrypted LUNs config"
+        ) 9>>"$ISCSI_ENCRYPTED_CONF_LOCK"
     fi
 }
 

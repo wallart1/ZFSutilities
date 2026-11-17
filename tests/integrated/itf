@@ -25,8 +25,9 @@
 #                                     DONE, GREEN run labs past the age gate
 #                                     (default 24h; red labs kept unless
 #                                     --force; plan-only until --apply)
-#   itf iso fetch [debian|pve|ubuntu]  download installer ISO to dev cache
-#   itf iso upload [BASE] [debian|pve|ubuntu]
+#   itf iso fetch [debian|pve|ubuntu|mint]
+#                                     download installer ISO to dev cache
+#   itf iso upload [BASE] [debian|pve|ubuntu|mint]
 #                                     upload cached ISO to base ISO storage
 #   itf vmimage status                VM-OS disk image cache state
 #   itf vmimage build [--force] [--disk-gb N]
@@ -34,13 +35,15 @@
 #                                     preseed Debian with the guest agent;
 #                                     self-verified boot; cached gzipped)
 #   itf template status               baseline templates presence + stamp
-#   itf template build [--base B] [--profile storage|compute|ubuntu]
+#   itf template build [--base B] [--profile storage|compute|ubuntu|mint]
 #                                     [--sw-source ..] [--force]
 #                                     rebuild a baseline template (storage:
 #                                     Debian + product; compute: PVE from the
 #                                     auto-installer ISO; ubuntu: Ubuntu
-#                                     Server via autoinstall, no product)
-#   itf template destroy [--base B] [--profile storage|compute|ubuntu]
+#                                     Server via autoinstall, no product;
+#                                     mint: Linux Mint Cinnamon via ubiquity
+#                                     preseed, no product)
+#   itf template destroy [--base B] [--profile storage|compute|ubuntu|mint]
 #                                     remove a baseline template
 #   itf journey list                  list available journeys
 #   itf journey run NAME              execute a journey under a run report
@@ -52,7 +55,7 @@
 #                                     (as-cloned / os-installed) instead
 #                                     of re-cloning or reinstalling
 #   itf journey run NAME --template P start from the named baseline profile
-#                                     (storage|compute|ubuntu; default
+#                                     (storage|compute|ubuntu|mint; default
 #                                     storage) — journeys that support it
 #                                     clone that profile's template
 #   itf watch [TAG]                   tail a run's live report + serial
@@ -292,11 +295,31 @@ cmd_preflight() {
                 "absent (optional) — create with: itf template build --profile ubuntu"
         fi
     fi
+    if [[ -n "${ITF_STORAGE_BASE:-}" && -n "${ITF_MINT_ISO_NAME:-}" ]]; then
+        tmpl_vmid="$(itf_template_vmid "$ITF_STORAGE_BASE" "$ITF_MINT_TEMPLATE_NAME")" \
+            || tmpl_vmid=""
+        if [[ -n "$tmpl_vmid" ]]; then
+            if tmpl_stamp="$(itf_template_stamp_read "$ITF_STORAGE_BASE" "$tmpl_vmid" \
+                    2>/dev/null)"; then
+                itf_step pass "[$ITF_STORAGE_BASE] mint template" \
+                    "$ITF_MINT_TEMPLATE_NAME (vmid $tmpl_vmid): ${tmpl_stamp#itf-stamp| }"
+            else
+                itf_step fail "[$ITF_STORAGE_BASE] mint template" \
+                    "vmid $tmpl_vmid carries no readable itf stamp — rebuild: " \
+                    "itf template build --profile mint --force"
+                fail_total=1
+            fi
+        else
+            itf_step info "[$ITF_STORAGE_BASE] mint template" \
+                "absent (optional) — create with: itf template build --profile mint"
+        fi
+    fi
 
     # Two-node extras: the PVE ISO is consumed on dev (customize rebuilds
     # the boot ISO from it), and nothing on the LAN should already hold
-    # the planned point-to-point addresses.  The Ubuntu ISO is consumed
-    # on dev the same way (itf_ubuntu_iso_customize).
+    # the planned point-to-point addresses.  The Ubuntu and Mint ISOs are
+    # consumed on dev the same way (casper kernel extraction for the
+    # direct kernel boot).
     if [[ -n "${ITF_COMPUTE_BASE:-}" && -n "${ITF_PVE_ISO_NAME:-}" ]]; then
         if [[ -s "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" ]]; then
             itf_step pass "[dev] PVE ISO cached" "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME"
@@ -310,6 +333,14 @@ cmd_preflight() {
             itf_step pass "[dev] Ubuntu ISO cached" "$ITF_CACHE_DIR/$ITF_UBUNTU_ISO_NAME"
         else
             itf_step fail "[dev] Ubuntu ISO cached" "run: itf iso fetch ubuntu"
+            fail_total=1
+        fi
+    fi
+    if [[ -n "${ITF_MINT_ISO_NAME:-}" ]]; then
+        if [[ -s "$ITF_CACHE_DIR/$ITF_MINT_ISO_NAME" ]]; then
+            itf_step pass "[dev] Mint ISO cached" "$ITF_CACHE_DIR/$ITF_MINT_ISO_NAME"
+        else
+            itf_step fail "[dev] Mint ISO cached" "run: itf iso fetch mint"
             fail_total=1
         fi
     fi
@@ -412,10 +443,11 @@ cmd_iso() {
                 debian) itf_iso_upload "$base" "$ITF_ISO_NAME" ;;
                 pve) itf_iso_upload "$base" "$ITF_PVE_ISO_NAME" ;;
                 ubuntu) itf_iso_upload "$base" "$ITF_UBUNTU_ISO_NAME" ;;
-                *) echo "usage: itf iso upload [BASE] [debian|pve|ubuntu]" >&2; return 2 ;;
+                mint) itf_iso_upload "$base" "$ITF_MINT_ISO_NAME" ;;
+                *) echo "usage: itf iso upload [BASE] [debian|pve|ubuntu|mint]" >&2; return 2 ;;
             esac
             ;;
-        *) echo "usage: itf iso fetch|upload [BASE] [debian|pve|ubuntu]" >&2; return 2 ;;
+        *) echo "usage: itf iso fetch|upload [BASE] [debian|pve|ubuntu|mint]" >&2; return 2 ;;
     esac
 }
 
@@ -452,7 +484,7 @@ cmd_template() {
         destroy) itf_template_destroy "$@" ;;
         *)
             echo "usage: itf template status|build|destroy [--base ..]" \
-                "[--profile storage|compute|ubuntu]" >&2
+                "[--profile storage|compute|ubuntu|mint]" >&2
             return 2
             ;;
     esac
@@ -595,9 +627,9 @@ cmd_journey() {
                 esac
             done
             case "$jtemplate" in
-                storage|compute|ubuntu) ;;
+                storage|compute|ubuntu|mint) ;;
                 *)
-                    echo "itf: --template must be 'storage', 'compute' or 'ubuntu'" >&2
+                    echo "itf: --template must be 'storage', 'compute', 'ubuntu' or 'mint'" >&2
                     return 2
                     ;;
             esac

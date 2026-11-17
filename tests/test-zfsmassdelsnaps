@@ -71,7 +71,7 @@ cleanup() {
         fi
         if [[ "${_mock_cleanup_gate_keep_line:-N}" == "Y" ]]; then
             local _gate_keep='INFO: Would: Keep %s@dailybackup-2025-03-27T10:00-04:00-d --- Bucket'
-            _gate_keep="${_gate_keep}; counterpart pool(s) offline.\n"
+            _gate_keep="${_gate_keep}; counterpart unavailable (offline or locked).\n"
             printf "$_gate_keep" "$pool"
         fi
         printf 'INFO: Would: Remove %s@dailybackup-2025-03-29T10:00-04:00-d --- Bucket.\n' "$pool"

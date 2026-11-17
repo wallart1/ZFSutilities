@@ -57,6 +57,11 @@ encrypted_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encry
 if [[ ! -e "$encrypted_conf" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
     encrypted_conf="/etc/iscsi-encrypted-luns.conf"
 fi
+# Same lock file lib/iscsi-lib.sh and python/file_locking.py use: the count
+# gate, the verify pass, and the regeneration below form one read-modify-
+# write extent on the manifest and must not interleave with an append or a
+# removal by another VM-disk flow.
+manifest_lock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
 
 # Generate saveconfig-boot.json by stripping encrypted backstores from saveconfig.json.
 # This config is safe to restore at boot when encryption keys haven't been loaded.
@@ -302,6 +307,13 @@ PYEOF
     exit 1
 }
 
+# Take the manifest file lock for the whole count→verify→regenerate extent.
+# fd-based so the refusal exits below keep their exact semantics; the lock
+# releases at the explicit close after the regeneration (and at exit).
+mkdir -p -- "$(dirname -- "$manifest_lock")"
+exec 9>>"$manifest_lock"
+flock -x 9
+
 # Count expected backstores from manifest (ignore comments and blank lines).
 # Each valid entry is exactly vm-<vmid>-disk-<N>; validated with a glob shape
 # test plus fixed-string digit checks on the numeric parts (no regex).
@@ -382,6 +394,10 @@ generate_boot_config
 # Keep the authoritative manifest in sync with the just-saved config so that
 # future runs compare against the true current state.
 regenerate_expected_backstores_manifest
+
+# The manifest read-modify-write extent is over; release the file lock.
+flock -u 9
+exec 9>&-
 
 # Record the pool-resident LUN map (bare-metal restore resilience): the map
 # on every online pool stays as fresh as the last LUN change. Best-effort —

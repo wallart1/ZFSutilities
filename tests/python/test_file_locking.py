@@ -99,6 +99,8 @@ class TestLockPathDefaults(unittest.TestCase):
         "ZFSUTILITIES_LOG_INDEX_LOCK_PATH",
         "ZFSUTILITIES_SCRUB_STATE_LOCK_PATH",
         "ZFSUTILITIES_SURFACE_STATE_LOCK_PATH",
+        "ZFSUTILITIES_ISCSI_MANIFEST_LOCK_PATH",
+        "ZFSUTILITIES_ENCRYPTED_LUNS_LOCK_PATH",
     )
 
     def _expected_default_dir(self):
@@ -139,6 +141,16 @@ class TestLockPathDefaults(unittest.TestCase):
         expected = os.path.join(self._expected_default_dir(), ".scrub_state.lock")
         with self._defaults_bound() as mod:
             self.assertEqual(mod.SCRUB_STATE_LOCK_PATH, expected)
+
+    def test_iscsi_manifest_lock_path_default(self):
+        expected = os.path.join(self._expected_default_dir(), ".iscsi_manifest.lock")
+        with self._defaults_bound() as mod:
+            self.assertEqual(mod.ISCSI_MANIFEST_LOCK_PATH, expected)
+
+    def test_encrypted_luns_lock_path_default(self):
+        expected = os.path.join(self._expected_default_dir(), ".encrypted_luns.lock")
+        with self._defaults_bound() as mod:
+            self.assertEqual(mod.ENCRYPTED_LUNS_LOCK_PATH, expected)
 
 
 class TestEnvironmentOverrides(unittest.TestCase):
@@ -222,6 +234,52 @@ class TestConvenienceContextManagers(unittest.TestCase):
                 import importlib
 
                 importlib.reload(fl)
+
+    def test_iscsi_manifest_lock_write_creates_lock_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.environ["ZFSUTILITIES_ISCSI_MANIFEST_LOCK_PATH"] = os.path.join(
+                tmpdir, "iscsi_manifest.lock"
+            )
+            try:
+                import importlib
+
+                mod = importlib.reload(fl)
+                self.assertFalse(os.path.exists(mod.ISCSI_MANIFEST_LOCK_PATH))
+                with mod.iscsi_manifest_lock_write():
+                    self.assertTrue(os.path.exists(mod.ISCSI_MANIFEST_LOCK_PATH))
+            finally:
+                del os.environ["ZFSUTILITIES_ISCSI_MANIFEST_LOCK_PATH"]
+                import importlib
+
+                importlib.reload(fl)
+
+    def test_encrypted_luns_lock_read_creates_lock_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.environ["ZFSUTILITIES_ENCRYPTED_LUNS_LOCK_PATH"] = os.path.join(
+                tmpdir, "encrypted_luns.lock"
+            )
+            try:
+                import importlib
+
+                mod = importlib.reload(fl)
+                self.assertFalse(os.path.exists(mod.ENCRYPTED_LUNS_LOCK_PATH))
+                with mod.encrypted_luns_lock_read():
+                    self.assertTrue(os.path.exists(mod.ENCRYPTED_LUNS_LOCK_PATH))
+            finally:
+                del os.environ["ZFSUTILITIES_ENCRYPTED_LUNS_LOCK_PATH"]
+                import importlib
+
+                importlib.reload(fl)
+
+    def test_iscsi_manifest_write_excludes_bash_side_flock(self):
+        # The bash writers take the same lock with the system flock command;
+        # a child holding it exclusively must block our write context.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = os.path.join(tmpdir, "iscsi_manifest.lock")
+            with _child_holding_flock(self, lock_path, "ex"):
+                with self.assertRaises(TimeoutError):
+                    with fl.file_lock(lock_path, fcntl.LOCK_EX, timeout=0.2):
+                        pass
 
 
 if __name__ == "__main__":

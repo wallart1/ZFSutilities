@@ -8,21 +8,24 @@ Provides:
 - Helpers for the pre-installed systemd scrub timers
 """
 
+import fcntl
 import inspect
 import os
 import re
 import subprocess
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 
 import feature_config
+import file_locking
 import session_log
 from backup_config import log_msg as _base_log_msg
 from config_core import get_paths_config, load_config
-from file_locking import scrub_state_lock_write
+from file_locking import file_lock, scrub_state_lock_write
 from zfs_repository import get_default_repository
 
 # ---------------------------------------------------------------------------
@@ -759,6 +762,59 @@ class ScrubQueue:
 
     # -- Public API --
 
+    @contextmanager
+    def transaction(self, timeout_s: float | None = None):
+        """Hold the scrub-state write lock across a reload-mutate-save cycle.
+
+        Serializes this queue's read-modify-write against other processes
+        (a headless scrub profile, another GUI instance) so one side's
+        change cannot be overwritten by a stale copy. Inside the
+        transaction, _load()/_save() skip their own locking: re-locking on
+        a second fd would self-deadlock under flock. Must not be nested.
+        Raises TimeoutError when *timeout_s* elapses before the lock is
+        granted.
+        """
+        with file_lock(file_locking.SCRUB_STATE_LOCK_PATH, fcntl.LOCK_EX, timeout=timeout_s):
+            prev_load, prev_save = self._load_locked, self._save_locked
+            self._load_locked = False
+            self._save_locked = False
+            try:
+                yield self
+            finally:
+                self._load_locked = prev_load
+                self._save_locked = prev_save
+
+    def _locked_mutate(self, description: str, mutate: Callable[[], bool]):
+        """Reload-mutate-save under the transaction lock.
+
+        *mutate* runs against freshly loaded state and returns True when
+        something changed and the result must be saved. On lock contention
+        the mutation is skipped with a WARN (fail-safe: the user's intent
+        is not half-applied) — the other holder finishes in milliseconds.
+        """
+        try:
+            with self.transaction(timeout_s=10.0):
+                self._load()
+                if mutate():
+                    self._save()
+        except TimeoutError:
+            log_msg(f"WARN: scrub queue busy — {description} skipped this cycle")
+
+    def tick_locked(self, states, timeout_s: float = 5.0):
+        """reload()+tick() as one transaction, skipping on contention.
+
+        The queue's zpool start/pause calls run inside the lock (they are
+        sub-second; pool-state gathering stays outside). On contention the
+        cycle is skipped with a WARN — state converges on the next cycle
+        from live zpool status.
+        """
+        try:
+            with self.transaction(timeout_s=timeout_s):
+                self.reload()
+                self.tick(states)
+        except TimeoutError:
+            log_msg("WARN: scrub queue state busy — skipping this tick cycle")
+
     def reload(self):
         """Re-read the persisted queue state from disk.
 
@@ -771,11 +827,16 @@ class ScrubQueue:
 
     def set_target(self, n: int):
         """Set the desired number of simultaneous scrubs."""
-        old = self.target
-        self.target = max(1, n)
-        if self.target != old:
-            log_msg(f"INFO: Scrub target changed from {old} to {self.target}")
-            self._save()
+
+        def mutate() -> bool:
+            old = self.target
+            self.target = max(1, n)
+            if self.target != old:
+                log_msg(f"INFO: Scrub target changed from {old} to {self.target}")
+                return True
+            return False
+
+        self._locked_mutate("target change", mutate)
 
     def ordered_names(self, names: set[str]) -> list[str]:
         """Return *names* ordered by the user's scrub priority.
@@ -790,16 +851,21 @@ class ScrubQueue:
 
     def set_order(self, pool_names: list[str]):
         """Persist a new scrub-queue priority order."""
-        seen = set()
-        new_order = []
-        for name in pool_names:
-            if name and name not in seen:
-                new_order.append(name)
-                seen.add(name)
-        if new_order != self.order:
-            self.order = new_order
-            log_msg("INFO: Scrub queue order updated")
-            self._save()
+
+        def mutate() -> bool:
+            seen = set()
+            new_order = []
+            for name in pool_names:
+                if name and name not in seen:
+                    new_order.append(name)
+                    seen.add(name)
+            if new_order != self.order:
+                self.order = new_order
+                log_msg("INFO: Scrub queue order updated")
+                return True
+            return False
+
+        self._locked_mutate("order update", mutate)
 
     def add_pending(self, pool_names: list[str]):
         """Add pools to the pending queue.
@@ -809,57 +875,77 @@ class ScrubQueue:
         finished a previous scrub are removed from the finished bucket so the
         buckets stay disjoint and the summary does not double-count them.
         """
-        added = []
-        for name in pool_names:
-            if name in self.active:
-                continue
-            self.finished.discard(name)
-            if name in self.paused:
-                self.paused.discard(name)
-                self.paused_by_user.discard(name)
-                self.pending.add(name)
-                added.append(name)
-            elif name not in self.pending:
-                self.pending.add(name)
-                added.append(name)
-        if added:
-            log_msg(f"INFO: Pools added to scrub queue: {', '.join(added)}")
-            self._save()
+
+        def mutate() -> bool:
+            added = []
+            for name in pool_names:
+                if name in self.active:
+                    continue
+                self.finished.discard(name)
+                if name in self.paused:
+                    self.paused.discard(name)
+                    self.paused_by_user.discard(name)
+                    self.pending.add(name)
+                    added.append(name)
+                elif name not in self.pending:
+                    self.pending.add(name)
+                    added.append(name)
+            if added:
+                log_msg(f"INFO: Pools added to scrub queue: {', '.join(added)}")
+                return True
+            return False
+
+        self._locked_mutate(f"adding {', '.join(pool_names)}", mutate)
 
     def remove_pools(self, pool_names: list[str]):
         """Remove pools from all buckets."""
-        names = set(pool_names)
-        for bucket in (self.pending, self.active, self.paused, self.finished):
-            bucket -= names
-        self.paused_by_user -= names
-        if names:
-            log_msg(f"INFO: Pools removed from scrub queue: {', '.join(sorted(names))}")
-            self._save()
+
+        def mutate() -> bool:
+            names = set(pool_names)
+            for bucket in (self.pending, self.active, self.paused, self.finished):
+                bucket -= names
+            self.paused_by_user -= names
+            if names:
+                log_msg(f"INFO: Pools removed from scrub queue: {', '.join(sorted(names))}")
+                return True
+            return False
+
+        self._locked_mutate(f"removing {', '.join(pool_names)}", mutate)
 
     def pause_pools(self, pool_names: list[str]):
         """Move specified active/pending pools to paused (user-initiated)."""
-        names = set(pool_names)
-        to_pause = names & (self.active | self.pending)
-        for name in to_pause:
-            self.active.discard(name)
-            self.pending.discard(name)
-            self.paused.add(name)
-            self.paused_by_user.add(name)
-        if to_pause:
-            log_msg(f"INFO: Scrubs paused: {', '.join(sorted(to_pause))}")
-            self._save()
+
+        def mutate() -> bool:
+            names = set(pool_names)
+            to_pause = names & (self.active | self.pending)
+            for name in to_pause:
+                self.active.discard(name)
+                self.pending.discard(name)
+                self.paused.add(name)
+                self.paused_by_user.add(name)
+            if to_pause:
+                log_msg(f"INFO: Scrubs paused: {', '.join(sorted(to_pause))}")
+                return True
+            return False
+
+        self._locked_mutate(f"pausing {', '.join(pool_names)}", mutate)
 
     def resume_pools(self, pool_names: list[str]):
         """Move specified paused pools to pending so tick() will restart them."""
-        names = set(pool_names)
-        to_resume = names & self.paused
-        for name in to_resume:
-            self.paused.discard(name)
-            self.paused_by_user.discard(name)
-            self.pending.add(name)
-        if to_resume:
-            log_msg(f"INFO: Scrubs resumed: {', '.join(sorted(to_resume))}")
-            self._save()
+
+        def mutate() -> bool:
+            names = set(pool_names)
+            to_resume = names & self.paused
+            for name in to_resume:
+                self.paused.discard(name)
+                self.paused_by_user.discard(name)
+                self.pending.add(name)
+            if to_resume:
+                log_msg(f"INFO: Scrubs resumed: {', '.join(sorted(to_resume))}")
+                return True
+            return False
+
+        self._locked_mutate(f"resuming {', '.join(pool_names)}", mutate)
 
     def _record_start_failure(self, pool_name: str) -> bool:
         """Record a failed start/resume attempt for a queued pool.

@@ -508,13 +508,19 @@ targetcli /backstores/block create "$dst_backstore" "$dst_zvol_dev" >&2 2>&1
 targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${dst_backstore}" >&2 2>&1
 log_msg "INFO: ✓ iSCSI LUN added"
 
-# Add to expected-backstores manifest
+# Add to expected-backstores manifest under its shared file lock
+# (lib/iscsi-lib.sh, python/file_locking.py).
 manifest="/etc/rtslib-fb-target/expected-backstores.txt"
 if [[ -f "$manifest" ]]; then
-    if ! grep -qxF "$dst_backstore" "$manifest"; then
-        echo "$dst_backstore" >> "$manifest"
-        log_msg "INFO: ✓ Added to expected-backstores manifest"
-    fi
+    _mlock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+    mkdir -p "$(dirname "$_mlock")"
+    (
+        flock -x 9 || exit 1
+        if ! grep -qxF "$dst_backstore" "$manifest"; then
+            echo "$dst_backstore" >> "$manifest"
+            log_msg "INFO: ✓ Added to expected-backstores manifest"
+        fi
+    ) 9>>"$_mlock"
 fi
 
 # Print only the new LUN number to stdout (captured by the caller).

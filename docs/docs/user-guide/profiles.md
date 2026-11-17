@@ -158,8 +158,13 @@ the offsite source/includes (for example, back up `NVME1/proxmox` instead of
 - Avoid scheduling the same profile so frequently that runs overlap, unless you
   intentionally want the duplicate-run suppression to keep one running while the
   other is skipped.
-- Do not run `zfsscruball` from the command line while scrub profiles are
-  actively managed by the GUI or the scheduler.
+- Running `zfsscruball` while the GUI or a scrub profile is managing scrubs is
+  safe: ZFS itself rejects a scrub that conflicts with one already running, and
+  the queue picks up externally started scrubs on its next refresh. The only
+  effect is a logged `zpool` warning, not a failed job.
+- The scrub queue's saved state (`scrub_state.json`) is shared by the GUI and
+  scrub profiles; both sides serialize their updates, so a queue change made in
+  one place is never overwritten by the other.
 - Do not edit retention policies or pool lists while a profile is
   running.
 - If a scheduled profile fails with `rc=9`, another job was holding a dataset

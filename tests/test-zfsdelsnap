@@ -771,7 +771,7 @@ test_preview_gate_rc6_keeps_offline_counterpart() {
     _pg_mkstubs "$tmpdir"
     MOCK_PG_RC=6 _pg_run "$tmpdir"
     if [[ "$_pg_output" == *"GATE:KEEP"* \
-        && "$_pg_output" == *"counterpart pool(s) offline"* ]]; then
+        && "$_pg_output" == *"counterpart unavailable (offline or locked)"* ]]; then
         test_pass
     else
         test_fail "Expected offline-counterpart keep, got: $_pg_output"

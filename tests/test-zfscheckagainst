@@ -40,6 +40,38 @@ getcommonsnap() {
 }
 EOF
 
+# Stub zfslockmanager so lock acquisitions are recorded and selectively
+# refused without touching /run/lock.
+cat > "$mock_mydir/zfslockmanager" << 'EOF'
+# Test-controlled state variables (set by the test before checkagainst runs):
+#   _ca_lock_log_file      append target for acquire/release lines
+#   _ca_lock_conflict_ds   dataset (or space-separated list) whose
+#                         acquisition refuses with rc 1
+zfslock_acquire() {
+    echo "acquire $1 $2" >> "$_ca_lock_log_file"
+    if [[ -n "${_ca_lock_conflict_ds:-}" \
+        && " ${_ca_lock_conflict_ds} " == *" $1 "* ]]; then
+        zfslock_conflict_info="mock-conflict"
+        return 1
+    fi
+    zfslock_id="mock-lock:$1"
+    zfslock_conflict_info=""
+    return 0
+}
+zfslock_release() {
+    echo "release $1" >> "$_ca_lock_log_file"
+    return 0
+}
+_zfslock_read_field() {
+    case "$2" in
+        pid) echo 4242 ;;
+        script) echo otherscript ;;
+        acquired) echo "2026-11-16T00:00:00" ;;
+    esac
+    return 0
+}
+EOF
+
 # Load the module under test.
 source "$old_mydir/bin/zfscheckagainst"
 
@@ -69,6 +101,9 @@ reset_mocks() {
     _getcommonsnap_sequence=()
     _zfscheckagainst_offsite_candidates=()
     _zfscheckagainst_checkagainst_lines=("poolA/data <offsite>/poolA/data offsite")
+    _ca_lock_log_file="$_mock_zfs_state_dir/ca_locks.log"
+    _ca_lock_conflict_ds=""
+    : > "$_ca_lock_log_file"
 }
 
 set_online_pools() {
@@ -506,6 +541,104 @@ test_literal_counterpart_deeply_nested_child() {
     assert_rc 0 "$rc"
 }
 
+test_locks_taken_and_released_on_success() {
+    test_start "Source and counterpart read locks taken and released on success"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/data fivebays/poolA/data offsite")
+    set_online_pools fivebays
+    set_existing_datasets fivebays/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+    local log
+    log=$(cat "$_ca_lock_log_file")
+    if [[ "$log" == *"acquire poolA/data r"* \
+          && "$log" == *"acquire fivebays/poolA/data r"* ]]; then
+        test_pass
+    else
+        test_fail "Missing read-lock acquisitions; log='$log'"
+    fi
+    local acquired released
+    acquired=$(grep -c "^acquire " "$_ca_lock_log_file")
+    released=$(grep -c "^release " "$_ca_lock_log_file")
+    if [[ "$acquired" -eq "$released" ]]; then
+        test_pass
+    else
+        test_fail "acquires=$acquired releases=$released (must balance)"
+    fi
+}
+
+test_busy_counterpart_blocks_deletion() {
+    test_start "Busy counterpart refuses and blocks deletion (rc 6)"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/data fivebays/poolA/data offsite")
+    set_online_pools fivebays
+    set_existing_datasets fivebays/poolA/data
+    _ca_lock_conflict_ds="fivebays/poolA/data"
+    local rc=0
+    local out
+    out=$(checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 6 "$rc"
+    if [[ "$out" == *"Cannot verify counterpart"* \
+          && "$out" == *"locked: fivebays/poolA/data"* \
+          && "$out" == *"locked by otherscript (pid 4242"* ]]; then
+        test_pass
+    else
+        test_fail "Missing busy-counterpart detail; out='$out'"
+    fi
+}
+
+test_busy_source_blocks_deletion() {
+    test_start "Busy source dataset refuses and blocks deletion (rc 6)"
+    reset_mocks
+    _ca_lock_conflict_ds="poolA/data"
+    local rc=0
+    local out
+    out=$(checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 6 "$rc"
+    if [[ "$out" == *"source dataset is locked"* ]]; then
+        test_pass
+    else
+        test_fail "Missing busy-source detail; out='$out'"
+    fi
+}
+
+test_busy_counterpart_other_row_verifies() {
+    test_start "Busy counterpart does not block when another row verifies"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=(
+        "poolA/data fivebays/poolA/data offsite"
+        "poolA/data z22tb/poolA/data offsite"
+    )
+    set_online_pools fivebays z22tb
+    set_existing_datasets fivebays/poolA/data z22tb/poolA/data
+    _ca_lock_conflict_ds="fivebays/poolA/data"
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_busy_counterparts_accumulate() {
+    test_start "Multiple busy counterparts are all named in the refusal"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=(
+        "poolA/data fivebays/poolA/data offsite"
+        "poolA/data z22tb/poolA/data offsite"
+    )
+    set_online_pools fivebays z22tb
+    set_existing_datasets fivebays/poolA/data z22tb/poolA/data
+    _ca_lock_conflict_ds="fivebays/poolA/data z22tb/poolA/data"
+    local rc=0
+    local out
+    out=$(checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 6 "$rc"
+    if [[ "$out" == *"locked: fivebays/poolA/data (locked), z22tb/poolA/data (locked)"* ]]; then
+        test_pass
+    else
+        test_fail "Missing accumulated busy list; out='$out'"
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -539,6 +672,11 @@ test_counterpart_offsite_not_at_start
 test_literal_counterpart_child_dataset
 test_offsite_counterpart_child_dataset
 test_literal_counterpart_deeply_nested_child
+test_locks_taken_and_released_on_success
+test_busy_counterpart_blocks_deletion
+test_busy_source_blocks_deletion
+test_busy_counterpart_other_row_verifies
+test_busy_counterparts_accumulate
 
 rm -rf "$mock_base"
 

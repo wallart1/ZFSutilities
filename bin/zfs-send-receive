@@ -896,35 +896,16 @@ function send-receive {
                     zfslock_release "$lock_dest"
                     continue
                 fi
-                # zfsdelfs acquires its own lock when force/allow_destructive is
-                # set. Release our destination lock so the child does not see a
-                # self-conflict, then re-acquire it after preparation.
-                if [[ $dryrun = 'N' ]]; then
-                    zfslock_release "$lock_dest"
-                fi
+                # The destination lock stays held for the whole full copy:
+                # zfsdelfs's x acquisition by this same shell converts the
+                # held w lock in place (same-PID conversion), so no other
+                # job can slip between a release and a re-acquisition here.
                 if ! prepare_destination_for_full_copy "$destfs$restorefs" "$fs"; then
                     log_msg "FATAL: Failed to prepare destination $destfs$restorefs" \
                         "for full copy."
                     zfslock_release "$lock_source"
-                    [[ $dryrun = 'N' ]] || zfslock_release "$lock_dest"
+                    zfslock_release "$lock_dest"
                     exit 8
-                fi
-                if [[ $dryrun = 'N' ]]; then
-                    lock_rc=0
-                    zfslock_wait_or_resolve "$destfs$restorefs" "w" \
-                        "send-receive dest: $fs -> $destfs$restorefs" || lock_rc=$?
-                    if [[ $lock_rc -eq 1 ]]; then
-                        log_msg "WARN: Backup operation aborted due to" \
-                            "lock conflict on destination '$destfs$restorefs'."
-                        zfslock_release "$lock_source"
-                        exit "$zfslock_rc_abort_operation"
-                    elif [[ $lock_rc -eq 2 ]]; then
-                        log_msg "INFO: Skipping dataset $fs" \
-                            "(lock conflict on destination after preparation)."
-                        zfslock_release "$lock_source"
-                        continue
-                    fi
-                    lock_dest="$zfslock_id"
                 fi
             fi
         fi

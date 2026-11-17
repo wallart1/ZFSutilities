@@ -140,6 +140,16 @@ environment-independent suite green and lists every skipped suite with its
 reason — nothing red that is not a real regression. Unexpected skips on a
 development machine are environment problems to report, never to work around.
 
+A dev host whose sudo demands a password shows the same shape for the
+root-gated surface. An unattended run cannot elevate there, so the preflight
+reports `root=MISSING test-pools=MISSING`: the rootcheck suite skips its
+root branch, and the payload e2e suites skip their pool scenarios with the
+stated reason. These skips are designed behavior, not environment problems —
+the e2e matrix's other contexts (the dev container and the `j11-payload-e2e`
+journey) carry the coverage
+([integrated-testing.md](integrated-testing.md#gui-payload-e2e-matrix)).
+An operator can still run the pool scenarios directly under `sudo`.
+
 ### CI and dev container
 
 One canonical test environment is defined in code and used by both CI and the

@@ -208,19 +208,25 @@ build_efidisk_line() {
 register_encrypted_lun() {
     local backstore_name="$1" zvol_dev="$2" target_short="$3"
     local encrypted_entry old_entry
+    local encrypted_conf_lock
+    encrypted_conf_lock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
     encrypted_entry="${backstore_name}:${zvol_dev}:${target_short}"
-    if grep -qxF "$encrypted_entry" "$encrypted_conf" 2>/dev/null; then
-        log_msg "INFO: ✓ Already in encrypted LUNs config"
-    elif grep -q "^${backstore_name}:" "$encrypted_conf" 2>/dev/null; then
-        old_entry=$(grep "^${backstore_name}:" "$encrypted_conf" | head -1)
-        sed -i "s|^${backstore_name}:.*|${encrypted_entry}|" "$encrypted_conf"
-        log_msg "WARN: Replaced encrypted LUNs config line for ${backstore_name}"
-        log_msg "WARN:   was: ${old_entry}"
-        log_msg "WARN:   now: ${encrypted_entry}"
-    else
-        echo "${encrypted_entry}" >> "$encrypted_conf"
-        log_msg "INFO: ✓ Added to encrypted LUNs config"
-    fi
+    mkdir -p -- "$(dirname -- "$encrypted_conf_lock")"
+    (
+        flock -x 9 || exit 1
+        if grep -qxF "$encrypted_entry" "$encrypted_conf" 2>/dev/null; then
+            log_msg "INFO: ✓ Already in encrypted LUNs config"
+        elif grep -q "^${backstore_name}:" "$encrypted_conf" 2>/dev/null; then
+            old_entry=$(grep "^${backstore_name}:" "$encrypted_conf" | head -1)
+            sed -i "s|^${backstore_name}:.*|${encrypted_entry}|" "$encrypted_conf"
+            log_msg "WARN: Replaced encrypted LUNs config line for ${backstore_name}"
+            log_msg "WARN:   was: ${old_entry}"
+            log_msg "WARN:   now: ${encrypted_entry}"
+        else
+            echo "${encrypted_entry}" >> "$encrypted_conf"
+            log_msg "INFO: ✓ Added to encrypted LUNs config"
+        fi
+    ) 9>>"$encrypted_conf_lock"
 }
 
 # --- EFI initialization (runs on the compute host after zvol + LUN are set up) ---
@@ -572,13 +578,19 @@ if is_two_node; then
 
     # --- Add to expected-backstores manifest ---
     # safe-iscsi-save refuses to run without this manifest, so the first
-    # disk on a fresh install must create it rather than skip the add.
+    # disk on a fresh install must create it rather than skip the add. The
+    # append runs under the manifest's shared file lock (lib/iscsi-lib.sh).
     manifest="/etc/rtslib-fb-target/expected-backstores.txt"
     mkdir -p "$(dirname "$manifest")"
-    if ! grep -q "^${backstore_name}$" "$manifest" 2>/dev/null; then
-        echo "$backstore_name" >> "$manifest"
-        log_msg "INFO: ✓ Added to expected-backstores manifest"
-    fi
+    manifest_lock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+    mkdir -p -- "$(dirname -- "$manifest_lock")"
+    (
+        flock -x 9 || exit 1
+        if ! grep -q "^${backstore_name}$" "$manifest" 2>/dev/null; then
+            echo "$backstore_name" >> "$manifest"
+            log_msg "INFO: ✓ Added to expected-backstores manifest"
+        fi
+    ) 9>>"$manifest_lock"
 
     # --- Register as encrypted LUN if applicable ---
     if [[ "$encrypted_flag" == true ]]; then

@@ -6,6 +6,7 @@ subprocess.Popen with non-blocking I/O integrated into the GTK main loop.
 """
 
 import codecs
+import fcntl
 import inspect
 import os
 import pty
@@ -21,6 +22,7 @@ from datetime import datetime
 import session_log
 from backup_history import _parse_human_size, add_history_entry, build_entry
 from command_builders import _PV_RATE_RE, _diagnose_rsync_failure, _get_local_hostname
+from file_locking import RSYNC_LOG_LOCK_PATH, file_lock
 from gi.repository import GLib
 from logging_config import log_msg, restore_session_log, set_session_log
 from notifications import notify_run_finished
@@ -115,17 +117,45 @@ def _truncate_rsync_log():
     """Clear the rsync log only when its mtime is from a previous day.
 
     This keeps one day of rsync output appended together; the first backup
-    run of the day truncates the file, and later runs append.
+    run of the day truncates the file, and later runs append. The exclusive
+    file lock serializes against live appenders (which hold the shared lock
+    for their handle's lifetime), so a midnight truncate can never land
+    under a run that is still appending.
     """
     _ensure_rsync_log_dir()
     try:
         if os.path.exists(RSYNC_LOG_FILE):
-            mtime_date = datetime.fromtimestamp(os.path.getmtime(RSYNC_LOG_FILE)).date()
-            today_date = datetime.now().date()
-            if mtime_date < today_date:
-                os.truncate(RSYNC_LOG_FILE, 0)
+            with file_lock(RSYNC_LOG_LOCK_PATH, fcntl.LOCK_EX):
+                mtime_date = datetime.fromtimestamp(os.path.getmtime(RSYNC_LOG_FILE)).date()
+                today_date = datetime.now().date()
+                if mtime_date < today_date:
+                    os.truncate(RSYNC_LOG_FILE, 0)
     except OSError:
         pass
+
+
+def _close_rsync_log_handle(runner):
+    """Close the runner's rsync log handle and release its shared lock.
+
+    Module-level helper so both the step-exit path and abnormal-end cleanup
+    can call it with the same semantics; safe when nothing is open.
+    """
+    if runner._rsync_log_lock_fd is not None:
+        try:
+            fcntl.flock(runner._rsync_log_lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(runner._rsync_log_lock_fd)
+        except OSError:
+            pass
+        runner._rsync_log_lock_fd = None
+    if runner._rsync_log_fh:
+        try:
+            runner._rsync_log_fh.close()
+        except OSError:
+            pass
+        runner._rsync_log_fh = None
 
 
 def _issuer_log_location(
@@ -179,6 +209,8 @@ class BackupRunner:
         self._stderr_source = None
         self._on_complete = None
         self._rsync_log_fh = None
+        # fd holding the shared rsync-log lock while _rsync_log_fh is open.
+        self._rsync_log_lock_fd = None
         self._current_pv_text = ""
         self._pty_master_fd = None
         self._session_log_file = None
@@ -504,6 +536,25 @@ class BackupRunner:
             try:
                 _ensure_rsync_log_dir()
                 self._rsync_log_fh = open(RSYNC_LOG_FILE, "a")  # noqa: SIM115
+                # Shared lock for the handle's lifetime: concurrent runners
+                # append side by side, while the exclusive daily truncate
+                # waits for every appender to close first. Fail-open —
+                # losing the lock must not lose the log output.
+                try:
+                    lock_dir = os.path.dirname(RSYNC_LOG_LOCK_PATH)
+                    if lock_dir:
+                        os.makedirs(lock_dir, exist_ok=True)
+                    self._rsync_log_lock_fd = os.open(
+                        RSYNC_LOG_LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o644
+                    )
+                    fcntl.flock(self._rsync_log_lock_fd, fcntl.LOCK_SH)
+                except OSError:
+                    if self._rsync_log_lock_fd is not None:
+                        try:
+                            os.close(self._rsync_log_lock_fd)
+                        except OSError:
+                            pass
+                    self._rsync_log_lock_fd = None
                 self._rsync_log_fh.write(f"\n{'=' * 60}\n{desc}\n{'=' * 60}\n")
             except OSError:
                 self._rsync_log_fh = None
@@ -744,9 +795,7 @@ class BackupRunner:
                     desc = step.description
                     self._log(f"INFO: {desc} ... done (rc={rc})")
                     self._log(f"VERB: Rsync log on {_get_local_hostname()}: {RSYNC_LOG_FILE}")
-                    if self._rsync_log_fh:
-                        self._rsync_log_fh.close()
-                        self._rsync_log_fh = None
+                    _close_rsync_log_handle(self)
                 if rc != 0:
                     self._log(f"WARN: Step exited with rc={rc}")
                     if step.is_rsync:
@@ -882,6 +931,9 @@ class BackupRunner:
                         pipe.close()
                     except OSError:
                         pass
+        # Release the rsync log handle (and its shared lock) on abnormal
+        # ends; the normal step-exit path closes it after "done".
+        _close_rsync_log_handle(self)
 
     def _finish(self, rc=0):
         self.running = False

@@ -79,6 +79,12 @@ itf_guest_create() {
     # installer must see exactly one disk.  Journeys attach the pool disk
     # by hotplug once the OS is up (see J01 Stage D).
     local sysdisk="$ITF_GUEST_SYSTEM_DISK_GB" pooldisk=0 iso="" start=0 freeze=0
+    # vga serial0 is the norm: installers here are serial-console driven,
+    # and a serial VGA keeps every byte of boot output on the serial line.
+    # Desktop legs (mint) pass --vga std — a GUI installer and the Cinnamon
+    # session it installs need a real display device (serial0 socket stays
+    # attached for the kernel console either way).
+    local vga=serial0
     local key
 
     while (( $# > 0 )); do
@@ -91,6 +97,7 @@ itf_guest_create() {
             --sysdisk) sysdisk="$2"; shift 2 ;;
             --pooldisk) pooldisk="$2"; shift 2 ;;
             --iso) iso="$2"; shift 2 ;;
+            --vga) vga="$2"; shift 2 ;;
             --freeze) freeze=1; shift ;;
             --start) start=1; shift ;;
             *) echo "itf: unknown itf_guest_create option: $key" >&2; return 2 ;;
@@ -121,7 +128,7 @@ itf_guest_create() {
         --net0 "${ITF_GUEST_NET_MODEL},bridge=${ITF_BRIDGE}"
         --agent enabled=1
         --serial0 socket
-        --vga serial0
+        --vga "$vga"
         --onboot 0
     )
     if (( freeze )); then
@@ -612,21 +619,23 @@ itf_iso_path() {
     printf '%s/template/iso/%s' "$ITF_ISO_DIR" "${1:-$ITF_ISO_NAME}"
 }
 
-# itf_iso_fetch [debian|pve|ubuntu]
+# itf_iso_fetch [debian|pve|ubuntu|mint]
 #
 # Downloads an installer ISO into the dev-side cache directory.  The
 # selector names the configured ISO (Debian netinst for storage-role
 # installs, Proxmox VE ISO for compute-role installs, Ubuntu Server LTS
-# for the ubuntu probe-template profile); it defaults to the Debian one
-# so existing callers keep working.
+# for the ubuntu probe-template profile, Linux Mint Cinnamon for the
+# mint desktop-template profile); it defaults to the Debian one so
+# existing callers keep working.
 itf_iso_fetch() {
     local sel="${1:-debian}" url name
     case "$sel" in
         debian) url="$ITF_DEBIAN_ISO_URL"; name="$ITF_ISO_NAME" ;;
         pve) url="$ITF_PVE_ISO_URL"; name="$ITF_PVE_ISO_NAME" ;;
         ubuntu) url="$ITF_UBUNTU_ISO_URL"; name="$ITF_UBUNTU_ISO_NAME" ;;
+        mint) url="$ITF_MINT_ISO_URL"; name="$ITF_MINT_ISO_NAME" ;;
         *)
-            echo "itf: unknown ISO selector: $sel (expected debian|pve|ubuntu)" >&2
+            echo "itf: unknown ISO selector: $sel (expected debian|pve|ubuntu|mint)" >&2
             return 2
             ;;
     esac
@@ -1170,6 +1179,110 @@ itf_ubuntu_boot_setup() {
     echo "$ITF_UBUNTU_ISO_NAME"
 }
 
+# itf_mint_boot_setup <base-host> <preseed-file>
+#
+# The mint profile's direct kernel boot: extracts the casper kernel and
+# initrd from the cached Mint ISO, PREPENDS a cpio segment carrying the
+# ubiquity preseed as /preseed.cfg to the initrd (casper's 24preseed loads
+# that file from the initramfs unconditionally — the url= network fetch is
+# netboot-only, so the preseed must ride the medium we control), and
+# uploads the ISO + kernel + patched initrd to the base's ISO directory.
+# Mirrors itf_ubuntu_boot_setup; the preseed varies per render (ssh key,
+# random password), so the patched initrd rebuilds whenever the preseed
+# content changes (stamp file), while the pristine extract is reused.
+itf_mint_boot_setup() {
+    local base="$1" preseed="$2"
+    [[ -s "$ITF_CACHE_DIR/$ITF_MINT_ISO_NAME" ]] || {
+        echo "itf: Mint ISO not cached — run 'itf iso fetch mint' first" >&2
+        return 1
+    }
+    [[ -s "$preseed" ]] || {
+        echo "itf: ubiquity preseed not rendered: $preseed" >&2
+        return 1
+    }
+    local tool
+    for tool in 7z cpio; do
+        if ! command -v "$tool" > /dev/null 2>&1; then
+            echo "itf: $tool is required to build the mint boot pieces (not on PATH)" >&2
+            return 1
+        fi
+    done
+
+    local bootdir="$ITF_CACHE_DIR/mint-boot"
+    if [[ ! -s "$bootdir/vmlinuz" || ! -s "$bootdir/initrd.lz" ]]; then
+        rm -rf "$bootdir"
+        mkdir -p "$bootdir" || return 1
+        [[ -n "${ITF_RUN_DIR:-}" ]] \
+            && itf_step_start "casper kernel extract" \
+                "vmlinuz + initrd.lz from the Mint ISO" > /dev/null
+        if ! 7z e -y -o"$bootdir" "$ITF_CACHE_DIR/$ITF_MINT_ISO_NAME" \
+                casper/vmlinuz casper/initrd.lz > /dev/null 2>&1; then
+            rm -rf "$bootdir"
+            echo "itf: casper kernel/initrd extraction failed (unexpected ISO layout?)" >&2
+            return 1
+        fi
+        echo "itf: casper kernel+initrd extracted to $bootdir" >&2
+    fi
+
+    # Patched initrd = the preseed cpio segment PREPENDED to the pristine
+    # initrd (segment holds preseed.cfg at its root = /preseed.cfg in the
+    # initramfs).  PREPENDED, never appended: the kernel unpacks
+    # concatenated segments in order, and the pristine Mint initrd ends
+    # with a few hundred trailing bytes after its last (zstd) segment that
+    # the kernel cannot identify — observed live: "Initramfs unpacking
+    # failed: invalid magic", unpacking STOPS there and anything appended
+    # behind the garbage is never read.  Segment-first is the same
+    # uncompressed-cpio-then-compressed-body layout every distribution
+    # ships for microcode initrds, so the pristine tail stays exactly as
+    # (harmlessly) broken as a stock boot.
+    local patched="$bootdir/initrd-itf"
+    local stamp="$bootdir/initrd-itf.preseed"
+    local seed_dir="$bootdir/preseed-seg"
+    if [[ ! -s "$patched" || ! -f "$stamp" \
+            || "$(cat "$stamp" 2>/dev/null)" \
+                != "$(sha256sum "$preseed" | awk '{print $1}')" ]]; then
+        [[ -n "${ITF_RUN_DIR:-}" ]] \
+            && itf_step_start "ubiquity preseed baked" \
+                "cpio segment prepended to the casper initrd" > /dev/null
+        rm -rf "$seed_dir"
+        mkdir -p "$seed_dir" || return 1
+        cp "$preseed" "$seed_dir/preseed.cfg" || return 1
+        if ! (cd "$seed_dir" && printf 'preseed.cfg\n' \
+                | cpio -o -H newc --quiet > "$seed_dir/segment"); then
+            rm -rf "$seed_dir"
+            echo "itf: preseed cpio segment build failed" >&2
+            return 1
+        fi
+        cat "$seed_dir/segment" "$bootdir/initrd.lz" > "$patched" || return 1
+        rm -rf "$seed_dir"
+        sha256sum "$preseed" | awk '{print $1}' > "$stamp"
+    fi
+
+    itf_iso_upload "$base" "$ITF_MINT_ISO_NAME" >&2 || return 1
+    # Kernel and patched initrd ride the same staged upload path as ISOs
+    # (the unprivileged put lands in /tmp, the guarded move places them
+    # where qemu reads them for -kernel/-initrd).  The remote initrd keeps
+    # the plain name itf-mint-initrd even though the local build carries
+    # the -itf suffix (the pristine extract stays untouched beside it).
+    local piece src tmp
+    for piece in vmlinuz initrd; do
+        src="$bootdir/$piece"
+        [[ "$piece" == initrd ]] && src="$bootdir/initrd-itf"
+        tmp="/tmp/itf-mint-${piece}-$$"
+        if ! itf_base_put "$base" "$src" "$tmp"; then
+            itf_base_exec "$base" "rm -f $(printf '%q' "$tmp")" || true
+            return 1
+        fi
+        if ! itf_base_exec "$base" \
+                "mv $(printf '%q' "$tmp") $(printf '%q' "$ITF_ISO_DIR/itf-mint-${piece}")"; then
+            itf_base_exec "$base" "rm -f $(printf '%q' "$tmp")" || true
+            return 1
+        fi
+        itf_log_action "$base" "mint-boot-piece: $piece"
+    done
+    echo "$ITF_MINT_ISO_NAME"
+}
+
 # itf_preseed_render <outfile> <hostname>
 #
 # Writes a fully automated Debian preseed for a disposable test guest:
@@ -1351,4 +1464,90 @@ AUTOINSTALL
     # needs a stable instance id and the hostname.
     printf 'instance-id: iid-%s\nlocal-hostname: %s\n' "$hostname" "$hostname" \
         > "$metadata"
+}
+
+# itf_ubiquity_preseed_render <outfile>
+#
+# Writes the fully automated Mint ubiquity preseed for a disposable test
+# guest (the mint template profile): English/US/UTC, an itfadmin user with
+# a random unrecorded password, single-disk guided partitioning, and a
+# poweroff finish.  It carries NO post-install work — Mint's automatic GTK
+# finish never runs success_command (see the comment at the poweroff key),
+# so the per-guest provisioning (ssh keys, packages, serial grub) is done
+# by the stage's provision boot instead (itf_mint_provision_boot).  The
+# file is baked into the casper initrd by itf_mint_boot_setup (casper
+# loads /preseed.cfg from the initramfs itself; the url= network fetch is
+# netboot-only), so unlike the Debian/Ubuntu seeds it is never served
+# over HTTP.
+itf_ubiquity_preseed_render() {
+    local out="$1"
+
+    # The user password is a random value nobody records: a VALID crypt
+    # hash, because user-setup validates the field's shape even though
+    # PasswordAuthentication no (installed below) makes the password
+    # unusable over ssh (the same "valid hash or the installer prompts"
+    # rule as the Debian preseed and Ubuntu seed).
+    local pw_hash=""
+    pw_hash="$(openssl passwd -6 "$(head -c 32 /dev/urandom | base64 | tr -d '\n')")"
+    if [[ -z "$pw_hash" || "$pw_hash" != \$6\$* ]]; then
+        echo "itf: cannot generate user password hash — is openssl available?" >&2
+        return 1
+    fi
+
+    cat > "$out" <<PRESEED
+# Linux Mint ubiquity preseed — itf mint template profile.
+# Driven by "automatic-ubiquity" on the kernel command line (ubiquity
+# --automatic); consumed by casper's 24preseed from /preseed.cfg inside
+# the patched initrd (itf_mint_boot_setup).
+ubiquity languagechooser/language-name string English
+d-i debian-installer/locale string en_US.UTF-8
+ubiquity debian-installer/locale string en_US.UTF-8
+ubiquity time/zone string Etc/UTC
+d-i console-setup/layoutcode string us
+ubiquity keyboard-configuration/layoutcode string us
+d-i localechooser/supported-locales multiselect en_US.UTF-8
+
+# One admin user with a random unrecorded password; ssh lands as root by
+# key (success_command below), mirroring the Debian/Ubuntu baselines.
+d-i passwd/user-fullname string itf
+d-i passwd/username string itfadmin
+d-i passwd/user-password-crypted password $pw_hash
+d-i passwd/user-default-groups string adm cdrom dip lpadmin plugdev sambashare sudo
+
+# One partition, ext4, no questions: the install runs with exactly one
+# disk (the pool disk hot-plugs only after the OS is up — the same
+# one-disk-at-install-time rule as the other profiles).
+d-i partman-auto/method string regular
+d-i partman-auto/disk string /dev/sda
+d-i partman-auto/choose_recipe select atomic
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+# Updates come from the OS-update stage after the install, not from the
+# installer (a live-session download here would slow every build).
+ubiquity ubiquity/download_updates boolean false
+# The codecs page ("Multimedia codecs") owns one debconf question —
+# use_nonfree — and --automatic mode STOPS on any page whose question is
+# unanswered (observed live: the install sat at the page's Continue
+# button until a human clicked).  Answer it: no codecs on the baseline.
+ubiquity ubiquity/use_nonfree boolean false
+# Same page's remaining toggles, answered for the same reason (the
+# full desktop install, no minimal variant).
+ubiquity ubiquity/minimal_install boolean false
+
+# Power off at the end, never reboot: the direct kernel boot rides qemu
+# -kernel args that persist in the VM config, so a finishing REBOOT would
+# land straight back in the installer (the same rule as the Ubuntu seed's
+# shutdown: poweroff).
+#
+# NO success_command here — Mint's ubiquity fork never invokes it on the
+# automatic GTK path (observed live 2026-11-14: the install finished, the
+# machine powered off, and neither installer log carried any trace of the
+# hook — leaving the installed system without the guest agent, sshd, and
+# keys).  The post-install provisioning that used to live here runs in the
+# stage's deterministic provision boot instead (itf_mint_provision_boot).
+ubiquity ubiquity/poweroff boolean true
+PRESEED
 }

@@ -778,11 +778,11 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
 
     while True:
         states = get_all_pool_scrub_states()
-        # Long-lived queue instances reload before each tick (same as the GUI
-        # Pools tab / Dashboard) so changes made by another process are
-        # reflected instead of being overwritten by a stale in-memory copy.
-        queue.reload()
-        queue.tick(states)
+        # Long-lived queue instances reload+tick as one transaction (same as
+        # the GUI Pools tab / Dashboard) so changes made by another process
+        # are reflected instead of being overwritten by a stale in-memory
+        # copy, and this loop's own saves cannot overwrite them either.
+        queue.tick_locked(states)
         summary = queue.summary()
         if summary != last_summary:
             _scrub_log(

@@ -1503,11 +1503,11 @@ _restore_lock_mocks() {
 }
 
 # ---------------------------------------------------------------------------
-# Test full-copy path releases dest lock around zfsdelfs
+# Test full-copy path holds the dest lock continuously through zfsdelfs
 # ---------------------------------------------------------------------------
 
-test_full_copy_releases_dest_lock_around_zfsdelfs() {
-    test_start "Full copy releases and re-acquires dest lock around zfsdelfs"
+test_full_copy_holds_dest_lock_through_zfsdelfs() {
+    test_start "Full copy holds dest lock continuously through zfsdelfs"
 
     local op_trace="$_mock_zfs_state_dir/full_copy_ops.trace"
     local mock_delfs="$_mock_zfs_state_dir/mock_zfsdelfs"
@@ -1528,25 +1528,27 @@ test_full_copy_releases_dest_lock_around_zfsdelfs() {
     local trace
     trace=$(cat "$op_trace")
 
-    local src_lock_line dest_lock_line release_line delfs_line wait_after_line capture_lock_line
+    local src_lock_line dest_lock_line delfs_line capture_lock_line
+    local release_before_delfs wait_count
     capture_lock_line=$(echo "$trace" | grep -n "^wait:destpool$" | head -1 | cut -d: -f1)
     src_lock_line=$(echo "$trace" | grep -n "wait:srcpool/data" | head -1 | cut -d: -f1)
     dest_lock_line=$(echo "$trace" | grep -n "wait:destpool/srcpool/data" | head -1 | cut -d: -f1)
-    # First release after the dest lock: the hold-capture's lock pair sits at
-    # the head of the trace, before any per-dataset locking.
-    release_line=$(echo "$trace" | awk -v n="$dest_lock_line" \
-        'NR > n && /release:/ {print NR; exit}')
     delfs_line=$(echo "$trace" | grep -n "zfsdelfs destpool/srcpool/data" | head -1 | cut -d: -f1)
-    wait_after_line=$(echo "$trace" | grep -n "wait:destpool/srcpool/data" | tail -1 | cut -d: -f1)
+    # No release may sit between the dest lock and the destroy: that gap is
+    # where a second restore's destroy could slip in.
+    release_before_delfs=$(echo "$trace" | awk -v n="$dest_lock_line" -v d="$delfs_line" \
+        'NR > n && NR < d && /release:/ {print NR; exit}')
+    # Exactly one dest acquisition: the lock is never re-acquired after the
+    # destroy (same-PID conversion upgrades it in place inside zfsdelfs).
+    wait_count=$(echo "$trace" | grep -c "wait:destpool/srcpool/data")
 
     if [[ -n "$capture_lock_line" && -n "$src_lock_line" && \
-          -n "$dest_lock_line" && -n "$release_line" && \
-          -n "$delfs_line" && -n "$wait_after_line" && \
+          -n "$dest_lock_line" && -n "$delfs_line" && \
+          -z "$release_before_delfs" && \
+          "$wait_count" -eq 1 && \
           "$capture_lock_line" -lt "$src_lock_line" && \
           "$src_lock_line" -lt "$dest_lock_line" && \
-          "$dest_lock_line" -lt "$release_line" && \
-          "$release_line" -lt "$delfs_line" && \
-          "$delfs_line" -lt "$wait_after_line" ]]; then
+          "$dest_lock_line" -lt "$delfs_line" ]]; then
         test_pass
     else
         test_fail "Unexpected lock operation order; trace='$trace'"
@@ -1589,11 +1591,11 @@ test_full_copy_keeps_dest_lock_in_dryrun() {
 }
 
 # ---------------------------------------------------------------------------
-# Test zfsdelfs failure releases only source lock
+# Test zfsdelfs failure releases both held locks
 # ---------------------------------------------------------------------------
 
-test_full_copy_releases_dest_lock_zfsdelfs_failure() {
-    test_start "Full copy releases only source lock when zfsdelfs fails"
+test_full_copy_releases_locks_on_zfsdelfs_failure() {
+    test_start "Full copy releases both locks when zfsdelfs fails"
 
     local op_trace="$_mock_zfs_state_dir/full_copy_fail_ops.trace"
     local mock_delfs="$_mock_zfs_state_dir/mock_zfsdelfs_fail"
@@ -1617,24 +1619,22 @@ test_full_copy_releases_dest_lock_zfsdelfs_failure() {
     local trace
     trace=$(cat "$op_trace")
 
-    local src_lock_line dest_lock_line first_release_line second_release_line delfs_line
+    local src_lock_line dest_lock_line first_release_line delfs_line
     src_lock_line=$(echo "$trace" | grep -n "wait:srcpool/data" | head -1 | cut -d: -f1)
     dest_lock_line=$(echo "$trace" | grep -n "wait:destpool/srcpool/data" | head -1 | cut -d: -f1)
-    # First release after the dest lock: the hold-capture's lock pair sits at
-    # the head of the trace, before any per-dataset locking.
+    delfs_line=$(echo "$trace" | grep -n "zfsdelfs destpool/srcpool/data" | head -1 | cut -d: -f1)
+    # With the dest lock held continuously, both releases come after the
+    # failed destroy.
     first_release_line=$(echo "$trace" | awk -v n="$dest_lock_line" \
         'NR > n && /release:/ {print NR; exit}')
-    second_release_line=$(echo "$trace" | grep -n "release:" | tail -1 | cut -d: -f1)
-    delfs_line=$(echo "$trace" | grep -n "zfsdelfs destpool/srcpool/data" | head -1 | cut -d: -f1)
 
     if [[ "$rc" -eq 8 && \
           -n "$src_lock_line" && -n "$dest_lock_line" && \
-          -n "$first_release_line" && -n "$second_release_line" && \
+          -n "$first_release_line" && \
           -n "$delfs_line" && \
           "$src_lock_line" -lt "$dest_lock_line" && \
-          "$dest_lock_line" -lt "$first_release_line" && \
-          "$first_release_line" -lt "$delfs_line" && \
-          "$delfs_line" -lt "$second_release_line" ]]; then
+          "$dest_lock_line" -lt "$delfs_line" && \
+          "$delfs_line" -lt "$first_release_line" ]]; then
         test_pass
     else
         test_fail "Unexpected lock operation order or rc=$rc; trace='$trace'"
@@ -1813,9 +1813,9 @@ test_dailybackup_trailer_written_without_inherit
 test_dailybackup_trailer_suppressed_with_inherit
 test_lock_before_snapshot_creation
 test_dryrun_would_capture_property_manifest
-test_full_copy_releases_dest_lock_around_zfsdelfs
+test_full_copy_holds_dest_lock_through_zfsdelfs
 test_full_copy_keeps_dest_lock_in_dryrun
-test_full_copy_releases_dest_lock_zfsdelfs_failure
+test_full_copy_releases_locks_on_zfsdelfs_failure
 test_two_step_full_copy_multiple_snaps
 test_two_step_full_copy_single_snap
 test_two_step_full_copy_oldest_common_snap

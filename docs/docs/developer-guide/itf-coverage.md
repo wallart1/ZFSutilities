@@ -39,9 +39,12 @@ pending — is j25.
 ## Parked (standing policy)
 
 - **GUI automation** and the remaining **OS matrix** (template profiles
-  beyond storage/compute/ubuntu) — parked by standing decision; reopened
-  only by an explicit user trigger (the ubuntu profile is the one named
-  exception: the j21 probe matrix needed a 2.2-era OpenZFS leg). The
+  beyond storage/compute/ubuntu/mint) — parked by standing decision;
+  reopened only by an explicit user trigger (the ubuntu profile is the
+  one named exception before mint: the j21 probe matrix needed a
+  2.2-era OpenZFS leg; the mint profile — the Cinnamon desktop baseline
+  delivered 2026-11-14 — is the second, reopened the same way for the
+  desktop/GUI leg; no mint-consuming journey exists yet). The
   GUI on the two-node compute host has no journey coverage; requirement
   R-10 in `tests/integrated/REQUIREMENTS.md` records it.
 - The 17 test-exempt legacy `bin/` commands are permanently excluded

@@ -2205,10 +2205,7 @@ class TestRunDecodesRawBytes(unittest.TestCase):
         # the byte reaches the pipe undecoded (a bash printf escape would
         # re-encode through its locale and never produce an invalid
         # sequence).
-        child = (
-            "import sys; sys.stderr.buffer.write(b'bad byte: \\xb5 in name\\n'); "
-            "sys.exit(1)"
-        )
+        child = "import sys; sys.stderr.buffer.write(b'bad byte: \\xb5 in name\\n'); sys.exit(1)"
         result = repo._run([sys.executable, "-c", child], check=False)
         self.assertEqual(result.returncode, 1)
         # The surrounding text survives; the bad byte decoded to a

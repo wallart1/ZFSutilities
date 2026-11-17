@@ -187,11 +187,17 @@ if is_two_node && [[ -n "$backstore_name" ]]; then
     # Remove from expected-backstores manifest before saving, otherwise
     # safe-iscsi-save sees fewer active backstores than expected and refuses
     # to save, leaving the manifest stale and the Dashboard reporting the
-    # detached disk as missing.
+    # detached disk as missing. The removal runs under the manifest's shared
+    # file lock (lib/iscsi-lib.sh, python/file_locking.py).
     manifest="/etc/rtslib-fb-target/expected-backstores.txt"
     if [[ -f "$manifest" ]] && grep -q "^${backstore_name}$" "$manifest"; then
-        sed -i "/^${backstore_name}$/d" "$manifest"
-        log_msg "INFO: ✓ Removed from expected-backstores manifest"
+        manifest_lock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+        mkdir -p -- "$(dirname -- "$manifest_lock")"
+        (
+            flock -x 9 || exit 1
+            sed -i "/^${backstore_name}$/d" "$manifest"
+            log_msg "INFO: ✓ Removed from expected-backstores manifest"
+        ) 9>>"$manifest_lock"
     fi
 
     # Save config

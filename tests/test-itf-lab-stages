@@ -284,6 +284,7 @@ test_stage_os_distro_selects_renderer() {
         _rendered=""
         itf_preseed_render() { _rendered="preseed:$1"; return 0; }
         itf_autoinstall_render() { _rendered="auto:$1:$2"; return 0; }
+        itf_ubiquity_preseed_render() { _rendered="ubiquity:$1"; return 0; }
         itf_dev_ip() { echo 127.0.0.1; }
         # Fail the serve gate on purpose: the renderer dispatch happens
         # before it, so the recorded call proves the distro selection
@@ -297,6 +298,12 @@ test_stage_os_distro_selects_renderer() {
         itf_journey_stage_os g h --distro debian > /dev/null 2>&1
         echo "$?" > "$work/rc-debian"
         printf '%s' "$_rendered" > "$work/rendered-debian"
+        # Mint never reaches the serve gate (its preseed rides the initrd):
+        # the dispatch proof is the renderer call plus the clean refusal
+        # from the real itf_mint_boot_setup against an empty ISO cache.
+        itf_journey_stage_os g h --distro mint > /dev/null 2>&1
+        echo "$?" > "$work/rc-mint"
+        printf '%s' "$_rendered" > "$work/rendered-mint"
     ) > /dev/null 2>&1
     assert_rc 2 "$(cat "$work/rc-bad")"
     assert_rc 1 "$(cat "$work/rc-ubuntu")"
@@ -305,6 +312,164 @@ test_stage_os_distro_selects_renderer() {
     assert_rc 1 "$(cat "$work/rc-debian")"
     assert_contains "$(cat "$work/rendered-debian")" \
         "preseed:$work/serve/preseed-g.cfg"
+    assert_rc 1 "$(cat "$work/rc-mint")"
+    assert_contains "$(cat "$work/rendered-mint")" \
+        "ubiquity:$work/ubiquity-g.cfg"
+}
+
+test_stage_os_mint_boot_flow() {
+    test_start "stage_os mint: no HTTP, boot setup fed the preseed, vga std, auto append"
+    local work="$tmp_dir/stageos-mint-flow"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_step() { :; }
+        itf_step_start() { :; }
+        itf_artifact() { :; }
+        itf_ubiquity_preseed_render() {
+            printf 'seed\n' > "$1"
+            _calls+="render:$1 "
+            return 0
+        }
+        itf_http_serve() { _calls+="http-serve "; return 1; }
+        itf_dev_ip() { _calls+="dev-ip "; echo 127.0.0.1; }
+        # boot setup and guest create are captured through $( ): their
+        # _calls appends would die with the command-substitution subshell,
+        # so they record through the filesystem instead.
+        itf_mint_boot_setup() {
+            printf 'bootsetup:%s\n' "$2" > "$work/bootsetup-arg"
+            echo itf-mint.iso
+        }
+        itf_guest_qname() { echo "q-$1"; }
+        itf_guest_create() {
+            printf 'create:%s\n' "$(printf '%s:' "$@")" > "$work/create-args"
+            echo 8001
+        }
+        itf_qm() {
+            _calls+="qm:$(printf '%s:' "$@") "
+            return 0
+        }
+        itf_guest_ip() { echo 10.1.1.1; }
+        itf_wait_ssh() { return 0; }
+        itf_guest_snapshot() { _calls+="snap "; return 0; }
+        itf_journey_stage_os g mint-host --distro mint > /dev/null 2>&1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    # The serial phase cannot pass in the suite (no real base host), so
+    # the stage refuses there — everything BEFORE it is what we assert.
+    assert_rc 1 "$(cat "$work/rc")"
+    local calls
+    calls="$(cat "$work/calls")"
+    # The preseed is rendered into the run dir and fed to the boot setup
+    # (it rides the patched initrd — never an HTTP server).
+    assert_contains "$calls" "render:$work/ubiquity-g.cfg"
+    assert_contains "$(cat "$work/bootsetup-arg")" "bootsetup:$work/ubiquity-g.cfg"
+    if [[ "$calls" == *http-serve* || "$calls" == *dev-ip* ]]; then
+        test_fail "mint must not start the seed HTTP server (or need a dev IP)"
+    else
+        test_pass
+    fi
+    # A real VGA device for the GUI installer (serial VGA stays the
+    # default for every other distro).
+    assert_contains "$(cat "$work/create-args")" "--vga:std"
+    if [[ "$(cat "$work/create-args")" == *vga:serial0* ]]; then
+        test_fail "mint guest must not boot with the serial VGA"
+    else
+        test_pass
+    fi
+    # Direct kernel boot pieces + the automation append with the
+    # hostname riding the command line.
+    assert_contains "$calls" "itf-mint-vmlinuz"
+    assert_contains "$calls" "itf-mint-initrd"
+    assert_contains "$calls" "automatic-ubiquity"
+    assert_contains "$calls" "netcfg/get_hostname=mint-host"
+    assert_contains "$calls" "boot=casper"
+}
+
+test_mint_provision_boot_gates() {
+    test_start "mint provision boot: wires args/start/resume, gates markers + poweroff"
+    local work="$tmp_dir/provision-ok"
+    mkdir -p "$work"
+    printf 'ssh-ed25519 AAAAC3NzaTESTtest itf@dev\n' > "$work/key.pub"
+    (
+        # shellcheck disable=SC2034  # consumed by the provision boot
+        ITF_RUN_DIR="$work"
+        ITF_SSH_KEY="$work/key.pub"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_step() { :; }
+        itf_step_start() { :; }
+        itf_artifact() { :; }
+        itf_qm() {
+            _calls+="qm:$(printf '%s:' "$@") "
+            return 0
+        }
+        # Fake serial driver: record the argv, then write a green
+        # transcript (every marker 0 + the poweroff line) to --log.
+        python3() {
+            local i log=""
+            local -a argv=("$@")
+            for i in "${!argv[@]}"; do
+                [[ "${argv[$i]}" == "--log" ]] && log="${argv[$((i + 1))]}"
+            done
+            printf '%s\n' "$*" > "$work/driver-argv"
+            {
+                echo "(initramfs)"
+                for m in PROV1 PROV2 PROV3 PROV4 PROV5 PROV6 PROV7 PROV8 PROV9 PROV10 PROV11; do
+                    echo "$m=0"
+                done
+                echo "reboot: Power down"
+            } > "$log"
+        }
+        itf_mint_provision_boot base.invalid 8000 prov-host
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    local calls argv
+    calls="$(cat "$work/calls")"
+    # The provision boot reuses the casper kernel + patched initrd with a
+    # serial-only console, starts frozen, and resumes after the attach.
+    assert_contains "$calls" "itf-mint-vmlinuz"
+    assert_contains "$calls" "itf-mint-initrd"
+    assert_contains "$calls" "resume:8000"
+    argv="$(cat "$work/driver-argv")"
+    assert_contains "$argv" "openssh-server qemu-guest-agent"
+    assert_contains "$argv" "prov-host"
+    assert_contains "$argv" "ssh-ed25519 AAAAC3NzaTESTtest itf@dev"
+    assert_contains "$argv" "exit-after reboot: Power down"
+
+    # Failure variant: the apt leg reports non-zero — the gate must
+    # refuse the stage.
+    local work2="$tmp_dir/provision-apt-fail"
+    mkdir -p "$work2"
+    (
+        # shellcheck disable=SC2034
+        ITF_RUN_DIR="$work2"
+        ITF_SSH_KEY="$work/key.pub"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_step() { :; }
+        itf_step_start() { :; }
+        itf_artifact() { :; }
+        itf_qm() { return 0; }
+        python3() {
+            local -a argv=("$@") i log=""
+            for i in "${!argv[@]}"; do
+                [[ "${argv[$i]}" == "--log" ]] && log="${argv[$((i + 1))]}"
+            done
+            printf 'PROV1=0\nPROV2=0\nPROV5=100\nPROV6=100\nreboot: Power down\n' > "$log"
+        }
+        itf_mint_provision_boot base.invalid 8000 prov-host > /dev/null 2>&1
+        echo "$?" > "$work2/rc"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work2/rc")"
 }
 
 # ------------------------------------------------------------------------------
@@ -2102,6 +2267,8 @@ test_test_pools_dry_run_emits_guarded_attach
 test_single_node_lab_composes_prefix
 test_single_node_lab_propagates_pools_failure
 test_stage_os_distro_selects_renderer
+test_stage_os_mint_boot_flow
+test_mint_provision_boot_gates
 test_vmos_wait_guest_ping_arg_order
 test_vmos_stamp_short_circuit
 test_vmos_dump_command_shape

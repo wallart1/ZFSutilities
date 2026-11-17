@@ -15,7 +15,7 @@
 #         [--sw-source ..] [--force]
 #   itf template destroy [--base B] [--profile ..]  remove the template
 #
-# Three profiles share this machinery:
+# Four profiles share this machinery:
 #   storage  the Debian product baseline (site-config ITF_TEMPLATE_NAME,
 #            expected on the storage base): OS + product install + updates
 #            — the j01 first-time-user path.
@@ -30,6 +30,14 @@
 #            it is a plain OpenZFS-version leg for the j21 probe matrix,
 #            not a first-time-user baseline; freshness keys on the ISO
 #            (like compute), since there is no product version to track.
+#   mint     the Linux Mint Cinnamon desktop baseline
+#            (ITF_MINT_TEMPLATE_NAME, expected on the storage base):
+#            installed from the Mint ISO via ubiquity preseed baked into
+#            the casper initrd, then package updates.  NO product install
+#            — it is the plain desktop-OS leg (a real Cinnamon session on
+#            a real VGA device) for journeys that exercise the GUI, which
+#            install the product through the first-time-user path; like
+#            ubuntu/compute, freshness keys on the ISO.
 #
 # Rebuilds are ALWAYS from scratch, never an in-place upgrade: the baseline
 # must keep first-time-user fidelity — no version-dir drift, no
@@ -81,10 +89,10 @@ itf_template_stamp_render() {
 #
 # Validates a raw stamp and echoes it normalized (marker dropped).  Fails
 # on blank or foreign descriptions.  The source field is sw-source=
-# (storage profile), pve-iso= (compute profile) or ubuntu-iso= (ubuntu
-# profile); profile= itself is optional so stamps from before the
-# two-template split still parse (they simply never match a compute or
-# ubuntu freshness check).
+# (storage profile), pve-iso= (compute profile), ubuntu-iso= (ubuntu
+# profile) or mint-iso= (mint profile); profile= itself is optional so
+# stamps from before the two-template split still parse (they simply
+# never match a compute, ubuntu or mint freshness check).
 itf_template_stamp_parse() {
     local s="${1:-}"
     [[ "$s" == "itf-stamp| "* ]] || return 1
@@ -94,7 +102,7 @@ itf_template_stamp_parse() {
         [[ "$s" == *"$f="* ]] || return 1
     done
     [[ "$s" == *"sw-source="* || "$s" == *"pve-iso="* \
-        || "$s" == *"ubuntu-iso="* ]] || return 1
+        || "$s" == *"ubuntu-iso="* || "$s" == *"mint-iso="* ]] || return 1
     printf '%s' "$s"
 }
 
@@ -174,6 +182,20 @@ _itf_template_ubuntu_fresh() {
     [[ " $stamp " == *" profile=ubuntu ubuntu-iso=${ITF_UBUNTU_ISO_NAME} "* ]]
 }
 
+# _itf_template_mint_fresh <stamp>
+#
+# True when an existing mint-profile template's stamp already reflects
+# the configured Mint ISO.  Like the ubuntu/compute profiles, the
+# baseline carries no product, so the ISO name — which encodes the Mint
+# release — is the freshness driver; package-update drift inside is what
+# --force is for.
+_itf_template_mint_fresh() {
+    local stamp="$1"
+    [[ -n "$stamp" ]] || return 1
+    [[ -n "${ITF_MINT_ISO_NAME:-}" ]] || return 1
+    [[ " $stamp " == *" profile=mint mint-iso=${ITF_MINT_ISO_NAME} "* ]]
+}
+
 # itf_template_os_upgrade <guest-ip> [profile]
 #
 # The OS-package-update stage of the build, so every clone starts from a
@@ -187,7 +209,10 @@ _itf_template_ubuntu_fresh() {
 # health-gates the result: newest kernel running, plus the profile's
 # stack check (storage: ZFS module loadable; compute: pveversion and a
 # live pvestatd — a PVE host whose status daemon is dead is not a
-# usable compute baseline).
+# usable compute baseline; mint: the Cinnamon stack installed and its
+# display manager alive — a desktop baseline whose session manager is
+# dead is not a usable GUI leg; ZFS is deliberately NOT checked, it is
+# absent until a journey's installer puts it there).
 itf_template_os_upgrade() {
     local ip="$1" profile="${2:-storage}"
     local up_log="$ITF_RUN_DIR/template-upgrade.log"
@@ -262,6 +287,16 @@ itf_template_os_upgrade() {
             [[ "vmlinuz-$(uname -r)" == "$(basename "$newest")" ]]
             systemctl is-active --quiet pvestatd
             echo "gate-ok kernel=$(uname -r) pve=$(pveversion)"
+        '
+    elif [[ "$profile" == mint ]]; then
+        # shellcheck disable=SC2016  # the expansions run in the guest
+        gate_script='
+            set -e
+            newest=$(ls /boot/vmlinuz-* | sort -V | tail -1)
+            [[ "vmlinuz-$(uname -r)" == "$(basename "$newest")" ]]
+            dpkg-query -W -f="\${Version}" cinnamon > /dev/null
+            systemctl is-active --quiet lightdm
+            echo "gate-ok kernel=$(uname -r) cinnamon=$(dpkg-query -W -f="\${Version}" cinnamon) lightdm=active"
         '
     else
         gate_script='
@@ -364,18 +399,30 @@ itf_template_status() {
                 "(create: itf template build --profile ubuntu)"
         fi
     fi
+    if [[ -n "$sbase" && -n "${ITF_MINT_ISO_NAME:-}" ]]; then
+        vmid="$(itf_template_vmid "$sbase" "$ITF_MINT_TEMPLATE_NAME")" || vmid=""
+        if [[ -n "$vmid" ]]; then
+            stamp="$(itf_template_stamp_read "$sbase" "$vmid" 2>/dev/null)" \
+                || stamp="(no/foreign stamp — rebuild: itf template build --force)"
+            echo "  $sbase: $ITF_MINT_TEMPLATE_NAME = vmid $vmid — ${stamp#itf-stamp| }"
+        else
+            echo "  $sbase: no template '$ITF_MINT_TEMPLATE_NAME'" \
+                "(create: itf template build --profile mint)"
+        fi
+    fi
 }
 
-# itf_template_build [--base B] [--profile storage|compute|ubuntu]
+# itf_template_build [--base B] [--profile storage|compute|ubuntu|mint]
 #                    [--sw-source ..] [--force]
 #
 # Rebuilds a baseline template from scratch through the shared journey
 # stages (storage: Debian OS + product install; compute: PVE from the
-# auto-installer ISO; ubuntu: Ubuntu Server from the autoinstall seed —
-# no product install).  Refuses nothing except a fresh template without
-# --force; any failure leaves the previous template untouched and the
-# attempt behind under the name <template>-build, which the next build
-# cleans up.
+# auto-installer ISO; ubuntu: Ubuntu Server from the autoinstall seed;
+# mint: Linux Mint Cinnamon from the ubiquity preseed baked into the
+# casper initrd — ubuntu/mint carry no product install).  Refuses
+# nothing except a fresh template without --force; any failure leaves
+# the previous template untouched and the attempt behind under the name
+# <template>-build, which the next build cleans up.
 itf_template_build() {
     local sw_source="$ITF_SW_SOURCE" force=0 profile=storage base=""
     while (( $# > 0 )); do
@@ -392,8 +439,8 @@ itf_template_build() {
         *) echo "itf: --sw-source must be 'release' or 'dev-tarball'" >&2; return 2 ;;
     esac
     case "$profile" in
-        storage|compute|ubuntu) ;;
-        *) echo "itf: --profile must be 'storage', 'compute' or 'ubuntu'" >&2; return 2 ;;
+        storage|compute|ubuntu|mint) ;;
+        *) echo "itf: --profile must be 'storage', 'compute', 'ubuntu' or 'mint'" >&2; return 2 ;;
     esac
 
     local template_name
@@ -411,6 +458,14 @@ itf_template_build() {
         if [[ -z "$template_name" || -z "${ITF_UBUNTU_ISO_NAME:-}" ]]; then
             echo "itf: ubuntu profile needs ITF_UBUNTU_TEMPLATE_NAME and" \
                 "ITF_UBUNTU_ISO_URL/ITF_UBUNTU_ISO_NAME in the site config" >&2
+            return 2
+        fi
+    elif [[ "$profile" == mint ]]; then
+        template_name="${ITF_MINT_TEMPLATE_NAME:-}"
+        base="${base:-${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"
+        if [[ -z "$template_name" || -z "${ITF_MINT_ISO_NAME:-}" ]]; then
+            echo "itf: mint profile needs ITF_MINT_TEMPLATE_NAME and" \
+                "ITF_MINT_ISO_URL/ITF_MINT_ISO_NAME in the site config" >&2
             return 2
         fi
     else
@@ -433,6 +488,8 @@ itf_template_build() {
                 _itf_template_compute_fresh "$old_stamp" && fresh=1
             elif [[ "$profile" == ubuntu ]]; then
                 _itf_template_ubuntu_fresh "$old_stamp" && fresh=1
+            elif [[ "$profile" == mint ]]; then
+                _itf_template_mint_fresh "$old_stamp" && fresh=1
             else
                 _itf_template_fresh "$old_stamp" "$sw_source" && fresh=1
             fi
@@ -469,6 +526,9 @@ itf_template_build() {
     elif [[ "$profile" == ubuntu ]]; then
         itf_journey_stage_os "$build_name" "$build_hostname" \
             --base "$base" --distro ubuntu || return 1
+    elif [[ "$profile" == mint ]]; then
+        itf_journey_stage_os "$build_name" "$build_hostname" \
+            --base "$base" --distro mint || return 1
     else
         itf_journey_stage_os "$build_name" "$build_hostname" --base "$base" || return 1
         itf_journey_stage_install "$J_GUEST_IP" || return 1
@@ -496,6 +556,15 @@ itf_template_build() {
             'zfs version | head -1' 2>/dev/null)"
         src_key=ubuntu-iso
         src_val="$ITF_UBUNTU_ISO_NAME"
+    elif [[ "$profile" == mint ]]; then
+        # The version that matters on the desktop baseline is the
+        # Cinnamon stack it carries — the whole point of the mint profile
+        # (the ISO name already records the Mint release).
+        # shellcheck disable=SC2016  # the expansion runs in the guest
+        version="$(itf_guest_exec "$guest_ip" \
+            'dpkg-query -W -f="\${Version}" cinnamon' 2>/dev/null)"
+        src_key=mint-iso
+        src_val="$ITF_MINT_ISO_NAME"
     else
         version="$(itf_guest_exec "$guest_ip" \
             'cat /usr/local/lib/zfsutilities/current/VERSION' 2>/dev/null)"
@@ -558,7 +627,7 @@ itf_template_build() {
     return 0
 }
 
-# itf_template_destroy [--base B] [--profile storage|compute|ubuntu]
+# itf_template_destroy [--base B] [--profile storage|compute|ubuntu|mint]
 #
 # Removes the template.  No guest is affected: full clones are copies,
 # and linked clones (LVM thin snapshots) hold their blocks independently
@@ -574,8 +643,8 @@ itf_template_destroy() {
         esac
     done
     case "$profile" in
-        storage|compute|ubuntu) ;;
-        *) echo "itf: --profile must be 'storage', 'compute' or 'ubuntu'" >&2; return 2 ;;
+        storage|compute|ubuntu|mint) ;;
+        *) echo "itf: --profile must be 'storage', 'compute', 'ubuntu' or 'mint'" >&2; return 2 ;;
     esac
 
     local template_name
@@ -584,6 +653,9 @@ itf_template_destroy() {
         base="${base:-${ITF_COMPUTE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"
     elif [[ "$profile" == ubuntu ]]; then
         template_name="${ITF_UBUNTU_TEMPLATE_NAME:-}"
+        base="${base:-${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"
+    elif [[ "$profile" == mint ]]; then
+        template_name="${ITF_MINT_TEMPLATE_NAME:-}"
         base="${base:-${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"
     else
         template_name="${ITF_TEMPLATE_NAME:-}"

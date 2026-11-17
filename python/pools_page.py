@@ -856,11 +856,9 @@ def refresh_scrub_table(app):
     queue = app.scrub_queue
 
     # Pick up queue changes made by other processes (e.g., a headless scrub
-    # profile) before reconciling and saving.
-    queue.reload()
-
-    # Reconcile queue against live states
-    queue.tick(states)
+    # profile) and reconcile against live states as ONE transaction, so a
+    # concurrent writer's state change cannot be overwritten.
+    queue.tick_locked(states)
 
     # Build new data map
     new_data = {}

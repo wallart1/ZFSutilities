@@ -22,8 +22,8 @@ after `buildfsarray` returns because scripts are sourced, not forked.
 
 ## `$zfspoolarray`
 
-Output of `poolarray` (from [`zfsconfig`](../commands-and-modules/modules.md#zfsconfig),
-historically from `zfsallthepools`). Plain indexed array of pool names as
+Output of `poolarray` (from [`zfsconfig`](../commands-and-modules/modules.md#zfsconfig). 
+Plain indexed array of pool names as
 configured in the JSON config's `pools` key. This is a registry — it does not
 reflect import state; use `zpool list` output for that.
 
@@ -415,7 +415,7 @@ behaves exactly as before caps existed.
 
 ### Enclosure rate resolution
 
-`lib/enclosure_rate.py` is the single min() of per-enclosure rate
+`lib/enclosure_rate.py` is the single point of per-enclosure rate
 governance. One transfer's effective rate is the minimum of the per-activity
 rate limit and every configured cap of every enclosure touched by the source
 or destination pool — lower wins, because an enclosure may hold disks of
@@ -441,15 +441,14 @@ second, and a rate of zero is refused everywhere because the pacer divides
 by the rate). Comparison is numeric through `pace_stream.parse_rate` so the
 grammar cannot drift from the pacer; `zfs_repository.valid_rate_limit`
 stays the GUI-side validator of values before they reach the config. A
-zero cap saved by an older version is non-grammar now and fails open like
-any other non-grammar cap.
+zero cap saved by an older version is invalid and fails open.
 
-Fail-open policy (campaign decision): a resolver failure never blocks a
+Fail-open policy: a resolver failure never blocks a
 transfer. On a nonzero exit the bash caller runs at its own activity limit
 and logs loudly; the Python seam logs a `WARN` and returns the activity rate
-unchanged. A non-grammar cap in the config fails open the same way. The only
-hard failure kept is the pre-existing one — a configured rate with the
-pacer itself missing stays a loud FATAL.
+unchanged. An invalid cap in the config fails open the same way. The only
+hard failure is an invalid rate in the
+pacer itself, which is a loud FATAL.
 
 ### `backup` object
 
@@ -554,8 +553,7 @@ the command builders, and the runners.
 
 ### `BashStep` (`command_builders.py`)
 
-A single step in a backup, offsite, restore, or retention run. Replaces the
-loosely-typed `(cmd_list, description)` tuples used before the refactor.
+A single step in a backup, offsite, restore, or retention run.
 
 | Attribute | Type | Purpose |
 | --------- | ---- | ------- |
@@ -641,7 +639,13 @@ consumed by the Pools tab, Dashboard, and `ScrubQueue`.
 | `eta` | `str` or `None` | Estimated completion timestamp (`YYYY-MM-DD HH:MM`) computed from `remaining_seconds` |
 
 `ScrubQueue` persists pending/active/paused/finished/paused_by_user pool sets
-and a concurrency target to `/var/lib/zfsutilities/scrub_state.json`. An
+and a concurrency target to `/var/lib/zfsutilities/scrub_state.json`. Every
+mutator (`add_pending`, `remove_pools`, `pause_pools`, `resume_pools`,
+`set_order`, `set_target`) and every driver tick runs as one transactional
+reload-mutate-save cycle under the state file's flock
+(`ScrubQueue.transaction()`), so a change made by one process (the GUI, a
+headless scrub profile) can never be overwritten by a stale in-memory copy in
+another. An
 explicit `target` passed to the constructor is authoritative: it overrides the
 persisted value and is re-persisted, so the GUI's scrub-config setting and a
 scrub profile's `simultaneous` setting always take effect; omitting `target`
@@ -1007,7 +1011,7 @@ the Logs tab in sync with the final run rather than an earlier one.
 
 If the index file is missing or unreadable, the Logs tab scans log files
 directly and rebuilds the index. The file is written atomically (temp + rename)
-and ignored by log retention pruning.
+and ignored by log pruning.
 
 ## iSCSI boot-safe config
 
@@ -1083,3 +1087,34 @@ under `/run/lock/zfsutilities/.locks/`:
 
 Cleared automatically at reboot (tmpfs). Path separators and special
 characters in dataset names are URL-encoded (`%2F` for `/`, `%40` for `@`).
+
+A same-process acquire of a stronger lock type converts the held lock in
+place (`r` → `w` → `x`): the lock file is rewritten atomically with the new
+type, description, and acquired timestamp (the holder's pid and script are
+kept), after the normal conflict check runs against every other holder. A
+weaker same-process request keeps the stronger held type. This is what lets
+`zfs-send-receive` hold its destination lock through `zfsdelfs`'s destroy
+acquisition with no release/re-acquire window.
+
+## File locks
+
+Shared data files outside the dataset-lock tree serialize with advisory
+`flock` locks under `/run/lock/zfsutilities/`. Bash callers use the system
+`flock` command and Python callers use `python/file_locking.py` on the same
+lock files, so both sides interoperate:
+
+| Lock file | Protects |
+|-----------|----------|
+| `.config.lock` | `config.json` read-modify-write |
+| `.history.lock` | `history.json` |
+| `.log_index.lock` | the session-log index |
+| `.scrub_state.lock` | `scrub_state.json` — every `ScrubQueue` mutation runs as a transactional reload-mutate-save under this lock |
+| `.surface_test_state.lock` | the disk surface-test state |
+| `.snapname.lock` | snapshot-name generation (brief, global) |
+| `.iscsi_manifest.lock` | `expected-backstores.txt` appends, removals, and regenerations |
+| `.encrypted_luns.lock` | `iscsi-encrypted-luns.conf` appends and removals |
+| `.rsync_log.lock` | `rsync-backup.log` — shared while an append handle is open, exclusive for the daily truncate |
+
+The rsync-pull wrapper built by `python/command_builders.py` uses a
+co-located `<log>.lock` file on the host where `rsync-pull.log` lives, with
+the same shared-append / exclusive-truncate split.

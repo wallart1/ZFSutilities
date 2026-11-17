@@ -154,6 +154,17 @@ run-20261110-201017-template-apt, preserving the deliberately stale
 0.118.0 storage product. Unresolved register rewritten in the user's
 plan dir.)
 
+(2026-11-12 publication pass: 0.141.0 is committed (the three-lane
+release + merges + wrap-up `6a33526`), pushed to origin main, tagged
+v0.141.0 (tip-tag precedent), and released on GitHub. Same pass:
+F-047 and F-050 pruned from FINDINGS.md (both verified and shipped in
+0.141.0 — the table is empty); the results/ run dirs cleared,
+including the NFS-stuck j11 dir once it freed; REQUIREMENTS.md and
+repair-plans/ carried nothing published to prune; the Unresolved
+register rewritten in the user's plan dir; memory purged with backup.
+The ITF template apt refresh was skipped at the user's request this
+cycle — templates remain as refreshed 2026-11-10.)
+
 ## Persistent gotchas (not documented in docs/)
 
 - Guest-agent probe: invalid ping argv was the root cause (2026-11-02):
@@ -341,54 +352,72 @@ plan dir.)
 
 ## Active / parked threads
 
-- **0.141.0 wrap-up review pass (2026-11-11, uncommitted on top of the
-  cycle).** PREEXISTING emptied (all four entries resolved): disks-page
-  partition-member pools now credit the whole disk row
-  (`_credit_backing_disks`, red-proofed tests, gtk-gui Pools column
-  sentence); the unarchive ssh stub's existence probe answers from the
-  mock state in-shell (de-forked — the one-per-batch parallel-load
-  flake class test-lib already documented); zfsdailybackup DE-STRACTED
-  per the user's ruling that user-customizable orchestrators carry no
-  strict mode (coding-policies exemption bullet, test-strict-mode
-  template fence — note zfssendoffsite is also a documented template
-  but stays strict until the user rules); commands.md matplotlib
-  paragraph corrected to the fail reality. Test additions: F-050
-  raw-byte fence at ZfsRepository._run (sys.executable child writing a
-  lone 0xB5 — bash printf re-encodes escapes through its locale, so it
-  can never emit an invalid byte; strict-mode decode red-proofed).
-  GLOSSARY: RID-suffixed datasets (the flagged to-add item — RID = the
-  survey run's time-of-day digits) + strict mode. Gates: ruff
-  check/format green, shellcheck clean (documented command), docs
-  integrity green, site rebuilt, full suite green (no soaks).
+- **Concurrency-collisions fix campaign (2026-11-16) — every open gap in
+  docs/docs/developer-guide/concurrency-collisions.md closed, all affected
+  suites green, awaiting full-suite + commit cue.** Five fixes: (A)
+  same-PID lock conversion in `zfslock_acquire` (stronger-type request
+  rewrites the lock file in place; remote variant = new `convert`
+  subcommand on `zfslockmanager-remote`; `zfs-send-receive` now holds its
+  destination lock through `delfs`, killing the §10 release/reacquire
+  window); (B) `zfscheckagainst` takes non-blocking `r` locks on the
+  source + each counterpart, busy → rc 6 "deletion blocked" with
+  holder-naming WARN, refuse-never-wait so mirrored prunes cannot
+  deadlock; (C) per-file flocks for `expected-backstores.txt`
+  (`.iscsi_manifest.lock`) and `iscsi-encrypted-luns.conf`
+  (`.encrypted_luns.lock`) — every inline writer in nine scripts + three
+  ssh-heredocs converged on the locked idiom, regenerators re-list live
+  targetcli under the lock, dashboard reads take shared locks; (D)
+  `.rsync_log.lock` shared-append/exclusive-truncate for
+  `rsync-backup.log` + the bash twin in `command_builders` (golden files
+  regenerated); (E) `ScrubQueue.transaction()` — every mutator and all
+  three tick drivers (pools page, dashboard, profile loop) now do
+  transactional reload-mutate-save; scrub authority deliberately NOT
+  consolidated (ZFS rejects conflicting transitions). Tests added across
+  test-zfslockmanager(+remote), test-zfscheckagainst,
+  test-safe-iscsi-save (lib lock coverage), test-zfsretain
+  (lock-before-enumeration), test_zfs_lock_manager.py,
+  test_file_locking.py, test_backup_runner.py, test_scrub_manager.py;
+  9 goldens regenerated. Gotchas hit: bash `$$` is the parent pid inside
+  subshells (lock-manager re-entry treats subshell children as the
+  holder — smoke tests must use real separate processes); process
+  substitution kills array appends made inside it (retain's enumeration
+  recorder needed a file); ScrubQueue's constructor does a locked load,
+  so tests must arrange state before taking the lock.
+- **0.142.0 wrap-up review pass (2026-11-17, uncommitted on top of the
+  two campaigns).** PREEXISTING emptied (the one entry — ruff format nit
+  in test_zfs_repository.py as committed at 6a33526 — fixed, suite
+  green). Lint: dashboard_page import order fixed; SC2288 in
+  zfscheckagainst was a REAL bug (backslash join made the elif's
+  accumulation line a command word — never ran; fixed with += and pinned
+  by a new two-busy-counterparts test, red-proofed); unused-local SC2034
+  cleaned; product files back under the 100-col policy (data strings
+  left long per repo precedent). zfsdelsnap's rc-6 wording updated to
+  "counterpart unavailable (offline or locked)" (real + preview gate;
+  retain/delsnap/massdelsnaps tests follow). Docs: convert subcommand +
+  Same-PID Lock Conversion section (lock-manager.md, modules.md),
+  messages rows for conversion/checkagainst/scrub-busy, GLOSSARY gains
+  Product/Lane/Tree (the user's to-add list) — plus the campaign-authored
+  docs updates already in tree.
 
-- **ITF report.md live visibility (2026-11-11, in tree, uncommitted).**
-  Every report.md line now carries a UTC timestamp; `itf_step_start`
-  (report-lib) announces the START of long activities — one line each at
-  the 13 stage entries, the shared wait/download/clone helpers (guarded +
-  stdout-clean because guest-lib/ssh-lib helpers also serve report-less
-  CLI paths), the survey runners, and ~90 journey-direct ≥30s ops
-  (installer/upgrade/archive/reconcile/kill runs). START rows never land
-  in steps.tsv (sweep awk + watch consume one-row-per-completed-step).
-  Unit suites stub itf_step_start beside their itf_step stubs. Live
-  proof = the next real journey run. (Also this session, uncommitted:
-  datasets-page count label removed; "aborted by user" dropped from
-  zfs-send-receive WARNs; installation docs sudo ssh-copy-id.)
-
-- **archive-vm message quieting (2026-11-10, in tree, uncommitted).** The
-  orphan-zvol notice is now gated VERB (new bashinit `log_verb`: hidden on
-  the terminal by default, session log always, operator gate wins); the
-  resolver's boot-disk-controller VERB leak was already gated by 0.140.0's
-  engine WARN wrap and now has a regression fence
-  (test_archive_resolver_verb_stays_gated). User's transcript was 0.138.0
-  on tweety — both fixes land with the pending node deploy.
-
-- **Blocksize-ladder dead margins (2026-11-10, fix in tree, uncommitted).**
-  The ladder's huge top/bottom/left dead space was one-shot
-  `tight_layout` (figure-fraction margins solved at a stale canvas size,
-  scaling up at the real allocation). Both matplotlib renderers now
-  re-solve on allocation-size change (`_on_size_allocate`, deduped); the
-  spike fences the margins with a map-then-fill ordering (red-proven).
-  Awaiting the user's visual confirmation on their Performance page.
+- **Mint ITF template profile (2026-11-14 → 2026-11-16) — template
+  BUILT GREEN, code uncommitted.** Fourth baseline-template profile:
+  Linux Mint 22.3 "Zena" Cinnamon as a plain desktop-OS leg (no
+  product — journeys install it through the first-time-user path).
+  `itf-template-mint` = vmid 8000 on zfstestvm1, stamp `mint-iso=
+  itf-mint-22.3-cinnamon-64bit.iso version=6.6.9+zena kernel=7.0.0-43-
+  generic built=2026-11-16`. Mechanism (verified against the real ISO,
+  not assumptions): ubiquity preseed PREPENDED into the casper initrd
+  (appending dies at the initrd's trailing bytes), `automatic-ubiquity`
+  GUI install on `--vga std`, `ubiquity/use_nonfree` preseeded (the
+  codecs page otherwise stalls --automatic), and — because Mint's
+  automatic finish NEVER runs success_command — a serial-driven
+  provision boot (itf_mint_provision_boot) installs the guest agent +
+  sshd + keys/hostname/grub from the initramfs shell after the install
+  poweroff. Eight build attempts to green; the full law list lives in
+  the agent-memory mint topic. Remaining: nothing for the template
+  itself; the code (config/guest/template libs, stage, driver, 4 test
+  suites, docs, GLOSSARY) rides uncommitted in the pub tree awaiting
+  the user's commit instruction.
 
 - **Alignment guest-probe decode — live remainder (fix rode 0.139.0
   via the pub3 lane merge; committed on main at `4cc0998`).** The
@@ -438,440 +467,25 @@ plan dir.)
   extracted `iscsi_unplug_export`; folding both commands onto the same
   helpers awaits the user's cue. Behavior of both commands is unchanged
   until then.
-
-- **gtk-gui.md Migrate Pool rewrite (2026-11-11, user request):** the
-  `#### Migrate Pool` section was a wall-of-text complaint; body rewritten
-  per `Writing Rules.md` into eight `#####` subsections (Destination modes,
-  New pool settings, Non-default pool properties, The review page, Cutover,
-  Stopping a migration, Snapshot holds, After the cutover). Fact-preserving
-  only — no behavior claims added or dropped; heading text and anchor
-  `#migrate-pool` unchanged. First `#####` level in this page; h5 does not
-  reach the Material side TOC (depth 3) but renders in-page with permalinks.
-
-- **SMART Details WARN rc-gate fix (2026-11-11, user item /dev/sde):**
-  root cause — smartctl exit codes are a bitmask; `smart_details()` discarded
-  the report whenever rc!=0, hiding exactly the flagged disks (stewie sde/sdh
-  are the USB-SAT pair). Fixed: report returned whenever printed; WARN now
-  carries rc + decoded bits (`_smartctl_rc_reasons`); flagged reports dump
-  with a WARN line first. Same gate fixed in `smart_health` /
-  `_smart_health_and_wear` (failing disk rc=8 now parses to FAILED, not n/a;
-  also `FAILED!` bang stripped). `-d sat` retry ladder deliberately deferred —
-  the new WARN names the rc; decide with that evidence. Fix rides the next
-  release; nodes still on 0.138.0 will keep the old WARN until deployed.
-
-*(pub2 lane history block, unioned at the 0.141.0 merge — pruned at the next release prune)*
-
-## 2026-11-10 (evening) — property manifests vs the readonly z40tb experiment (user bug report)
-
-- User report: the 21:34 offsite GUI run (temp → z40tb, first real offsite
-  run since manifests shipped in 0.138.0) logged 16 unexpected
-  `Property manifest for ... not written (write to
-  z40tb/temp/zfsutilities-manifests failed)` WARNs. The "No common
-  snapshot" WARNs (full copies) were expected and untouched.
-- Root cause on stewie: the z40tb POOL ROOT carries a local `readonly=on`
-  (a user experiment, since declared unneeded; fivebays is local `off`;
-  tweety has no non-default readonly anywhere). `zfs create -pu` made the
-  store inherit it → mounted read-only (`mount` shows `ro,noatime`) →
-  every write probe failed EROFS. Fail-open held: data verified, no
-  manifests. Secondary defect: the WARN named no reason.
-- Fix (approved plan, executed): the store never inherits protection
-  flags — create is now `zfs create -pu -o readonly=off`, and capture
-  self-heals a pre-existing guarded store (`zfs set readonly=off` under
-  the store's write lock, before the mount) so z40tb's already-created
-  store recovers on the next run with no manual node work. The heal sits
-  in `propmanifest_capture` (write path) deliberately — replay mounts
-  read-only and reads fine, so it never mutates. Write-failure WARNs now
-  carry the shell's real error (`... failed: Read-only file system`).
-- Tests: `test_capture_selfheals_readonly_store` added (heal-once,
-  before-mount ordering, both manifests land; mock `zfs set` made
-  stateful so the once-ness is observable); `test_ensure_creates_once`
-  and `test_capture_happy_path` pin the new create string;
-  `test_capture_write_failure_fails_open` moved to a nonexistent
-  mountpoint dir (ENOENT is deterministic for root and non-root; /proc's
-  EACCES text was environment-fragile) and asserts the reason text.
-  All red-proofed before the lib changed. Plan's separate
-  `test_create_uses_readonly_off`/`test_write_warn_carries_reason` were
-  folded into the updated tests (identical assertion sites).
-- Today's z40tb generation carries no manifests (replay falls back to
-  newest available); next offsite run after deploy captures normally.
-  Optional user cleanup, not required: `zfs set readonly=off z40tb`.
-
-## 2026-11-10 (later) — offsite-candidate pool-identity exemption (user bug report)
-
-- User report: Dashboard warned "Pool z40tb is imported but not configured
-  in node.conf — an unexpected pool is serving data here" although z40tb is
-  a long-designated offsite rotation pool (Pool Registry lists it). Verified
-  on stewie: z40tb imported + `offsite_candidate: true`, but absent from
-  node.conf's POOL_TARGET (rotation sibling z22tb IS listed) — so the
-  warning fired on every rotation where z40tb is the attached pool.
-- Fix (approved plan, executed): the offsite exemption now covers BOTH
-  set-difference shapes in `dashboard_page.py::_compute_pool_identity_warnings`
-  and `lib/iscsi-lib.sh::detect_pool_identity`; the message tail became
-  actionable ("— add it to the node config or export it"). GUID shape
-  untouched. `bin/export-iscsi-state::collect_live_state` now records
-  imported offsite candidates' GUIDs into the state map's `pools` dict, so
-  an attached rotation pool stays inside the GUID fence (map consumers are
-  the identity detectors + export drift check only — no rebuild logic
-  reads `pools`).
-- New tests: python `test_offsite_candidate_imported_not_configured_is_exempt`;
-  bash `test_two_node_identity_offsite_candidate_imported_exempt`;
-  `test_offsite_candidate_guid_recorded_when_imported` (with selectivity
-  sub-check). All three red-proofed against the old logic (temp reverts).
-- Verified on bash 5.2 while writing the export test: `VAR=x func` does NOT
-  persist after the call (the function sees it, the caller's shell doesn't)
-  — the test's save/restore of ZFSUTILITIES_CONFIG_PATH is hygiene, not a
-  fence; the bash-traps env-prefix note stands as written.
-- node.conf on the nodes deliberately untouched: the Pool Registry flag is
-  the authority for "known rotation pool". Effect lands on the next deploy.
-
-## 2026-11-11 (pub2): restore destination-naming docs audit
-
-- Task: audit the docs after 0.139.0's rename freedom removed the
-  requirement that a restore destination be derived from the source
-  name. Two stale passages found, one silent page; the rest of the
-  sweep (gtk-gui rename paragraph, python-modules, messages/index,
-  commands zfsrestore, global-variables, modules, architecture,
-  README, profiles) verified accurate against
-  compute_auto_destination/compute_restore_params.
-- concepts.md: "must be stripped back off ... handle this
-  automatically" rewritten — stripping is the conventional shape, the
-  original name is no longer required, GUI auto-determine vs free-form
-  manual, links to the new restore.md section.
-- gtk-gui.md Restore tab: "The destination dataset is the one that was
-  originally backed up" now reads "typically ... any destination is
-  accepted", with links; the user's pending hand-edits (sidebar table,
-  Dashboard pool-identity) left untouched.
-- restore.md: new "Where a Restore Lands" subsection — conventional
-  suffix mapping vs rename (worked examples), GUI auto-determine and
-  manual behavior, CLI $sourcefsremovequalifiers + $destfs mapping.
-- Gates: test_docs_integrity green (new anchor + cross-links resolve);
-  grep sweep clean. Full suite green except one xdist flake
-  (test_zfs_lock_manager local-conflict message test — passes alone
-  and file-wide on rerun; filed in PREEXISTING.md).
-
-## 2026-11-11 (pub2): Disks page — topology tint lands on the disk row
-
-- User item: selecting a Pool Topology row of type "disk" tinted the
-  partition row in the Disk Inventory; the disk row should tint instead.
-  Root cause: `_highlight_topology_devices` matched raw leaf paths — a
-  by-id `-partN` leaf realpaths to the partition, and the whole-disk
-  prefix rule compares raw strings, so the disk row never matched.
-- Fix: new `_backing_disk_paths()` resolves each member to its physical
-  disk via the cached inventory (`parent_path`, path realpath, and by-id —
-  indexed BOTH as the bare basename the repository stores and the full
-  /dev/disk/by-id/ form the topology leaves carry; unknown devices keep
-  their raw path, fail-open). `_path_matches_any_device` itself is
-  unchanged — a whole-disk target matches only its own row, so partitions
-  stop tinting for free. Covers device rows AND vdev/pool nodes (same
-  call path); `_highlight_pool_disks` maps members to `parent_path or
-  path` so the pool-wide tint follows the same rule.
-- Tests: TestTopologySelectionHighlightsBackingDisk (by-id member, vdev
-  node, kernel-path member, unknown-device fail-open, pool-wide tint) +
-  rewrote the old partition-leaf test (both-rows expectation → disk-row
-  only). Red on the old code, all green after the fix; full disks suite
-  green. Ruff clean.
-- Docs: gtk-gui.md Disks section — both tint passages now say disk rows;
-  partition members tint their whole disk; inventory→topology direction
-  unchanged.
-- PREEXISTING += 1 (recurrence note on the lock-manager xdist flake +
-  new entry: partition-member pools leave the disk row pool-less —
-  `_pools_for_disk` matches exact realpath/basename only, so the disk
-  row's Pools column is blank and selecting it clears the pane).
-
-## 2026-11-11 (pub2): architecture.md reworked per review pattern
-
-- User review of docs/docs/developer-guide/architecture.md set the pattern:
-  answer exactly the question asked; no historical references ("now", "no
-  longer", "as before", refactor narration); architecture-level prose only
-  (code-walkthrough detail belongs in code comments). Applied throughout.
-- Restore Flow: "Why two steps?" answered with the single sentence; new
-  "Destination hold preservation" subsection states the full
-  capture/release-only-offsite/reapply contract with the when-not side
-  (plain incrementals, dry-run, preserve_target_holds='N', fatal exits).
-  Facts verified in zfs-send-receive (capture gate ~L531, reapply ~L988),
-  zfsrestore, zfsreapplyholds, zfsdelfs.
-- Factual fix found while verifying: the msg-level-gate section claimed the
-  WARN gate covers remove-vm-disk --from-archive; the code gates only the
-  archive engine calls. Corrected to match current behavior.
-- History purge: session-logging/cron-fence pre-fence narration, "stream
-  exactly as before", "Regeneration no longer depends", "was refactored",
-  "remains as a compatibility shim ... migrated incrementally", "today",
-  "Phase 4", "no longer have an iSCSI LUN", "historical session log".
-  Legitimate current-world "legacy"/"history" uses kept (snapshot-name
-  formats, config layer, history JSON).
-- Detail trim: single-writer cron-fence mechanics compressed (code homes
-  verified: _silence_cron_output docstrings, profile_runner.py:339-341 pv
-  comment); added the one missing code comment (session-log state clearing,
-  backup_runner.py finish+cancel paths).
-- Gates: mkdocs build to /tmp clean (anchors resolve); history-marker grep
-  sweep clean; full suite at turn end.
-
-## 2026-11-11 — j22 function survey vs the pub tree (first 0.141.0 survey)
-
-- Fresh j22 draw (107 items, two-node lab) against the merged pub tree
-  (run-20261111-195614): all CLI green; two GUI reds —
-- F-050 (product): Snapshot fed the probe's garbage name
-  `survey-garbage-µ` crashed the action with UnicodeDecodeError. zfs
-  rejects µ (`invalid character '\302' in name`) and embeds the raw byte
-  IN the error text; every product subprocess call decoded captured
-  output with strict UTF-8 (`text=True`). Fixed with
-  `errors="replace"` on every text-mode subprocess site (22 modules);
-  22 mock assertions that pinned the old kwargs updated. Reproduced
-  byte-exact on the kept lab guest before fixing.
-- F-047 closed (product): gui prereq set gains `check_python_module
-  cairo` + `check_apt_pkg python3-gi-cairo`. Second layer discovered in
-  the same probe log: bare python3-cairo imports fine but PyGObject
-  can't marshal `cairo.Context` — every fallback-chart draw died with
-  "Couldn't find foreign struct converter" TypeError spam
-  (python3-gi-cairo is the bridge; pulls python3-cairo via apt dep).
-  installer-lib description/why rows added; j05's y/y remediation feed
-  absorbs the new packages with no new prompts (aggregate prompts).
-  test-check-prerequisites: CAIRO_STUB knob + absent/pass tests.
-- Survey-engine fix (not a finding): comp_checkagainst_add_remove_row
-  counted views[0] — the page's first view is backup-derived; Add/Remove
-  Row operate on the USER store. Now counts/selects `_ca_store`/`_ca_view`.
-- survey-lib GUI staging: python3-cairo → python3-gi-cairo (bridge included).
-- Docs: commands.md check-prerequisites paragraph gains the cairo law.
-  PREEXISTING +1: commands.md says matplotlib absence is a "warning"
-  while the check fails (stale paragraph, its own doc decision).
-- Gates: test-check-prerequisites green; python suite green after the
-  assertion updates; archive-replay verification + full bash suite at
-  turn end (results in the wrap-up).
-
-## 2026-11-11 (pub2): lock-conflict prompt under strict callers (user bug report)
-
-- User report: GUI backup on stewie (0.140.0) aborted at step 9/12 —
-  `zfslockmanager: line 1134: ZFSUTILITIES_HEADLESS: unbound variable`,
-  rc=1. Cause chain: the 21:34 offsite GUI leg (fivebays -> z40tb, still
-  running) held w locks on fivebays/threeamigos/proxmox/vm-*; the backup's
-  destination lock (threeamigos/proxmox -> fivebays) hit a genuine
-  conflict; the GUI runner gives every step a PTY on stdin, so
-  `[[ -t 0 && "$VAR" != "Y" ]]` reached the unset read under the strict
-  zfs-send-receive payload. No data touched; the dead step's locks were
-  released; the offsite run continued.
-- Why every suite was green: tests stub _zfslock_is_interactive, the
-  set-e child template exported ZFSUTILITIES_HEADLESS=Y, and no suite has
-  a terminal on stdin. Three independent masks.
-- Fix (zfslockmanager): default the headless read; fence the six
-  holder-field reads; EOF at either prompt reads as the empty default with
-  ask_line fenced; the force-confirm variable is local; the W branch
-  restores the caller's INT trap (the old eval-of-empty left the wait
-  handler armed, swallowing every later Ctrl+C). Guarded re-reads
-  defaulted in zfsconfig and installer-lib. The field/ask_line fences are
-  tolerance hardening: every strict script reaches the resolver through a
-  conditional call, so no live errexit-active caller exists.
-- Tests: tests/pty_run.py (PTY stdin; gui shape = the runner's piped
-  output, terminal shape = all fds on the PTY; expect/send/eof/run steps,
-  all bounded by a timeout). New strict-child sections in
-  test-zfslockmanager (choices, fences, headless decision); _sete_child no
-  longer exports the headless variable. Red-proofs: each of the five
-  product terms reverted alone fails exactly its tests; the variable
-  revert reproduces the production error line.
-- Fence: test-strict-mode guard — no bare read of a ZFSUTILITIES_* or
-  ZFSLOCK_* variable that no bash file assigns. Red-proven against the
-  pre-fix files: it flags all five sites, including line 1134.
-- Docs: lock-manager.md (interactive conditions, GUI PTY, set -u note),
-  global-variables.md (the missing $ZFSUTILITIES_HEADLESS row at the
-  anchor modules.md already linked), coding-policies.md (terminal-check
-  rule), testing.md (pty_run.py section plus rows), GLOSSARY.md (PTY).
-- PREEXISTING += 1: zfsdailybackup (strict) calls cleanup with three
-  arguments; cleanup's bare $4 and optional-global reads abort under
-  set -u (semantics probe-verified, not run end-to-end). Also removed two
-  test counts from earlier notes-file entries per the no-counts rule.
-- Not fixed, noted here only: the W wait's sleep stays unfenced — an
-  interrupted sleep would abort an errexit-active bare caller (none
-  exists).
-
-## 2026-11-11 (pub2): Dashboard Tasks — live rows pinned at top; never dropped mid-run
-
-- User request: running tasks always at the top of the Tasks list, sorted
-  ascending datetime, never removed while running.
-- Root causes: `_refresh_tasks_section` sorted all rows newest-first, so a
-  running task sat below recent completions; and the store is rebuilt from
-  collector output every refresh, so one refresh that fails to report a task
-  dropped its row — concretely, `BackupRunner._finish`/`_end_cancelled` flip
-  `running` off BEFORE writing history, and profile lock-file / surface-test
-  state / dataset-action tracker reads have momentary races. Scrubs were
-  already covered upstream (scrub queue tick has miss-hysteresis).
-- Fix (dashboard_page): live block (waiting+running) sorts above completed,
-  ascending by start (longest-running first, timeless rows atop the block);
-  completed rows stay newest-first. New `_retain_unreported_live_rows` keeps
-  a last-known live row on `app._dashboard_task_carry` for up to
-  `_TASK_CARRY_MISS_LIMIT` (2) consecutive missed refreshes, dropping it the
-  moment a completed row with the same session log file appears. Bounded
-  grace is deliberate: scrub/surface-test/ZFS-op tasks never write history
-  rows, so unbounded carry would leave permanent ghosts.
-- Tests: `test_live_rows_sort_above_completed` (renamed from the old
-  reverse-chronological mixed test), `test_live_rows_sort_ascending_by_start`,
-  carry survive/drop-limit, carry-vs-completed swap, and miss-count reset.
-  `_make_app` gives the app a real `_dashboard_task_carry` dict.
-- Docs: gtk-gui.md Tasks section — live-first ascending order and the
-  retention behavior in user terms.
-
-*(pub3 lane history block, unioned at the 0.141.0 merge — pruned at the next release prune)*
-
-## 2026-11-11 — ITF: linked clones (no storage migration needed)
-
-- User asked whether the ITF VMs could move to a PVE storage type that
-  supports linked cloning. Answer: NO move needed — the lab's lvmthin
-  `itfguests` storage already supports linked clones (LvmThinPlugin
-  `clone_image` = `lvcreate -s` thin snapshot; live-proven on
-  zfstestvm1, PVE 9.2.26). The old "lvmthin → no linked clones (PVE
-  linked = file-based only)" belief (harness comment, docs bullet,
-  memory) was simply wrong. There is no `--linked` flag: linked is
-  `qm clone`'s default for templates; `--full 1` was the only thing
-  forcing copies.
-- `itf_guest_clone` now honors `ITF_CLONE_MODE` (linked default; full =
-  `--full 1` escape hatch, validated enum in config-lib). Rerun
-  snapshot/rollback and destroy proven fine on a linked volume (live
-  probe). Clone volids stay `vm-` (link untracked) → guard/fence/
-  teardown untouched; thin snapshots keep blocks after origin deletion
-  → template rebuilds still can't break running guests.
-- Live gate: fresh j04 green, 2m35s total, clone step 11 s (was
-  ~2¼ min standard, 9–10+ min for j10's 32 GiB template). Wording
-  swept (driver help, journeys README, common.sh/j04/j10 comments);
-  "linked clone" glossary entry added; memory corrected.
-- j10 fact: templates were re-stamped early 2026-11-11 (storage
-  deliberately 0.118.0 — j10's premise intact).
-
-## 2026-11-11 — GUI: Settings menu; Notifications + Documentation Editor moved (pub3)
-
-- User request: add a Settings menu to the menu bar; move File →
-  Notifications… and Help → Set Documentation Editor... into it, the
-  latter renamed to "Documentation Editor..." (ASCII ellipsis kept per
-  the item's existing style; Notifications… label unchanged, Unicode
-  ellipsis and all). Menu bar order: File, View, Settings, Help. File is
-  now Quit only (leading separator dropped); Help keeps its separator
-  between help topics and About. Handlers unchanged.
-- Test gotcha (create_menu_bar structural test): Gtk.Menu construction
-  order is file, view, FONT SUBMENUS ×2, settings, help — the font loop
-  runs before the settings block — so "third menu = settings" is wrong;
-  identify top-level menus via `items["File"/"Settings"/"Help"].
-  set_submenu.call_args` instead. Menu/MenuItem need per-call fresh
-  side_effects (shared class-mock instances can't be told apart);
-  mock_gtk(fresh=True) scopes the module re-import per test.
-- Docs swept for menu paths: gtk-gui.md (menu-bar list now four menus,
-  new "## Settings Menu" section before Help Menu, Editing Pages and
-  Notifications-dialog intros), profiles.md, data-structures.md,
-  messages/index.md (×2), python-modules.md — all "File → Notifications…"
-  → "Settings → Notifications…". Dialog title "Set Documentation Editor"
-  (zfsutilities_gui.py) deliberately unchanged. changelog references are
-  historical records, untouched.
-
-## 2026-11-11 — Logs: Log Viewer toolbar moved to the bottom (pub3)
-
-- User request: in the Log Viewer (embedded Logs-tab pane and its pop-out
-  window), move the Level dropdown, Short-prefix toggle, Search bar, and
-  pop-out/dock button from the top to the bottom. The viewer is ONE widget
-  tree (`viewer_box`) reparented between the tab frame and the pop-out
-  window, so a single pack-order change moves the toolbar in both
-  presentations — no widget duplication.
-- New order in `viewer_box`: path line (stays top), text view, status
-  label, Show More, Load Full Log, toolbar last (bottom bar). Only the
-  toolbar moved; the status line and chunk buttons keep their relative
-  order hugging the text they annotate.
-- Test gotcha: mock_gtk hands every `Gtk.Box()` the same shared instance,
-  so viewer_box vs viewer_toolbar needs `Gtk.Box.side_effect` returning
-  fresh mocks (addCleanup restores None); `Gtk.Frame.side_effect = None`
-  first, same isolation as the page-viewport test (this test runs last
-  alphabetically, after the bold-label test exhausts the sentinel list).
-  The toolbar is identified by being the box that packs the level combo,
-  not by construction index. Red-proofed by re-packing the toolbar above
-  the text view: `packed[-1] is toolbar` fails with the Load Full button
-  as the last pack.
-- gtk-gui.md Log-viewer section reworded (path line above the text view;
-  Level dropdown and Search bar below it). The main-window bottom panel
-  docs (a different viewer) untouched; the changelog's old wording is a
-  historical record, left alone.
-
-## 2026-11-11 — Surface test: false "Aborted", dialog width, estimates, conveyance
-
-- User report (Disks → Disk Inventory → Surface Test, Fast): the Wear/Test
-  cell showed "Aborted" while the test was still running; modal too wide;
-  wanted per-mode estimated run times and a conveyance option where
-  supported. Root causes verified against smartmontools `ataprint.cpp`:
-  - `poll_self_test` ran `smartctl -l selftest`, but its running regex
-    matched only the `-c` exec-status text ("Self-test routine in
-    progress... N% of test remaining") which never appears there. Real
-    `-l selftest` shows the running test as a log row with status
-    "Self-test routine in progress 90%" — exactly 29 chars, so the
-    `%-29s` column leaves ONE space before the remaining %. Every poll
-    said not-running; the first poll (immediately after Start, before the
-    log row appears) finalized the entry from the stale newest row →
-    "Aborted"/"Failed" while firmware kept testing.
-  - Estimate regexes assumed one-line `-c` output; smartctl prints
-    "Short self-test routine \n" + "recommended polling time: ( 2)
-    minutes." on TWO lines (Short even has a trailing space) → estimates
-    were "~unknown" since 0.103.0.
-  - smartctl prints the conveyance polling-time pair ONLY when supported
-    → parsing it doubles as the support check.
-- Fixes: poll now `smartctl -c -l selftest` (exec-status byte updates the
-  moment a test starts — closes the start-gap; log rows give final
-  statuses); log-row progress form parsed as fallback; polling-time
-  regexes cross the line break; new `self_test_estimates()` (one `-c`
-  call feeds the dialog); `start_self_test` accepts conveyance; dialog
-  rebuilt (short radio labels + wrapped descriptions with "Estimated run
-  time: ~Xm", conveyance option only when supported, labels wrap at 56
-  chars + dialog width 560); disks_page dispatches conveyance.
-- Tests use real smartmontools formats (row printf
-  `"#%2u  %-19s %-29s %1d0%%  %8u         %s"`). Gotcha: asserting on
-  `patch.object(dst.Gtk, "Label", MagicMock())` AFTER the with-block reads
-  the unpatched attribute — hold the mock reference (ExitStack helper).
-- Fixture-fidelity law held: the old fixtures baked in output shapes
-  smartctl never emits — that's how the bug survived since 0.103.0.
-
-## 2026-11-11 — Enclosures: Set Max I/O Rate modal width
-
-- User report: the Set Max I/O Rate… modal was far too wide — the
-  explanatory rate-syntax line sat on one line. The wrapping labels had
-  set_line_wrap(True) but no cap, and a wrapping label's natural width is
-  its full unwrapped line, so the ~230-char syntax text pinned the dialog
-  at that width (GTK wraps only when allocated less than natural width).
-- Fix mirrors the surface-test dialog treatment the same day:
-  create_dialog size=(560, -1) + set_max_width_chars(56)
-  (_RATE_DIALOG_MAX_WIDTH_CHARS) on the three wrapping labels (caption,
-  syntax, problem). New test_dialog_width_capped_and_text_wraps asserts
-  the size kwarg and that every wrapping label carries the cap.
-
-## 2026-11-10 (later) — Retention prune list: <offsite> row removed (user report, pub3)
-
-- User report: Prune Snapshots listed BOTH `<offsite>` and `z40tb` (the
-  online offsite-candidate registry pool) — two rows, one pool. Cause:
-  `refresh_prune_pools` added an `<offsite>` pseudo-row whenever a
-  `<offsite>`-keyed retention policy exists, while the real pool was
-  always individually listed too (offsite candidates are registry pools
-  by definition, so the placeholder could never add a pool the list
-  didn't already show).
-- Fix rule (matches the Offsite page's convention — tokens live in
-  stored configs, real pool names in the UI): the interactive prune
-  list shows real pool names only. `refresh_prune_pools` lost the
-  placeholder branch (every row health=ONLINE); `on_retention_prune`
-  lost the now-dead `<offsite>` selection-expansion block; the two
-  column-header tooltips lost their `<offsite>` wording.
-- Recall guard added: `load_retention_profile_config` WARNs when a
-  recalled profile's prune_pools entry matches no current row
-  ("<offsite>" or a detached pool), so a recall→re-save can't silently
-  drop a pool. The `<offsite>` POLICY itself is untouched — policy
-  creation/edit, zfscleanup's automatic pickup for online offsite
-  pools, and profile_runner's expansion for stored profiles all keep
-  working.
-- Tests: two prune-list tests rewritten + recall-WARN test added (all
-  red-proofed against the unmodified code); TestOnRetentionPruneOffsite
-  deleted; add-policy helper's stale get_offsite_candidate_names patch
-  dropped with the import. retention.md §"Special <offsite> Policy"
-  updated. Full suite green.
-- Same turn, user-cued: "Copied log path to clipboard" (logs_page.py
-  context-menu copy) demoted INFO → VERB; messages-manual row and the
-  built site follow; mkdocs 2.0 upgrade banner on build is the known
-  pin situation, ignored.
-- Also user-cued: gtk-gui.md's overlapping "Bottom panel" + "Log Panel"
-  sections merged into one "Bottom panel" section (no inbound #log-panel
-  links existed). The Log Panel pop-out paragraph had conflated the
-  Logs-tab viewer's pop-out with the main-window one — the merged bullet
-  now states only the main-window truth (geometry remembered; the
-  Logs-tab clause stays in the Logs tab's own Pop Out bullet).
-- Full-suite flake after the merge (docs-only turn): test-zfs-send-
-  receive-dryrun Test 31 (# END trailer) failed once in the full run
-  with "rc=5, duration=43s", then the single suite reran all-green
-  (21.4s, over budget but passing). Timing-sensitive under load; not
-  filed as PREEXISTING — rerun-green, nothing actionable.
+- **GUI Wayland-session support — parked (2026-11-14, user cue).** GTK3
+  draws under either display protocol and the docs already promise it
+  (README: "X11 or Wayland"), but the plumbing around the GUI is
+  X11-shaped: run-completion notifications resolve the desktop user from
+  the owner of the /tmp/.X11-unix socket when no override or SUDO_USER
+  is present (python/notifications.py, python/docs_viewer.py,
+  lib/desktop-launcher-lib.sh) — a Wayland-only session has no X
+  socket, so that leg returns None and notifications are silently
+  skipped; check-prerequisites gates on DISPLAY alone (the WARN text
+  itself says "X11 or Wayland") and never checks WAYLAND_DISPLAY, so a
+  session without XWayland warns spuriously; and main.py's
+  xdotool/xwininfo window-visibility chain (_get_display_env →
+  _has_visible_window) has no live caller today — Wayland offers no
+  global window query, so revive-vs-remove lands with this item. The
+  pkexec relaunch already preserves WAYLAND_DISPLAY, so launching is
+  not the gap. Testing direction (user, 2026-11-14, verbatim): "We will
+  support Wayland-based testing at some point. And, I do intend to take
+  GUI testing further that we have so far." Headless Wayland compositors
+  (Weston headless backend, wlroots compositors under
+  WLR_BACKENDS=headless, cage) are the Xvfb analogs. The fence that
+  carries over is private displays only — never the live session — not
+  the X11 protocol.

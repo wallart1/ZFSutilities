@@ -98,20 +98,43 @@ prefix_in_file() {
     return 1
 }
 
+# The manifest and encrypted-luns edits below run under the shared file
+# locks (lib/iscsi-lib.sh, python/file_locking.py) so concurrent VM-disk
+# flows cannot interleave their read-modify-write cycles.
+manifest_lock_path() {
+    echo "${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+}
+encrypted_conf_lock_path() {
+    echo "${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
+}
+
 manifest_remove() {
     local bsname="$1"
     if [[ -f "$ISCSI_MANIFEST" ]] && grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
-        grep -vxF -- "$bsname" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
-        mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
-        log_msg "INFO: ✓ Removed ${bsname} from expected-backstores manifest"
+        local _mlock
+        _mlock=$(manifest_lock_path)
+        mkdir -p -- "$(dirname -- "$_mlock")"
+        (
+            flock -x 9 || exit 1
+            grep -vxF -- "$bsname" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
+            mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
+            log_msg "INFO: ✓ Removed ${bsname} from expected-backstores manifest"
+        ) 9>>"$_mlock"
     fi
 }
 
 manifest_add() {
     local bsname="$1"
     if [[ -f "$ISCSI_MANIFEST" ]] && ! grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
-        echo "$bsname" >> "$ISCSI_MANIFEST"
-        log_msg "INFO: ✓ Added ${bsname} to expected-backstores manifest"
+        local _mlock
+        _mlock=$(manifest_lock_path)
+        mkdir -p -- "$(dirname -- "$_mlock")"
+        (
+            flock -x 9 || exit 1
+            grep -qxF -- "$bsname" "$ISCSI_MANIFEST" \
+                || echo "$bsname" >> "$ISCSI_MANIFEST"
+            log_msg "INFO: ✓ Added ${bsname} to expected-backstores manifest"
+        ) 9>>"$_mlock"
     fi
 }
 
@@ -119,10 +142,16 @@ encrypted_remove() {
     local bsname="$1"
     if [[ -f "$ISCSI_ENCRYPTED_CONF" ]] \
         && prefix_in_file "${bsname}:" "$ISCSI_ENCRYPTED_CONF"; then
-        awk -v prefix="${bsname}:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
-            > "${ISCSI_ENCRYPTED_CONF}.new"
-        mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
-        log_msg "INFO: ✓ Removed ${bsname} from encrypted LUNs config"
+        local _elock
+        _elock=$(encrypted_conf_lock_path)
+        mkdir -p -- "$(dirname -- "$_elock")"
+        (
+            flock -x 9 || exit 1
+            awk -v prefix="${bsname}:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
+                > "${ISCSI_ENCRYPTED_CONF}.new"
+            mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
+            log_msg "INFO: ✓ Removed ${bsname} from encrypted LUNs config"
+        ) 9>>"$_elock"
     fi
 }
 
@@ -130,8 +159,15 @@ encrypted_add() {
     local bsname="$1" zvol_dev="$2" target_short="$3"
     if [[ -f "$ISCSI_ENCRYPTED_CONF" ]] \
         && ! prefix_in_file "${bsname}:" "$ISCSI_ENCRYPTED_CONF"; then
-        echo "${bsname}:${zvol_dev}:${target_short}" >> "$ISCSI_ENCRYPTED_CONF"
-        log_msg "INFO: ✓ Added ${bsname} to encrypted LUNs config"
+        local _elock
+        _elock=$(encrypted_conf_lock_path)
+        mkdir -p -- "$(dirname -- "$_elock")"
+        (
+            flock -x 9 || exit 1
+            prefix_in_file "${bsname}:" "$ISCSI_ENCRYPTED_CONF" \
+                || echo "${bsname}:${zvol_dev}:${target_short}" >> "$ISCSI_ENCRYPTED_CONF"
+            log_msg "INFO: ✓ Added ${bsname} to encrypted LUNs config"
+        ) 9>>"$_elock"
     fi
 }
 
@@ -239,15 +275,28 @@ if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; th
     ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
 fi
 
+# Manifest and encrypted-luns edits run under the shared file locks
+# (lib/iscsi-lib.sh, python/file_locking.py) so concurrent VM-disk flows
+# cannot interleave their read-modify-write cycles.
 manifest_remove() {
     [[ -f "$ISCSI_MANIFEST" ]] || return 0
     grep -qxF -- "$1" "$ISCSI_MANIFEST" || return 0
-    grep -vxF -- "$1" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
-    mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
+    _mlock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+    mkdir -p "$(dirname "$_mlock")"
+    (
+        flock -x 9 || exit 1
+        grep -vxF -- "$1" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
+        mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
+    ) 9>>"$_mlock"
 }
 manifest_add() {
     [[ -f "$ISCSI_MANIFEST" ]] || return 0
-    grep -qxF -- "$1" "$ISCSI_MANIFEST" || echo "$1" >> "$ISCSI_MANIFEST"
+    _mlock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+    mkdir -p "$(dirname "$_mlock")"
+    (
+        flock -x 9 || exit 1
+        grep -qxF -- "$1" "$ISCSI_MANIFEST" || echo "$1" >> "$ISCSI_MANIFEST"
+    ) 9>>"$_mlock"
 }
 # Returns 0 when a line of $2 starts with the literal prefix $1.
 prefix_in_file() {
@@ -261,14 +310,24 @@ prefix_in_file() {
 encrypted_remove() {
     [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
     prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" || return 0
-    awk -v prefix="$1:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
-        > "${ISCSI_ENCRYPTED_CONF}.new"
-    mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
+    _elock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
+    mkdir -p "$(dirname "$_elock")"
+    (
+        flock -x 9 || exit 1
+        awk -v prefix="$1:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
+            > "${ISCSI_ENCRYPTED_CONF}.new"
+        mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
+    ) 9>>"$_elock"
 }
 encrypted_add() {
     [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
-    prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" \
-        || echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+    _elock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
+    mkdir -p "$(dirname "$_elock")"
+    (
+        flock -x 9 || exit 1
+        prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" \
+            || echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+    ) 9>>"$_elock"
 }
 
 zfslock_init
@@ -495,12 +554,22 @@ fi
 manifest_remove() {
     [[ -f "$ISCSI_MANIFEST" ]] || return 0
     grep -qxF -- "$1" "$ISCSI_MANIFEST" || return 0
-    grep -vxF -- "$1" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
-    mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
+    _mlock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+    mkdir -p "$(dirname "$_mlock")"
+    (
+        flock -x 9 || exit 1
+        grep -vxF -- "$1" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
+        mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
+    ) 9>>"$_mlock"
 }
 manifest_add() {
     [[ -f "$ISCSI_MANIFEST" ]] || return 0
-    grep -qxF -- "$1" "$ISCSI_MANIFEST" || echo "$1" >> "$ISCSI_MANIFEST"
+    _mlock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.iscsi_manifest.lock"
+    mkdir -p "$(dirname "$_mlock")"
+    (
+        flock -x 9 || exit 1
+        grep -qxF -- "$1" "$ISCSI_MANIFEST" || echo "$1" >> "$ISCSI_MANIFEST"
+    ) 9>>"$_mlock"
 }
 # Returns 0 when a line of $2 starts with the literal prefix $1.
 prefix_in_file() {
@@ -514,14 +583,24 @@ prefix_in_file() {
 encrypted_remove() {
     [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
     prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" || return 0
-    awk -v prefix="$1:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
-        > "${ISCSI_ENCRYPTED_CONF}.new"
-    mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
+    _elock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
+    mkdir -p "$(dirname "$_elock")"
+    (
+        flock -x 9 || exit 1
+        awk -v prefix="$1:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
+            > "${ISCSI_ENCRYPTED_CONF}.new"
+        mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
+    ) 9>>"$_elock"
 }
 encrypted_add() {
     [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
-    prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" \
-        || echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+    _elock="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}/.encrypted_luns.lock"
+    mkdir -p "$(dirname "$_elock")"
+    (
+        flock -x 9 || exit 1
+        prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" \
+            || echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+    ) 9>>"$_elock"
 }
 
 # If new backstore/lun exist, tear them down. Captured and grepped as a

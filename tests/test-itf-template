@@ -170,6 +170,41 @@ test_ubuntu_freshness() {
     test_pass
 }
 
+test_stamp_mint_round_trip() {
+    test_start "mint-profile stamp uses mint-iso as its source field"
+    local stamp parsed rc
+    stamp="$(itf_template_stamp_render mint mint-iso itf-mint-22.3-cinnamon-64bit.iso \
+        6.6.0 6.14.0-22-generic cafebabe)"
+    parsed="$(itf_template_stamp_parse "$stamp")"
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$parsed" "profile=mint"
+    assert_contains "$parsed" "mint-iso=itf-mint-22.3-cinnamon-64bit.iso"
+    assert_contains "$parsed" "version=6.6.0"
+    test_pass
+}
+
+test_mint_freshness() {
+    test_start "mint freshness keys on profile + Mint ISO name"
+    local iso="itf-mint-22.3-cinnamon-64bit.iso"
+    local good bad
+    good="profile=mint mint-iso=$iso version=v kernel=k rev=r built=b"
+    bad="profile=mint mint-iso=itf-mint-23.1-cinnamon-64bit.iso version=v kernel=k rev=r built=b"
+    ITF_MINT_ISO_NAME=$iso _itf_template_mint_fresh "$good"
+    assert_rc 0 $?
+    ITF_MINT_ISO_NAME=$iso _itf_template_mint_fresh "$bad" > /dev/null 2>&1
+    assert_rc 1 $?
+    # Storage-profile stamps never match mint freshness, and an unset
+    # ISO pair (sites without the mint profile) disables the check.
+    ITF_MINT_ISO_NAME=$iso _itf_template_mint_fresh \
+        "profile=storage sw-source=dev-tarball version=v rev=r kernel=k built=b" \
+        > /dev/null 2>&1
+    assert_rc 1 $?
+    ITF_MINT_ISO_NAME='' _itf_template_mint_fresh "$good" > /dev/null 2>&1
+    assert_rc 1 $?
+    test_pass
+}
+
 test_stamp_parse_rejects_foreign() {
     test_start "blank or foreign descriptions fail stamp parsing"
     itf_template_stamp_parse "" > /dev/null 2>&1
@@ -235,6 +270,39 @@ test_autoinstall_render_content() {
         itf_autoinstall_render "$ud" "$md" probe-host > /dev/null 2>&1
     assert_rc 1 $?
     test_pass
+}
+
+# ------------------------------------------------------------------------------
+# Ubiquity preseed rendering (mint profile)
+# ------------------------------------------------------------------------------
+
+test_ubiquity_render_content() {
+    test_start "ubiquity preseed carries install answers only, poweroff finish"
+    local out="$tmp_dir/ubiquity.cfg"
+    itf_ubiquity_preseed_render "$out"
+    assert_rc 0 $?
+    local seed
+    seed="$(cat "$out")"
+    assert_contains "$seed" "d-i passwd/username string itfadmin"
+    assert_contains "$seed" "d-i passwd/user-password-crypted password \$6\$"
+    # One-disk-at-install-time rule (the pool disk hot-plugs later).
+    assert_contains "$seed" "d-i partman-auto/disk string /dev/sda"
+    # The codecs page's questions are answered — automatic mode stops on
+    # any unanswered page question (the live Continue-click incident).
+    assert_contains "$seed" "ubiquity/use_nonfree boolean false"
+    assert_contains "$seed" "ubiquity/minimal_install boolean false"
+    # The deterministic finish: poweroff, never reboot (the -kernel args
+    # would re-enter the installer).
+    assert_contains "$seed" "ubiquity/poweroff boolean true"
+    # NO post-install hook: Mint's automatic GTK finish never runs
+    # success_command (observed live 2026-11-14) — provisioning lives in
+    # itf_mint_provision_boot instead.  (Comments may mention it; the
+    # effective lines must not.)
+    if grep -v '^#' <<< "$seed" | grep -q success_command; then
+        test_fail "preseed must not carry success_command (never runs on Mint)"
+    else
+        test_pass
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -443,6 +511,34 @@ test_os_upgrade_compute_gate() {
     itf_report_finish > /dev/null 2>&1 || true
 }
 
+test_os_upgrade_mint_gate() {
+    test_start "mint-profile upgrade gates on lightdm + cinnamon, not modprobe zfs"
+    ITF_RUNS_DIR="$tmp_dir/runs"
+    # shellcheck disable=SC1090
+    source "$ITF_ROOT/lib/report-lib.sh"
+    ITF_RUN_CALLER="suite"
+    itf_report_init osgate-mint > /dev/null
+    _gate_cmds=""
+    itf_guest_exec() {
+        _gate_cmds+="$2"$'\n'
+        case "$2" in
+            *"echo no"*) echo no ;;
+            *lightdm*) echo "gate-ok kernel=6.14.0-22-generic cinnamon=6.6.0 lightdm=active" ;;
+        esac
+        return 0
+    }
+    itf_template_os_upgrade 10.0.0.9 mint > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$_gate_cmds" "systemctl is-active --quiet lightdm"
+    assert_contains "$_gate_cmds" 'dpkg-query -W -f="\${Version}" cinnamon'
+    if printf '%s' "$_gate_cmds" | grep -q "modprobe zfs"; then
+        test_fail "mint gate must not probe the ZFS module (absent by design)"
+    else
+        test_pass
+    fi
+    itf_report_finish > /dev/null 2>&1 || true
+}
+
 test_build_profiles_thread_base_and_stages() {
     test_start "build threads --base/--profile through the right pipeline"
     ITF_RUNS_DIR="$tmp_dir/runs"
@@ -520,6 +616,24 @@ test_build_profiles_thread_base_and_stages() {
     fi
     assert_contains "$_itf_exec_calls" \
         'testbase :: qm set 8002 --description itf-stamp\|\ profile=ubuntu\ ubuntu-iso=itf-ubuntu-24.04.iso'
+    # Mint profile: distro-flagged OS stage, no product install, and the
+    # mint-iso stamp with the guest's Cinnamon version.
+    ITF_MINT_ISO_NAME=itf-mint-22.3-cinnamon-64bit.iso
+    ITF_MINT_TEMPLATE_NAME=itf-template-mint
+    seq=""
+    reset_exec_calls
+    itf_template_build --force --profile mint --base testbase > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$seq" \
+        "os|itf-template-mint-build|itf-template-mint|--base|testbase|--distro|mint"
+    assert_contains "$seq" "upgrade:mint| "
+    if [[ "$seq" == *install* ]]; then
+        test_fail "mint profile must not run the product install stage"
+    else
+        test_pass
+    fi
+    assert_contains "$_itf_exec_calls" \
+        'testbase :: qm set 8002 --description itf-stamp\|\ profile=mint\ mint-iso=itf-mint-22.3-cinnamon-64bit.iso'
     unset -f source
     itf_report_finish > /dev/null 2>&1 || true
 }
@@ -569,9 +683,12 @@ test_stamp_compute_round_trip
 test_compute_freshness
 test_stamp_ubuntu_round_trip
 test_ubuntu_freshness
+test_stamp_mint_round_trip
+test_mint_freshness
 test_stamp_parse_rejects_foreign
 test_stamp_read_from_qm_config
 test_autoinstall_render_content
+test_ubiquity_render_content
 test_template_vmid_resolves_by_name
 test_guest_clone_command_shape
 test_guest_clone_full_mode_escape_hatch
@@ -582,6 +699,7 @@ test_fresh_detection_dev_tarball
 test_fresh_detection_release_ignores_rev
 test_os_upgrade_command_is_one_argument
 test_os_upgrade_compute_gate
+test_os_upgrade_mint_gate
 test_build_profiles_thread_base_and_stages
 test_build_removes_run_tagged_leftover
 

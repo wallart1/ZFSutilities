@@ -1593,6 +1593,11 @@ zfslock_check <dataset> <type>                    # 0=no conflict, 1=conflict
 
 Lock types: `r` (shared read), `w` (exclusive write), `x` (exclusive destroy).
 
+A same-PID acquire of a **stronger** type converts the held lock in place
+(`r` → `w` → `x`): the lock file is rewritten after the normal conflict check
+runs against every other holder. A weaker request keeps the stronger held
+type. See [Same-PID Lock Conversion](../developer-guide/lock-manager.md#same-pid-lock-conversion).
+
 Lock files are stored in `/run/lock/zfsutilities/.locks/` (cleared on reboot).
 
 **Globals:** none.
@@ -1620,6 +1625,7 @@ zfslockmanager-remote check <dataset> <type>
 zfslockmanager-remote list
 zfslockmanager-remote release <lockfile>
 zfslockmanager-remote cleanup
+zfslockmanager-remote convert <lockfile> <type> [description]
 ```
 
 - `hold` acquires the lock, prints `LOCKED <lockfile>`, then holds the lock
@@ -1628,14 +1634,21 @@ zfslockmanager-remote cleanup
 - `list` returns a JSON array of active (non-stale) locks.
 - `release` force-removes a lock file.
 - `cleanup` removes stale locks.
+- `convert` rewrites a lock held by a live agent process to a strictly
+  stronger type (`r` < `w` < `x`) and prints `CONVERTED <lockfile>`; it
+  refuses to weaken a lock, refuses stale lock files, and accepts only lock
+  files inside the lock directory.
 
 See [Two-Node Operation](../developer-guide/lock-manager.md#two-node-operation)
 for details.
 
 **Re-entrant locking:** If the current PID already holds a lock on a dataset
 (or its ancestor/descendant), subsequent acquire attempts succeed without
-creating a new lock file. The lock is released only when the original holder
-releases it.
+creating a new lock file. A request for a **stronger** type converts the held
+lock in place — locally by rewriting the lock file, on a forwarded lock by
+asking the agent's `convert` subcommand (an older agent keeps the held,
+weaker type). A weaker request keeps the stronger held type. The lock is
+released only when the original holder releases it.
 
 **Internal flow / algorithm:**
 

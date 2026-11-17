@@ -924,8 +924,140 @@ test_saveconfig_failure_refuses_save() {
 }
 
 # ------------------------------------------------------------------
+# lib/iscsi-lib.sh file-lock coverage: the manifest and encrypted-luns
+# helpers serialize under their shared lock files.
+# ------------------------------------------------------------------
+
+_lib_helpers_setup() {
+    _lib_state_dir="$_mock_zfs_state_dir/iscsi_lib_locks"
+    rm -rf "$_lib_state_dir"
+    mkdir -p "$_lib_state_dir"
+    _lib_manifest="$_lib_state_dir/expected-backstores.txt"
+    _lib_encconf="$_lib_state_dir/iscsi-encrypted-luns.conf"
+    printf '# manifest\n' > "$_lib_manifest"
+    : > "$_lib_encconf"
+    _lib_lockdir="${ZFSUTILITIES_LOCK_DIR:?test-lib must set it}/lib-suite"
+    mkdir -p "$_lib_lockdir"
+    # Extract the helper functions without sourcing node-lib-dependent
+    # library headers; the path variables are set explicitly below.
+    sed -n '/^_encrypted_conf_has_prefix()/,/^}/p' \
+        "$mydir/lib/iscsi-lib.sh" > "$_lib_state_dir/helpers.sh"
+    sed -n '/^function manifest_remove_backstore/,/^}/p' \
+        "$mydir/lib/iscsi-lib.sh" >> "$_lib_state_dir/helpers.sh"
+    sed -n '/^function manifest_add_backstore/,/^}/p' \
+        "$mydir/lib/iscsi-lib.sh" >> "$_lib_state_dir/helpers.sh"
+    sed -n '/^function encrypted_conf_remove_backstore/,/^}/p' \
+        "$mydir/lib/iscsi-lib.sh" >> "$_lib_state_dir/helpers.sh"
+    sed -n '/^function encrypted_conf_add_backstore/,/^}/p' \
+        "$mydir/lib/iscsi-lib.sh" >> "$_lib_state_dir/helpers.sh"
+}
+
+# Run an extracted helper with the lib's path variables set.
+_run_lib_helper() {
+    (
+        source "$_lib_state_dir/helpers.sh"
+        ISCSI_MANIFEST="$_lib_manifest"
+        ISCSI_ENCRYPTED_CONF="$_lib_encconf"
+        ISCSI_MANIFEST_LOCK="$_lib_lockdir/.iscsi_manifest.lock"
+        ISCSI_ENCRYPTED_CONF_LOCK="$_lib_lockdir/.encrypted_luns.lock"
+        "$@"
+    ) >/dev/null 2>&1
+}
+
+test_lib_helpers_create_lock_files() {
+    test_start "lib manifest/encrypted helpers create their lock files"
+    _lib_helpers_setup
+    _run_lib_helper manifest_add_backstore "vm-101-disk-0"
+    _run_lib_helper encrypted_conf_add_backstore "vm-101-disk-0" \
+        "/dev/zvol/threeamigos/proxmox/vm-101-disk-0" "threeamigos"
+    if [[ -f "$_lib_lockdir/.iscsi_manifest.lock" \
+          && -f "$_lib_lockdir/.encrypted_luns.lock" ]]; then
+        test_pass
+    else
+        test_fail "lock files not created"
+    fi
+}
+
+test_lib_helpers_block_while_lock_held() {
+    test_start "lib manifest helper blocks while the lock is held elsewhere"
+    _lib_helpers_setup
+    local lockfile="$_lib_lockdir/.iscsi_manifest.lock"
+    # Hold the lock like another writer would, then verify the helper
+    # cannot finish (timeout kills it while it waits) and never writes.
+    exec 8>>"$lockfile"
+    flock -x 8
+    local rc=0
+    timeout 1 bash -c "
+        source '$_lib_state_dir/helpers.sh'
+        ISCSI_MANIFEST='$_lib_manifest'
+        ISCSI_ENCRYPTED_CONF='$_lib_encconf'
+        ISCSI_MANIFEST_LOCK='$lockfile'
+        ISCSI_ENCRYPTED_CONF_LOCK='$_lib_lockdir/.encrypted_luns.lock'
+        manifest_add_backstore 'vm-102-disk-0'
+    " >/dev/null 2>&1; rc=$?
+    flock -u 8
+    exec 8>&-
+    if [[ "$rc" -eq 124 ]] && ! grep -q "vm-102" "$_lib_manifest"; then
+        test_pass
+    else
+        test_fail "rc=$rc (want 124=blocked); manifest=$(cat "$_lib_manifest")"
+    fi
+    # After release the same call succeeds.
+    _run_lib_helper manifest_add_backstore "vm-102-disk-0"
+    if grep -q "^vm-102-disk-0$" "$_lib_manifest"; then
+        test_pass
+    else
+        test_fail "add did not run after lock release"
+    fi
+}
+
+test_lib_concurrent_appends_lose_nothing() {
+    test_start "concurrent manifest appends all land (no lost update)"
+    _lib_helpers_setup
+    local i pids=()
+    for i in 1 2 3 4 5 6; do
+        _run_lib_helper manifest_add_backstore "vm-20${i}-disk-0" &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || true
+    done
+    local found=0
+    for i in 1 2 3 4 5 6; do
+        grep -q "^vm-20${i}-disk-0$" "$_lib_manifest" && found=$((found + 1))
+    done
+    if [[ "$found" -eq 6 ]]; then
+        test_pass
+    else
+        test_fail "only $found of 6 appends present"
+    fi
+}
+
+test_lib_encrypted_remove_is_atomic_and_locked() {
+    test_start "encrypted-conf removal drops only the anchored line"
+    _lib_helpers_setup
+    printf 'vm-301-disk-0:/dev/zvol/a/t1:pool1\n' >> "$_lib_encconf"
+    printf 'vm-301-disk-0:/dev/zvol/other/t9:pool9\n' >> "$_lib_encconf"
+    printf 'vm-302-disk-0:/dev/zvol/a/t2:pool1\n' >> "$_lib_encconf"
+    _run_lib_helper encrypted_conf_remove_backstore "vm-301-disk-0"
+    local content
+    content=$(cat "$_lib_encconf")
+    # The prefix-anchored remove drops every vm-301 line (lib semantics:
+    # the entry is name-keyed); vm-302 must survive.
+    if [[ "$content" == *vm-302* && "$content" != *t9* ]]; then
+        test_pass
+    else
+        test_fail "content='$content'"
+    fi
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
+test_lib_helpers_create_lock_files
+test_lib_helpers_block_while_lock_held
+test_lib_concurrent_appends_lose_nothing
+test_lib_encrypted_remove_is_atomic_and_locked
 test_zero_active_backstores_refuses_save
 test_active_count_equals_expected_saves
 test_active_less_than_expected_refuses_save

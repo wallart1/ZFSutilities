@@ -333,6 +333,51 @@ test_ubuntu_template_name_validated() {
     assert_contains "$load_err" "ITF_UBUNTU_TEMPLATE_NAME has invalid characters"
 }
 
+write_mint_config() {
+    write_valid_config
+    cat >> "$tmp_dir/valid.conf" <<'EOF'
+ITF_MINT_ISO_URL=https://mirrors.example.invalid/linuxmint-cinnamon-64bit.iso
+ITF_MINT_ISO_NAME=itf-mint-cinnamon-64bit.iso
+EOF
+}
+
+test_mint_iso_pair_validated() {
+    test_start "Mint ISO keys follow the both-or-neither rule with shape checks"
+    write_mint_config
+    sed '/^ITF_MINT_ISO_NAME=/d' "$tmp_dir/valid.conf" > "$tmp_dir/mint.conf"
+    run_config_load "$tmp_dir/mint.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_MINT_ISO_URL and ITF_MINT_ISO_NAME"
+    assert_contains "$load_err" "must be set together"
+
+    write_mint_config
+    sed -i 's/^ITF_MINT_ISO_NAME=.*/ITF_MINT_ISO_NAME=mint-cinnamon-64bit.iso/' \
+        "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_MINT_ISO_NAME must start with 'itf-'"
+
+    write_mint_config
+    sed -i 's|^ITF_MINT_ISO_URL=.*|ITF_MINT_ISO_URL=ftp://nope.invalid/x.iso|' \
+        "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_MINT_ISO_URL must be an http(s) URL"
+
+    write_mint_config
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 0 "$load_rc"
+}
+
+test_mint_template_name_validated() {
+    test_start "Mint template name charset is enforced"
+    write_valid_config
+    echo 'ITF_MINT_TEMPLATE_NAME="bad name!"' >> "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_MINT_TEMPLATE_NAME has invalid characters"
+}
+
 test_missing_config_is_fail_closed
 test_committed_example_passes_validation
 test_valid_config_loads_with_defaults
@@ -348,6 +393,8 @@ test_compute_template_and_base_validated
 test_keystore_pair_validated
 test_ubuntu_iso_pair_validated
 test_ubuntu_template_name_validated
+test_mint_iso_pair_validated
+test_mint_template_name_validated
 
 rm -rf "$tmp_dir"
 teardown_test_env

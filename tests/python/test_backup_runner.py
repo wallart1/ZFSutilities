@@ -1341,6 +1341,42 @@ class TestRsyncLogDailyRotation(unittest.TestCase):
                 self.assertTrue(os.path.isdir(br.RSYNC_LOG_DIR))
                 self.assertFalse(os.path.exists(br.RSYNC_LOG_FILE))
 
+    def test_truncate_waits_for_live_appender(self):
+        # The daily truncate takes the exclusive lock; a live appender
+        # holding the shared lock must hold the truncate off — the
+        # midnight-boundary race the file lock exists to close.
+        import fcntl
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_path = os.path.join(tmpdir, "rsync-log.lock")
+            with patch("backup_runner.RSYNC_LOG_LOCK_PATH", lock_path):
+                dir_patch, file_patch = self._patch_rsync_log(tmpdir)
+                with dir_patch, file_patch:
+                    os.makedirs(br.RSYNC_LOG_DIR, exist_ok=True)
+                    with open(br.RSYNC_LOG_FILE, "w") as fh:
+                        fh.write("yesterday\n")
+                    yesterday = time.time() - 24 * 3600
+                    os.utime(br.RSYNC_LOG_FILE, (yesterday, yesterday))
+
+                    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_SH)
+                        worker = threading.Thread(target=br._truncate_rsync_log)
+                        worker.start()
+                        worker.join(0.5)
+                        self.assertTrue(
+                            worker.is_alive(), "truncate finished while an appender held the lock"
+                        )
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        worker.join(5)
+                        self.assertFalse(worker.is_alive())
+                        self.assertEqual(os.path.getsize(br.RSYNC_LOG_FILE), 0)
+                    finally:
+                        os.close(lock_fd)
+                        if worker.is_alive():
+                            worker.join(5)
+
 
 class TestSourceCleanup(unittest.TestCase):
     """Non-rsync source IDs are cleared correctly to avoid GLib warnings."""

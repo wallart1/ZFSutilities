@@ -75,6 +75,17 @@ ITF_ISO_NAME=itf-debian-netinst.iso
 # ITF_UBUNTU_ISO_NAME=itf-ubuntu-live-server.iso
 # ITF_UBUNTU_TEMPLATE_NAME=itf-template-ubuntu
 
+# Mint desktop-template profile (optional, opt-in — the fourth template
+# profile, a plain Linux Mint Cinnamon desktop with all current package
+# updates applied but no product install — the desktop-OS leg for GUI
+# journeys, which install the product through the first-time-user path).
+# The ISO pair is both-or-neither like the PVE/Ubuntu pairs and follows
+# the same shape rules; the template name follows the same charset rule
+# as ITF_TEMPLATE_NAME (default below when commented out).
+# ITF_MINT_ISO_URL=https://REPLACE-ME.invalid/linuxmint-cinnamon-64bit.iso
+# ITF_MINT_ISO_NAME=itf-mint-cinnamon-64bit.iso
+# ITF_MINT_TEMPLATE_NAME=itf-template-mint
+
 # Encrypted-key lab (optional, opt-in — used only by journeys that
 # provision the LUKS key-device lab, e.g. j05 --encrypted-keys).  Both
 # or neither: the LUKS passphrase protecting the lab key device and the

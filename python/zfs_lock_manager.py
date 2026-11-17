@@ -139,6 +139,16 @@ def _types_conflict(type1: str, type2: str) -> bool:
     return False
 
 
+# Lock strength for same-PID conversion: an acquire may strengthen a held
+# lock (r -> w -> x) but never weaken it.
+_TYPE_RANK = {"": 0, "r": 1, "w": 2, "x": 3}
+
+
+def _type_stronger(requested: str, held: str) -> bool:
+    """Return True if *requested* is strictly stronger than *held*."""
+    return _TYPE_RANK.get(requested, 0) > _TYPE_RANK.get(held, 0)
+
+
 def _hierarchy_conflict(requested: str, existing: str, relationship: str) -> bool:
     """Return True if *existing* lock blocks *requested* via hierarchy."""
     if relationship == "same":
@@ -533,16 +543,20 @@ def _list_remote_locks() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def _check_local_walk(dataset: str, lock_type: str) -> bool:
+def _check_local_walk(dataset: str, lock_type: str, skip: str | None = None) -> bool:
     """Return True if local lock files show *lock_type* acquirable on *dataset*.
 
     Cleans up stale locks first, then checks the target dataset, its
     ancestors, and its descendants. Never contacts a remote authority.
+    *skip* names a lock file to ignore in the same-dataset slot — used by
+    same-PID lock conversion, which replaces that file instead of
+    conflicting with it.
     """
     _cleanup_stale()
 
     # Same dataset.
-    if not _check_file(_lock_file(dataset), lock_type, "same"):
+    same_lockfile = _lock_file(dataset)
+    if same_lockfile != skip and not _check_file(same_lockfile, lock_type, "same"):
         return False
 
     # Ancestors.
@@ -655,6 +669,49 @@ def list_active_locks() -> list[dict]:
     return locks
 
 
+def _write_lock_file(lockfile: str, data: dict) -> None:
+    """Write a lock file atomically (tmp file + rename).
+
+    Other processes never see a partially-written (empty/truncated) lock
+    file. Raises OSError on failure; the caller wraps it in RuntimeError.
+    """
+    lock_dir = os.path.dirname(lockfile)
+    fd, tmp_path = tempfile.mkstemp(dir=lock_dir, prefix=".lock-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.write("\n")
+        os.replace(tmp_path, lockfile)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _convert_lock_file(lockfile: str, lock_type: str, description: str) -> None:
+    """Convert a lock this process holds to a strictly stronger type.
+
+    Keeps the holder's pid and script (the owning process is unchanged, and
+    the stale check matches on that script); rewrites type, description,
+    and the acquired timestamp. Raises OSError on failure.
+    """
+    dataset = _read_field(lockfile, "dataset") or ""
+    pid = _read_pid(lockfile)
+    script = _read_field(lockfile, "script") or _script_name()
+    timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    data = {
+        "dataset": dataset,
+        "type": lock_type,
+        "pid": pid if pid is not None else os.getpid(),
+        "script": script,
+        "acquired": timestamp,
+        "description": description,
+    }
+    _write_lock_file(lockfile, data)
+
+
 def acquire(dataset: str, lock_type: str, description: str = "") -> str:
     """Acquire a lock on *dataset*.
 
@@ -681,6 +738,35 @@ def acquire(dataset: str, lock_type: str, description: str = "") -> str:
     if existing_pid == os.getpid():
         with _refcount_lock:
             if lockfile in _lock_refcounts:
+                if _type_stronger(lock_type, _read_field(lockfile, "type") or ""):
+                    # Same-process conversion to a stronger type. The walk
+                    # skips our own lock file (it is being replaced, not
+                    # conflicted with) but still honors every other holder,
+                    # so a descendant read lock still blocks a w -> x
+                    # conversion. Local locks only; remote re-entry keeps
+                    # the held type (bash drives remote conversions).
+                    if not _is_remote_dataset(dataset) and not _check_local_walk(
+                        dataset, lock_type, skip=lockfile
+                    ):
+                        holders = [
+                            h
+                            for h in conflicting_lock_holders(dataset, lock_type)
+                            if h.get("pid") != os.getpid()
+                        ]
+                        if holders:
+                            details = "; ".join(_format_lock_holder(h) for h in holders)
+                            raise RuntimeError(
+                                f"conflict: cannot convert {lock_type} lock on {dataset}: {details}"
+                            )
+                        raise RuntimeError(
+                            f"conflict: cannot convert {lock_type} lock on {dataset}"
+                        )
+                    try:
+                        _convert_lock_file(lockfile, lock_type, description)
+                    except OSError as exc:
+                        raise RuntimeError(
+                            f"failed to convert lock file {lockfile}: {exc}"
+                        ) from exc
                 _lock_refcounts[lockfile] += 1
                 return lockfile
         # File exists but we lost the refcount; treat as fresh acquisition.
@@ -703,21 +789,7 @@ def acquire(dataset: str, lock_type: str, description: str = "") -> str:
     }
 
     try:
-        # Write to a temp file and rename it into place so that other
-        # processes never see a partially-written (empty/truncated) lock file.
-        lock_dir = os.path.dirname(lockfile)
-        fd, tmp_path = tempfile.mkstemp(dir=lock_dir, prefix=".lock-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-                f.write("\n")
-            os.replace(tmp_path, lockfile)
-        except OSError:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        _write_lock_file(lockfile, data)
     except OSError as exc:
         raise RuntimeError(f"failed to write lock file {lockfile}: {exc}") from exc
 

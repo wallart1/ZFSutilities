@@ -40,6 +40,12 @@ The documentation can be viewed in three ways:
     the server keeps running, they only update after the next `mkdocs build`
     or `deploy-version` run.
 
+!!! tip "You are not required to use the docserver"
+    The server does not need to be running during normal operations. And, it
+    is not needed to edit the files in `docs/docs/`. The net benefit is that
+    it provides a *dynamically-updated* view (via a web browser) of the 
+    documentation while you are editing the `docs/docs/` files.
+
 ## Automatic Installation
 
 Both installers — `bin/install-single-node` and
@@ -72,8 +78,7 @@ that the current docs originate from. This is handled automatically:
 - **`startdocserver`** checks whether an existing server on port 8000 is
   serving from the correct directory. If a stale server is running (e.g.
   started from an old repo checkout or a previous deployed version), it stops
-  the old process and restarts from the current directory. PID discovery falls
-  back through `lsof`, `fuser`, and `pgrep -f 'mkdocs serve'`.
+  the old process and restarts from the current directory.
 - **[switch-version](../commands-and-modules/two-node.md#switch-version-any-host)** stops any running documentation server after switching
   versions. The next invocation of `startdocserver` will start fresh from the
   newly activated version. It detects `mkdocs serve` processes.
@@ -143,7 +148,7 @@ To build a static site:
 cd "<project_directory>/docs" && python3 -m mkdocs build
 ```
 
-Output goes to `docs/site/` (not distributed).
+Output goes to `docs/site/`, which is not in the distribution.
 
 ### Clean builds
 
@@ -155,77 +160,3 @@ or use the `--clean` flag:
 cd "<project_directory>/docs" && python3 -m mkdocs build --clean
 ```
 
-## Edit-in-MarkText Integration
-
-Each page has a pencil icon (top-right). Clicking it opens the source `.md`
-file directly in MarkText via a custom `openmd://` URI scheme.
-
-MarkText is an AppImage installed at `/home/dan/MarkText/marktext`. Use the
-actively maintained fork at <https://github.com/Tkaixiang/marktext>.
-
-### Setup
-
-**Handler script** at `~/bin/openmd-handler`:
-
-```bash
-#!/bin/bash
-path="${1#openmd://}"
-path=$(python3 -c "import urllib.parse,sys; print(urllib.parse.unquote(sys.argv[1]))" "$path")
-exec /home/dan/MarkText/marktext "$path"
-```
-
-**Desktop entry** at `~/.local/share/applications/openmd.desktop`:
-
-```ini
-[Desktop Entry]
-Version=1.0
-Name=Open Markdown File
-Exec=/home/dan/bin/openmd-handler %u
-Type=Application
-StartupNotify=false
-MimeType=x-scheme-handler/openmd;
-NoDisplay=true
-```
-
-**Register the scheme:**
-
-```bash
-chmod +x ~/bin/openmd-handler
-update-desktop-database ~/.local/share/applications/
-xdg-mime default openmd.desktop x-scheme-handler/openmd
-```
-
-**Firefox:** on first click, choose **Always allow** when prompted about
-`openmd` links.
-
-### How the URL is constructed
-
-A MkDocs hook (`docs/hooks/edit_links.py`) sets `page.edit_url` for each
-page:
-
-```python
-file_path = os.path.join(docs_dir, page.file.src_path)
-page.edit_url = f"openmd://{urllib.parse.quote(file_path, safe='/:@()')}"
-```
-
-The handler strips `openmd://`, URL-decodes the path, and passes the
-filesystem path to MarkText.
-
-MkDocs validates `repo_url` and only accepts `http://` or `https://`, so the
-hook sets `page.edit_url` directly to bypass this.
-
-!!! note "Embedded viewer also uses `openmd://`"
-    The GTK GUI's embedded documentation viewer intercepts `openmd://` links
-    internally. Clicking the pencil icon launches the configured editor directly
-    without relying on a desktop URI handler. See
-    [GTK GUI Reference → Help Menu](../user-guide/gtk-gui.md#help-menu).
-
-    Because the baked path is absolute, the viewer re-anchors it before
-    launching the editor: the source tail after `/docs/docs/` is remapped
-    onto the documentation tree whose `docs/site/` the viewer is serving.
-    The pencil therefore always edits the markdown belonging to the tree on
-    screen — a repository-served viewer edits the repository document even
-    when the site was originally built elsewhere, and a deployment-served
-    viewer edits through the `current` symlink even when the site was built
-    inside a specific `versions/` directory. A browser using the desktop URI
-    handler receives the baked absolute path unchanged.

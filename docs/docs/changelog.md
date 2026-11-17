@@ -1,5 +1,119 @@
 # Changelog
 
+## 0.142.0
+
+*Released 2026-11-17*
+
+### Added
+
+- **Same-PID lock conversion.** A process that already holds a dataset
+  lock and asks for a stronger one (`r` → `w` → `x`) gets the lock
+  upgraded in place: the lock file is rewritten after the normal
+  conflict check, with no release and re-acquire in between. A weaker
+  request keeps the stronger held lock. The two-node agent learns a
+  `convert` subcommand so forwarded locks convert on the storage node
+  too; while only one node runs this version, the lock simply keeps its
+  previous strength (with a note in the log) instead of dropping.
+- **iSCSI authority files are now lock-protected.** Every edit of
+  `expected-backstores.txt` and `iscsi-encrypted-luns.conf` — by the
+  VM-disk lifecycle commands, `safe-iscsi-save`, `repair-iscsi-luns`,
+  `reconcile-iscsi-state`, or the GUI — runs under a shared file lock,
+  so concurrent operations can no longer lose each other's entries.
+  Regenerations re-list the live targetcli state inside the lock, and
+  removals write through a temp file so readers never see a half-written
+  file.
+- **Checkagainst fences concurrent deletions.** `zfscheckagainst` takes
+  short-lived shared read locks on the candidate snapshot's dataset and
+  on every counterpart it consults. A dataset that is busy (locked by
+  another operation) is treated exactly like an offline pool: the
+  deletion is blocked for safety and the warning names the holder. The
+  check never waits, so two prunes on mirrored trees can refuse each
+  other but never deadlock; each catches up on its next run.
+- **Transactional scrub-queue state.** Every scrub-queue change — from
+  the GUI's Pools tab, the Dashboard, or a scheduled scrub profile —
+  now runs as one locked reload-modify-save cycle on
+  `scrub_state.json`. A change made in one place can no longer be
+  overwritten by a stale copy in another. On the rare busy cycle the
+  queue logs a warning and skips; state converges on the next refresh.
+- **ITF mint template profile.** A fourth baseline template for the
+  integrated test framework: Linux Mint 22.3 "Zena" Cinnamon, a plain
+  desktop-OS leg with no product install, for journeys that exercise
+  the GUI's first-time-user path. The ubiquity preseed rides a patched
+  casper initrd (Mint never fetches network preseeds outside netboot),
+  and because Mint's automatic installer finish never runs the
+  post-install hook, provisioning happens in a serial-driven boot the
+  driver fully controls. Opt-in via `ITF_MINT_ISO_URL` /
+  `ITF_MINT_ISO_NAME` in the site config.
+
+### Fixed
+
+- **Restores hold the destination lock through the destroy.** A forced
+  full copy used to release its destination write lock around the
+  destructive preparation and re-acquire it afterward. The lock is now
+  held continuously — the destroy step's lock converts the write lock
+  in place — so a second restore targeting the same destination can no
+  longer slip a destroy in between. Two restores still serialize on the
+  one lock.
+- **The rsync log's daily reset no longer lands under a live run.** The
+  once-per-day truncate of `rsync-backup.log` takes an exclusive lock,
+  and every append (including the bash-side `rsync-pull.log` twins,
+  local and over ssh) holds the shared lock for its append window. A
+  midnight reset now waits for running backups instead of erasing their
+  in-flight output.
+- **Checkagainst's busy-counterpart report.** The accumulation of
+  locked counterpart datasets in the refusal warning never executed
+  (a broken line continuation made bash treat the text as a command);
+  it is fixed and now covered by a regression test.
+
+### Changed
+
+- **`zfscheckagainst` exit code 6 broadened.** "Deletion blocked for
+  safety" now covers a counterpart that is locked by another operation
+  in addition to a counterpart pool that is offline. The accompanying
+  warning names which datasets are locked and who holds them, and
+  `zfsdelsnap`'s summary line reads "counterpart unavailable (offline
+  or locked)". Callers that treat rc 6 as retry-later need no change.
+- **Scrub-queue mutators reload persisted state.** Every mutator
+  re-reads `scrub_state.json` under the lock before mutating, so
+  programmatic arrangements made only in memory are replaced by what is
+  on disk. The GUI and profile loops drive the queue through one
+  transactional reload+tick cycle.
+- **GUI reads of the iSCSI manifest and encrypted-LUN config take the
+  shared file lock**, so the Dashboard never observes a mid-rewrite
+  state of either file.
+
+### Tests
+
+- Same-PID conversion matrix in the bash and Python lock-manager
+  suites; the remote agent's `convert` subcommand (strengthen, refuse
+  weakening, refuse stale, refuse paths outside the lock directory);
+  the full-copy destination lock held continuously through the destroy.
+- Checkagainst lock refusals (busy source, busy counterpart, multiple
+  busy counterparts, another row verifying); lock-before-enumeration
+  ordering in `zfsretain`; the iSCSI lib helpers serialize, block while
+  the lock is held elsewhere, and lose no concurrent appends; the
+  truncate-waits-for-appender race in the backup runner; scrub-queue
+  transactions lose no entry and skip cleanly on contention. Nine
+  command-builder goldens regenerated for the rsync lock wrappers.
+- ITF mint coverage: site-config validation, driver selectors, the
+  mint boot flow (no HTTP seed, real VGA device, patched initrd), the
+  provision-boot gates, the template stamp/freshness/build threading,
+  and the Cinnamon boot gate.
+
+### Documentation
+
+- *Concurrency and Collision Risks* rewritten: every scenario now
+  states its fence, the severity table is green across the board, and
+  the old "do not run X while Y" workaround guidance is replaced by
+  operational guidance for the three warnings an operator may actually
+  see. The lock-manager guide gains a Same-PID Lock Conversion section
+  and the remote agent's `convert` subcommand; the file-lock table in
+  the data-structures guide lists the three new lock files.
+- GLOSSARY gains *casper*, *ubiquity*, *dataset lock conversion*,
+  *worktree*, *Wayland*, *Product*, *Lane*, and *Tree*; the profile
+  guide documents that running `zfsscruball` alongside managed scrubs
+  is safe.
+
 ## 0.141.0
 
 *Released 2026-11-11*

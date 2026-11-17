@@ -20,6 +20,10 @@
 #       Force-remove a lock file.
 #   cleanup
 #       Remove stale locks and print the count removed.
+#   convert <lockfile> <type> [description]
+#       Rewrite a lock held by a live agent to a strictly stronger type
+#       (r < w < x). Prints "CONVERTED <lockfile>" on success. Used by the
+#       compute side for same-process lock conversion on forwarded locks.
 
 set -euo pipefail
 
@@ -152,6 +156,62 @@ cmd_cleanup() {
     zfslock_cleanup_stale
 }
 
+# Convert a lock held by a live agent process to a stronger type. The lock
+# file must live in the lock directory (no path traversal), and its pid must
+# belong to a running zfslockmanager-remote agent — the compute side only
+# asks for a conversion on a lock its own SSH session holds. Keeps the
+# holder's pid and script; rewrites type, description, and acquired time.
+cmd_convert() {
+    local lockfile="${1:-}"
+    local type="${2:-}"
+    local description="${3:-}"
+
+    if [[ -z "$lockfile" || -z "$type" ]]; then
+        echo "ERROR: convert requires a lock file path and type" >&2
+        exit 2
+    fi
+    if [[ ! "$type" =~ ^[rwx]$ ]]; then
+        echo "ERROR: convert type must be r, w, or x" >&2
+        exit 2
+    fi
+
+    zfslock_init
+
+    # Confinement: the lock file must be a plain name inside the lock
+    # directory, not an arbitrary path. Reject bare names and any path that
+    # is not exactly <lock-dir>/<basename>.
+    local basename=${lockfile##*/}
+    if [[ "$basename" = "$lockfile" ]] \
+        || [[ "$lockfile" != "$zfslock_locks_dir/$basename" ]]; then
+        echo "ERROR: convert lock file must be inside $zfslock_locks_dir" >&2
+        exit 2
+    fi
+
+    if [[ ! -f "$lockfile" ]]; then
+        echo "ERROR: convert target does not exist" >&2
+        exit 1
+    fi
+
+    local held_type
+    held_type=$(_zfslock_read_field "$lockfile" "type" || echo "")
+    if ! _zfslock_type_stronger "$type" "$held_type"; then
+        echo "ERROR: convert only strengthens (held '${held_type:-?}', asked '$type')" >&2
+        exit 1
+    fi
+
+    # The lock must belong to a live holding agent, not a stale file.
+    if zfslock_is_stale "$lockfile"; then
+        echo "ERROR: convert target is stale" >&2
+        exit 1
+    fi
+
+    if ! _zfslock_convert_lock_file "$lockfile" "$type" "$description"; then
+        echo "ERROR: convert failed to rewrite $lockfile" >&2
+        exit 1
+    fi
+    echo "CONVERTED $lockfile"
+}
+
 case "${1:-}" in
     hold)
         shift
@@ -171,8 +231,12 @@ case "${1:-}" in
     cleanup)
         cmd_cleanup
         ;;
+    convert)
+        shift
+        cmd_convert "$@"
+        ;;
     *)
-        echo "Usage: $0 {hold|check|list|release|cleanup} ..." >&2
+        echo "Usage: $0 {hold|check|list|release|cleanup|convert} ..." >&2
         exit 2
         ;;
 esac
