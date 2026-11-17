@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.142.0
+
+*Released 2026-11-16*
+
+### Added
+
+- **Managed-pool scope (GUI).** Every page except the Pool Registry table
+  on the Pools tab now lists and acts on **managed pools** only — pools
+  that are both **registered** (in the pool registry) and **online**
+  (imported, whatever their health: a DEGRADED pool counts, IMPORTABLE
+  and OFFLINE do not). Unregistered pools appear nowhere else: pickers
+  never offer them, the Dashboard reports them as counts pointing at the
+  Pools tab instead of naming them, and the Scrub Manager never adopts
+  an externally started scrub on one. Saving a config or profile that
+  names an unregistered or offline pool is refused with the pool named;
+  at run time, scheduled profiles skip the affected steps or pools with
+  a `WARN` naming the pool and run the rest. The wipe safety fence still
+  reads full pool membership, so the filtered display never weakens it.
+
+### Fixed
+
+- **DEGRADED pools were missing from the Retention prune list** — only
+  pools with health exactly `ONLINE` counted as online. Rows now carry
+  the pool's live health from `zpool list`.
+- **Disks-page dialog tables stretched and crushed.** A short picker
+  table expanded to fill an enlarged dialog window, and short scrolled
+  dialogs crushed their capped tables toward the cap floor instead of
+  scrolling. Tables now hug their rows (up to the twenty-row cap, then
+  scroll inside), the window carries the overflow, and the Manage Pool
+  Profiles dialog became a scrolled window.
+- **The Detach button was enabled for nodes that cannot be detached.**
+  It now greys out with an explanatory tooltip unless the topology
+  selection is a mirror vdev, one of its members, or empty (the dialog
+  is the picker); the dialog's own checks are unchanged.
+
+### Changed
+
+- The Retention prune list with an **empty registry now lists nothing**
+  — the old fallback to all online pools is gone (the `zfscleanup`
+  command keeps its own fallback).
+- Dashboard pool-identity warnings no longer name pools that are not in
+  the registry; count-based warning rows point at the Pools tab instead.
+- The create-pool wizard's name-collision check also covers registered
+  (possibly offline) pool names, so a registered name cannot be shadowed
+  by a freshly created pool.
+- Several warnings reworded for the scope policy (`No managed pools to
+  grow/maintain/migrate`, scrub-button refusals, `not imported — cannot
+  watch` for IMPORTABLE/OFFLINE watch rows).
+
+### Tests
+
+- Managed-scope coverage across the GUI suites: the scope helpers and
+  endpoint parsing (placeholders, remotes, absolute paths), the shared
+  refusal gate including its fail-safe direction when the pool listing
+  fails, per-page save/run refusals, the count-based Dashboard identity
+  warnings, the managed health grid, registry-gated scrub adoption, the
+  watch-window not-imported skip, and the profile-runner skip+WARN plus
+  fail-closed pool listing.
+- New realized-sizing suite (child process on a private Xvfb display)
+  locking dialog-table geometry: row-hugging pickers, the twenty-row
+  cap, and windows that scroll; the shared dialog factory's NATURAL
+  vscroll policy asserted directly.
+- Detach mirror-membership gate truth table, including compute-host-gate
+  precedence.
+- The new Backup save-gate test caught the gate reading the collected
+  dict-shaped steps as list rows — a `KeyError` on every Backup save
+  with send/receive steps — fixed before release.
+
+### Documentation
+
+- GTK GUI guide: a new **Pool scope** section plus per-page scope notes,
+  the universal table rule for Disks-page dialogs, and the Detach
+  button-gating paragraph.
+- Data-structures guide: the `pools` key (the pool registry) policy;
+  architecture guide: the `feature_config` scope helpers row; testing
+  guide rows for every extended suite.
+- Messages catalog rows for each new or reworded `WARN`/`FATAL`; three
+  glossary entries (managed pool, online, registered).
+
 ## 0.141.0
 
 *Released 2026-11-11*

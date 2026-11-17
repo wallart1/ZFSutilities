@@ -194,6 +194,23 @@ class TestGetPoolHealth(unittest.TestCase):
             pools = dp._get_pool_health()
         self.assertEqual(pools[0]["scrub_date"], "Fri Jun 12 12:00:13 2026")
 
+    def test_config_filters_unregistered_pools(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid",
+                lambda *_a, **_k: m._completed(
+                    "tank\tONLINE\t10T\t5T\t5T\t50%\t-\t1234567890\n"
+                    "bootpool\tONLINE\t10T\t5T\t5T\t50%\t-\t9988776655\n"
+                ),
+            )
+            m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(""))
+            pools = dp._get_pool_health(
+                config={"pools": [{"name": "tank", "offsite_candidate": False}]}
+            )
+        # Managed-pool scope: bootpool is imported but unregistered, so the
+        # health grid never lists it.
+        self.assertEqual([p["name"] for p in pools], ["tank"])
+
 
 class TestGetRecentEntries(unittest.TestCase):
     @patch("dashboard_page.load_history")
@@ -1111,6 +1128,54 @@ class TestComputePoolIdentityWarnings(unittest.TestCase):
         self.assertFalse(any("z40tb" in w for w in warnings))
         self.assertTrue(any("temp" in w and "not configured" in w for w in warnings))
 
+    def test_unregistered_not_imported_reported_as_count(self):
+        # The not-imported pool is outside the registry, so the warning is a
+        # count pointing at the Pools tab — the name never leaves the registry.
+        config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+        patches, repo = self._stack(
+            {"tank", "bootpool"},
+            self._rows(("tank", "111")),
+            {"tank": "111"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo, config=config)
+        self.assertTrue(
+            any("1 unregistered pool(s) in node.conf not imported" in w for w in warnings)
+        )
+        self.assertFalse(any("bootpool" in w for w in warnings))
+
+    def test_unregistered_imported_not_configured_reported_as_count(self):
+        config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+        patches, repo = self._stack(
+            {"tank"},
+            self._rows(("tank", "111"), ("bootpool", "222")),
+            {"tank": "111"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo, config=config)
+        self.assertTrue(any("1 imported pool(s) missing from node.conf" in w for w in warnings))
+        self.assertFalse(any("bootpool" in w for w in warnings))
+
+    def test_unregistered_guid_mismatch_reported_as_count(self):
+        config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+        patches, repo = self._stack(
+            {"tank", "bootpool"},
+            self._rows(("tank", "111"), ("bootpool", "999")),
+            {"tank": "111", "bootpool": "222"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo, config=config)
+        self.assertTrue(any("1 unregistered pool GUID mismatch(es)" in w for w in warnings))
+        self.assertFalse(any("bootpool GUID changed" in w for w in warnings))
+        # A registered sibling in the same state keeps its named warning.
+        self.assertFalse(any("tank GUID changed" in w for w in warnings))
+
     def test_get_pool_identity_warnings_forwards_config(self):
         config = {"pools": [{"name": "z22tb", "offsite_candidate": True}]}
         with patch.object(dp, "_compute_pool_identity_warnings", return_value=[]) as mock_compute:
@@ -1623,6 +1688,25 @@ class CollectRunningTasksIdleHostMixin(unittest.TestCase):
 
 
 class TestCollectRunningTasks(CollectRunningTasksIdleHostMixin):
+    def test_unregistered_scrub_hidden_from_tasks(self):
+        """Managed-pool scope: an unregistered pool's scrub is not displayed."""
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.dataset_runner = None
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+        queue = MagicMock()
+        queue.active = {"bootpool"}
+        app.scrub_queue = queue
+        with patch("scrub_manager.get_all_pool_scrub_states") as mock_states:
+            mock_states.return_value = {
+                "bootpool": MagicMock(state=MagicMock(), progress_percent=50.0, eta=None),
+            }
+            tasks = dp._collect_running_tasks(app)
+        self.assertEqual([t for t in tasks if t["type"] == "Scrub"], [])
+
     def test_no_tasks_when_everything_idle(self):
         app = MagicMock()
         app.backup_runner = None
@@ -1668,6 +1752,7 @@ class TestCollectRunningTasks(CollectRunningTasksIdleHostMixin):
         app.restore_runner = None
         app.retention_runner = None
         app.dataset_runner = None
+        app.config = {"pools": [{"name": "fivebays", "offsite_candidate": False}]}
         queue = MagicMock()
         queue.active = {"fivebays"}
         app.scrub_queue = queue
@@ -1699,6 +1784,7 @@ class TestCollectRunningTasks(CollectRunningTasksIdleHostMixin):
         app.restore_runner = None
         app.retention_runner = None
         app.dataset_runner = None
+        app.config = {"pools": [{"name": "fivebays", "offsite_candidate": False}]}
         queue = MagicMock()
         queue.active = {"fivebays"}
         app.scrub_queue = queue
@@ -1815,6 +1901,12 @@ class TestCollectRunningTasks(CollectRunningTasksIdleHostMixin):
         app.restore_runner = None
         app.retention_runner = None
         app.dataset_runner = None
+        app.config = {
+            "pools": [
+                {"name": "fivebays", "offsite_candidate": False},
+                {"name": "threeamigos", "offsite_candidate": False},
+            ]
+        }
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
             fh.write("{}")
@@ -1858,6 +1950,12 @@ class TestCollectRunningTasks(CollectRunningTasksIdleHostMixin):
         app.restore_runner = None
         app.retention_runner = None
         app.dataset_runner = None
+        app.config = {
+            "pools": [
+                {"name": "fivebays", "offsite_candidate": False},
+                {"name": "threeamigos", "offsite_candidate": False},
+            ]
+        }
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
             fh.write("{}")
@@ -2049,6 +2147,9 @@ class TestCollectRunningTasksZfsOperations(CollectRunningTasksIdleHostMixin):
         app.retention_runner = None
         app.dataset_runner = None
         app.scrub_queue = None
+        # Managed-pool scope: the fixtures below operate on "tank", which
+        # must be registered for its tasks to be displayed.
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
         return app
 
     def _collect_with_status(self, raw):
@@ -2107,6 +2208,17 @@ class TestCollectRunningTasksZfsOperations(CollectRunningTasksIdleHostMixin):
         tasks = self._collect_with_status("")
         self.assertEqual(tasks, [])
 
+    def test_unregistered_pool_op_hidden(self):
+        """Managed-pool scope: a resilver on an unregistered pool is not shown."""
+        raw = """\
+  pool: bootpool
+ state: DEGRADED
+  scan: resilver in progress since Thu Sep 10 22:00:00 2026
+    45.20% done, 0 days 02:10:00 to go
+"""
+        tasks = self._collect_with_status(raw)
+        self.assertEqual([t for t in tasks if t["type"] == "ZFS"], [])
+
 
 class TestProfileNameFromRunnerArgs(unittest.TestCase):
     """_profile_name_from_runner_args must keep resolving names with flags.
@@ -2162,6 +2274,14 @@ class TestCollectRunningTaskTimes(CollectRunningTasksIdleHostMixin):
         app.retention_runner = None
         app.dataset_runner = None
         app.scrub_queue = None
+        # Managed-pool scope: fixtures use "tank" (ZFS ops) and "fivebays"
+        # (scrub); both must be registered for their tasks to be displayed.
+        app.config = {
+            "pools": [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "fivebays", "offsite_candidate": False},
+            ]
+        }
         return app
 
     def test_gui_runner_started_from_session_start_time(self):

@@ -213,6 +213,103 @@ class TestPoolsAndCheckagainst(unittest.TestCase):
         self.assertEqual(data["user_entries"], [])
 
 
+class TestManagedPoolScope(unittest.TestCase):
+    """Managed-pool helpers: registered AND online, Pools-tab semantics."""
+
+    @staticmethod
+    def _config():
+        return {
+            "pools": [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "z40tb", "offsite_candidate": True},
+                {"name": "oldpool", "offsite_candidate": False},
+            ]
+        }
+
+    def test_managed_intersection_preserves_registry_order(self):
+        # z40tb imported (listed first online) but tank is first in registry.
+        self.assertEqual(
+            feature_config.get_managed_pool_names(self._config(), ["z40tb", "tank", "bootpool"]),
+            ["tank", "z40tb"],
+        )
+
+    def test_degraded_pool_counts_as_online(self):
+        # "Online" = imported, any health; the helper only sees names, so a
+        # DEGRADED pool present in the imported list stays managed.
+        self.assertEqual(
+            feature_config.get_managed_pool_names(self._config(), ["tank", "z40tb", "oldpool"]),
+            ["tank", "z40tb", "oldpool"],
+        )
+
+    def test_unregistered_and_not_imported_pools_excluded(self):
+        # bootpool is online but unregistered; oldpool is registered but
+        # neither imported nor importable-online here.
+        self.assertEqual(
+            feature_config.get_managed_pool_names(self._config(), ["tank", "bootpool"]),
+            ["tank"],
+        )
+
+    def test_empty_registry_yields_no_managed_pools(self):
+        self.assertEqual(feature_config.get_managed_pool_names({}, ["tank", "bootpool"]), [])
+
+    def test_non_managed_reports_unregistered_and_offline(self):
+        config = self._config()
+        online = ["tank", "z40tb", "bootpool"]
+        # oldpool: registered but offline; bootpool: online but unregistered.
+        self.assertEqual(
+            feature_config.non_managed_pool_names(["tank", "oldpool", "bootpool"], config, online),
+            ["oldpool", "bootpool"],
+        )
+
+    def test_non_managed_ignores_placeholders_blanks_and_duplicates(self):
+        self.assertEqual(
+            feature_config.non_managed_pool_names(
+                ["tank", "<offsite>", "default", "", "tank", None],
+                self._config(),
+                ["tank", "z40tb"],
+            ),
+            [],
+        )
+
+    def test_non_managed_empty_when_all_managed(self):
+        self.assertEqual(
+            feature_config.non_managed_pool_names(
+                ["z40tb", "tank"], self._config(), ["tank", "z40tb"]
+            ),
+            [],
+        )
+
+    def test_pool_name_from_endpoint_shapes(self):
+        # Local dataset paths name their pool; placeholders (bare or
+        # prefixed), remotes, absolute paths, and blanks name nothing.
+        self.assertEqual(feature_config.pool_name_from_endpoint("tank/data"), "tank")
+        self.assertEqual(feature_config.pool_name_from_endpoint("tank"), "tank")
+        self.assertIsNone(feature_config.pool_name_from_endpoint("<offsite>"))
+        self.assertIsNone(feature_config.pool_name_from_endpoint("<offsite>/dst"))
+        self.assertIsNone(feature_config.pool_name_from_endpoint("remote:/tank/data"))
+        self.assertIsNone(feature_config.pool_name_from_endpoint("/absolute/path"))
+        self.assertIsNone(feature_config.pool_name_from_endpoint(""))
+        self.assertIsNone(feature_config.pool_name_from_endpoint(None))
+
+    def test_non_managed_endpoint_pools_mixed_shapes(self):
+        # Only local dataset endpoints name pools: bootpool is unregistered,
+        # oldpool is registered but offline, everything else passes.
+        endpoints = [
+            "tank/src",
+            "<offsite>",
+            "<offsite>/dst",
+            "remote.example:/tank/data",
+            "bootpool/b",
+            "oldpool",
+        ]
+        self.assertEqual(
+            feature_config.non_managed_endpoint_pools(
+                endpoints, self._config(), ["tank", "z40tb", "bootpool"]
+            ),
+            ["bootpool", "oldpool"],
+        )
+
+
 class TestArchivePath(unittest.TestCase):
     """Archive path helper."""
 

@@ -54,7 +54,7 @@ from config_core import (
 )
 from disk_repository import format_bytes
 from disks_page import enclosure_display_name
-from feature_config import get_enclosures_config
+from feature_config import get_enclosures_config, get_managed_pool_names
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     capped_treeview_scroll,
@@ -875,7 +875,10 @@ def _apply_memory_sample(app, sample):
         )
 
     # --- L2ARC ---
-    cache_vdevs = [v for v in sample.vdevs if v.section == "cache"]
+    # Managed pools only: unregistered pools are shown solely in the Pool
+    # Registry, so their cache/log vdevs stay off this page.
+    managed_pools = set(get_managed_pool_names(app.config, {v.pool for v in sample.vdevs}))
+    cache_vdevs = [v for v in sample.vdevs if v.section == "cache" and v.pool in managed_pools]
     if not sample.iostat_available:
         show_note(
             app._memory_l2_note,
@@ -923,7 +926,7 @@ def _apply_memory_sample(app, sample):
     reconcile_rows(app._memory_l2_store, l2_rows)
 
     # --- SLOG ---
-    log_vdevs = [v for v in sample.vdevs if v.section == "logs"]
+    log_vdevs = [v for v in sample.vdevs if v.section == "logs" and v.pool in managed_pools]
     if not sample.iostat_available:
         show_note(
             app._memory_slog_note,
@@ -1063,6 +1066,12 @@ def _apply_enclosure_sample(app, sample, charts=True):
     if data is not None and data.enclosures:
         entries = get_enclosures_config(app.config)
         totals = rollup_enclosure_rates(sample.vdevs, _enclosure_membership(data))
+        # Managed pools only in the Pools column: unregistered pools are
+        # shown solely in the Pool Registry (rates stay hardware-level).
+        all_member_pools = set()
+        for enclosure in data.enclosures:
+            all_member_pools.update(enclosure.pools)
+        managed_pools = set(get_managed_pool_names(app.config, all_member_pools))
         for enclosure in data.enclosures:
             entry = entries.get(enclosure.id) or {}
             name = enclosure_display_name(enclosure, entry.get("name", ""))
@@ -1077,7 +1086,7 @@ def _apply_enclosure_sample(app, sample, charts=True):
                 percent = "—"
             rows[(enclosure.id, name)] = [
                 name,
-                ", ".join(enclosure.pools),
+                ", ".join(p for p in enclosure.pools if p in managed_pools),
                 format_rate(rates.read_bps if rates is not None else None),
                 format_rate(rates.write_bps if rates is not None else None),
                 entry.get("max_rate", "") or "unlimited",

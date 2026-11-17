@@ -136,6 +136,10 @@ class FakeTreeStore:
     def get_value(self, it, col):
         return self._row_node(it.path)["row"][col]
 
+    def iter_parent(self, it):
+        parent_path = it.path[:-1]
+        return _TreeIter(parent_path) if parent_path else None
+
     def get_path(self, it):
         return it.path
 
@@ -187,7 +191,14 @@ class FakeTreeView:
 def _make_app(disks=None, topologies=None, enclosures=None):
     """Return a mocked app object ready for disks_page tests."""
     app = MagicMock()
-    app.config = {"pools": []}
+    # Managed-pool scope: fixture pools (topologies and enclosure members)
+    # are registered so the display filter keeps them visible.
+    registered = set(topologies or {})
+    for enclosure in enclosures or []:
+        registered.update(enclosure.pools)
+    app.config = {
+        "pools": [{"name": name, "offsite_candidate": False} for name in sorted(registered)]
+    }
     app.stack.get_visible_child_name.return_value = "disks"
     app.enable_treeview_copy = MagicMock()
 
@@ -1671,6 +1682,40 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
             btn.reset_mock()
 
 
+class TestWipeSafetyManagedScope(unittest.TestCase):
+    """The wipe fence holds even when the Pools cell is filtered empty."""
+
+    def test_unregistered_pool_membership_still_blocks_wipe(self):
+        dp = _import_disks_page()
+        disk = _disk(path="/dev/sda", pools=["bootpool"])
+        app = _make_app(disks=[disk], topologies={"bootpool": _topology("bootpool")})
+        # Only "tank" is registered: bootpool is online but unregistered, so
+        # managed-pool display scope hides its name …
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+
+        dp.refresh_disks_page(app)
+
+        # … the Pools cell reads empty …
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_POOLS], "")
+        # … but wiping is still refused: the decisive check reads FULL pool
+        # membership from the inventory, never the filtered display.
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [0])
+        self.assertFalse(dp._selected_disk_is_wipeable(app))
+
+    def test_registered_pool_membership_blocks_wipe_via_cell(self):
+        dp = _import_disks_page()
+        disk = _disk(path="/dev/sda", pools=["tank"])
+        app = _make_app(disks=[disk], topologies={"tank": _topology("tank")})
+
+        dp.refresh_disks_page(app)
+
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_POOLS], "tank")
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [0])
+        self.assertFalse(dp._selected_disk_is_wipeable(app))
+
+
 class TestEnclosureCacheAttach(unittest.TestCase):
     """DiskInventoryCache._load attaches enclosure membership to disks."""
 
@@ -1742,7 +1787,10 @@ class TestEnclosuresSection(unittest.TestCase):
             _disk(path="/dev/sdb", enclosure_id=enclosure.id),
         ]
         app = _make_app(disks=disks, enclosures=[enclosure])
-        app.config = {"enclosures": {enclosure.id: {"name": "fivebays", "max_rate": "100m"}}}
+        app.config = {
+            "pools": [{"name": "tank", "offsite_candidate": False}],
+            "enclosures": {enclosure.id: {"name": "fivebays", "max_rate": "100m"}},
+        }
 
         dp.refresh_disks_page(app)
 
@@ -1771,8 +1819,9 @@ class TestEnclosuresSection(unittest.TestCase):
             members=["sdd"],
             pools=[],
         )
-        app = _make_app(enclosures=[usb, esata])
+        app = _make_app(enclosures=[usb, esata], topologies={"tank": _topology("tank")})
         app.config = {
+            "pools": [{"name": "tank", "offsite_candidate": False}],
             "enclosures": {usb.id: {"name": "fivebays", "max_rate": "100m"}},
         }
 

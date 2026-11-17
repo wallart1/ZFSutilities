@@ -55,7 +55,11 @@ from charting import (
     ladder_pixel_height,
 )
 from disk_repository import format_bytes
-from feature_config import get_alignment_survey, get_workload_profiles
+from feature_config import (
+    get_alignment_survey,
+    get_managed_pool_names,
+    get_workload_profiles,
+)
 from gi.repository import GLib, Gtk, Pango
 
 # The cell-tooltip machinery lives in gui_helpers now; the underscore
@@ -755,6 +759,22 @@ def _on_ladder_box_size_allocate(box, allocation, app):
 # ---------------------------------------------------------------------------
 
 
+def _restrict_to_managed_pools(sample, config):
+    """Drop unregistered pools from an alignment sample (managed-pool scope).
+
+    The sample's own pool list is the live `zpool list` output, so it doubles
+    as the online set. Unregistered pools are shown solely in the Pool
+    Registry (Pools tab), so their chain/topology/workload rows and dataset
+    entries stay off this page.
+    """
+    managed = set(get_managed_pool_names(config, [p.name for p in sample.pools]))
+    sample.pools = [p for p in sample.pools if p.name in managed]
+    sample.datasets = [d for d in sample.datasets if d.name.split("/", 1)[0] in managed]
+    sample.dataset_read_failures = [
+        name for name in sample.dataset_read_failures if name.split("/", 1)[0] in managed
+    ]
+
+
 def refresh_alignment_view(app):
     """Collect an alignment sample off-thread and update the view on idle."""
     if getattr(app, "_alignment_refresh_pending", False):
@@ -769,6 +789,7 @@ def refresh_alignment_view(app):
     disk_repo = getattr(ctx, "disk_repository", None)
     survey = get_alignment_survey(app.config)
     profiles = get_workload_profiles(app.config)
+    config = app.config
     # One prober lives for the page's lifetime: its TTL cache keeps the
     # 1-300 s refresh cadence from re-probing guests every cycle.
     prober = getattr(app, "_alignment_guest_prober", None)
@@ -788,6 +809,8 @@ def refresh_alignment_view(app):
             # dashboard worker).
             log_msg(f"WARN: Alignment sample gathering failed: {exc}")
             sample = None
+        if sample is not None:
+            _restrict_to_managed_pools(sample, config)
         GLib.idle_add(_finish_refresh, app, sample, survey, profiles)
 
     def _finish_refresh(_app, sample, _survey, _profiles):

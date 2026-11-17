@@ -622,6 +622,19 @@ class TestScrubQueue(unittest.TestCase):
         self.assertTrue(str(reports[0].args[0]).startswith("VERB:"))
         self.assertIn("tank", q.active)
 
+    def test_tick_external_scrub_on_unregistered_pool_not_adopted(self):
+        """Managed-pool scope: with a registry callable, an external scrub on
+        an unregistered pool is never adopted into the queue."""
+        q = sm.ScrubQueue(target=1, registered_names=lambda: ["tank"])
+        states = {
+            "tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
+            "bootpool": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
+        }
+        with patch.object(sm, "log_msg"):
+            q.tick(states)
+        self.assertIn("tank", q.active)
+        self.assertNotIn("bootpool", q.active | q.pending | q.paused | q.finished)
+
     def test_tick_external_scrub_reported_again_after_new_episode(self):
         """Once the external scrub ends, a new external scrub is reported again."""
         q = sm.ScrubQueue(target=1)
@@ -967,6 +980,7 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
         app.scrub_queue.paused = {"tank"}
 
         with (
@@ -989,6 +1003,7 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
         with (
             patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
             patch.object(pools_page, "refresh_scrub_table") as mock_refresh,
@@ -1009,6 +1024,7 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
         app.scrub_queue.paused = {"tank"}
         with (
             patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
@@ -1028,6 +1044,7 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
         with (
             patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
             patch.object(pool_actions, "pause_scrub"),
@@ -1049,6 +1066,7 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
         app.scrub_queue.paused = set()
         with (
             patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
@@ -1076,6 +1094,7 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
         with (
             patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
             patch.object(pool_actions, "stop_scrub"),
@@ -1087,6 +1106,63 @@ class TestPoolActionsScrub(unittest.TestCase):
         app.scrub_queue.remove_pools.assert_called_once_with(["tank"])
         mock_refresh.assert_called_once_with(app)
         mock_burst.assert_called_once_with(app)
+
+    def test_on_scrub_start_refuses_unregistered_pool(self):
+        """Managed-pool scope: an unregistered selection is refused by name."""
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pool_actions
+
+        app = MagicMock()
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+
+        with (
+            patch.object(pool_actions, "get_selected_pool_names", return_value=["bootpool"]),
+            patch.object(pool_actions, "log_msg") as mock_log,
+        ):
+            pool_actions.on_scrub_start(app)
+
+        app.scrub_queue.add_pending.assert_not_called()
+        warning = " ".join(c[0][0] for c in mock_log.call_args_list)
+        self.assertIn("bootpool", warning)
+        self.assertIn("not registered", warning)
+
+
+class TestPoolsWatchImportableSkip(unittest.TestCase):
+    """Watch windows need a managed (imported) registry row."""
+
+    def test_importable_and_offline_rows_skipped(self):
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pool_actions
+
+        app = MagicMock()
+        app.known_pools = [
+            {"name": "tank"},
+            {"name": "ghost"},
+            {"name": "zeta"},
+        ]
+        app._watch_windows = {}
+        rows = [("tank", "ONLINE"), ("ghost", "IMPORTABLE"), ("zeta", "OFFLINE")]
+        with (
+            patch.object(pool_actions, "_get_selected_rows", return_value=rows),
+            patch.object(pool_actions, "PoolWatchWindow") as win_cls,
+            patch.object(pool_actions, "log_msg") as mock_log,
+        ):
+            pool_actions.on_pools_watch(app)
+
+        # Only the imported pool opens a window; the not-imported rows are
+        # refused by name and never touch the window machinery.
+        win_cls.assert_called_once()
+        self.assertEqual(win_cls.call_args[0][0], "tank")
+        warnings = [c[0][0] for c in mock_log.call_args_list if "cannot watch" in c[0][0]]
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(all("not imported" in w for w in warnings))
+        self.assertTrue(
+            any("Opened watch window(s) for 1 pool(s)" in c[0][0] for c in mock_log.call_args_list)
+        )
 
 
 class TestScheduleScrubRefreshBurst(unittest.TestCase):

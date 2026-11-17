@@ -3,11 +3,17 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from unittest.mock import call as mock_call
 
 from app_context import AppContext
 from test_support import capture_logs, mock_gtk, temp_config_dir
+
+
+def _pool_rows(*names, health="ONLINE"):
+    """Fake repository pool rows (imported, any health) for scope helpers."""
+    return [SimpleNamespace(name=name, health=health) for name in names]
 
 
 def _clear_cached_modules(*names):
@@ -144,7 +150,7 @@ class TestRetentionPagePruneLabel(unittest.TestCase):
             import retention_page as rp
 
             # Avoid filesystem / subprocess side effects during page creation
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             app = MagicMock()
@@ -177,7 +183,7 @@ class TestMassDeleteVarTooltips(unittest.TestCase):
         with temp_config_dir(), mock_gtk(fresh=True):
             import retention_page as rp
 
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             app = MagicMock()
@@ -230,7 +236,7 @@ class TestRetentionStaticTooltips(unittest.TestCase):
         with temp_config_dir(), mock_gtk(fresh=True):
             import retention_page as rp
 
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             app = MagicMock()
@@ -572,12 +578,17 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
 
     def _make_app(self, rp, config, current_pool="default"):
         app = MagicMock()
+        # Managed-pool scope: register the fixture pool so the save gate
+        # accepts policy writes for it.
+        config.setdefault("pools", [{"name": "fivebays", "offsite_candidate": False}])
         app.ctx = AppContext(
             config=config,
             script_dir="",
             parent_dir="",
             version="dev",
         )
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = _pool_rows("fivebays")
         app._ret_prune_label_entry = _FakeEntry("dailybackup")
         app._ret_original_prune_label = "dailybackup"
         app._ret_verb_check = None
@@ -793,7 +804,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
         """Legacy-imported pool policies are cleared when the user confirms."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             default_buckets = [
@@ -827,7 +838,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
         """Pool-specific policies are preserved when the user cancels cleanup."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             default_buckets = [{"name": "d", "retain": 3, "minage": 0}]
@@ -858,7 +869,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
         """Pool policies are not cleared when this is not a new install."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             default_buckets = [{"name": "d", "retain": 3, "minage": 0}]
@@ -881,6 +892,53 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
             self.assertEqual(config["retention"]["tank"][0]["retain"], 7)
 
 
+class TestRetentionSaveManagedScopeGate(unittest.TestCase):
+    """The retention save gate refuses policies for non-managed pools."""
+
+    def _fresh_module(self):
+        _clear_cached_modules("retention_page")
+        with mock_gtk(fresh=True):
+            import retention_page as rp
+
+            return rp
+
+    def test_save_refused_for_unregistered_pool(self):
+        """A pending edit for an unregistered pool blocks the whole save."""
+        with temp_config_dir():
+            rp = self._fresh_module()
+            config = {
+                "retention": {
+                    "default": [{"name": "d", "retain": 3, "minage": 0}],
+                    "bootpool": [{"name": "d", "retain": 3, "minage": 0}],
+                },
+                "pools": [{"name": "tank", "offsite_candidate": False}],
+            }
+            app = MagicMock()
+            app.ctx = AppContext(config=config, script_dir="", parent_dir="", version="dev")
+            app.ctx.zfs_repository = MagicMock()
+            # bootpool is imported but unregistered; the current pool is
+            # "default" (a placeholder key), the pending edit is bootpool's.
+            app._ret_pool = "default"
+            app._ret_original = {"default": [{"name": "d", "retain": 3, "minage": 0}]}
+            app._ret_pending = {"bootpool": [{"name": "d", "retain": 9, "minage": 0}]}
+            app._ret_store = _FakeStore()
+
+            def _buckets(_app=None):
+                return [{"name": "d", "retain": 3, "minage": 0}]
+
+            with (
+                patch.object(rp, "_store_to_buckets", side_effect=_buckets),
+                patch.object(rp, "show_error") as mock_error,
+                patch.object(rp, "save_retention") as mock_save,
+            ):
+                rp._on_ret_save(None, app, app.ctx)
+
+            mock_save.assert_not_called()
+            self.assertIn("bootpool", mock_error.call_args[0][1])
+            # The pending edit survives for when the pool is registered.
+            self.assertIn("bootpool", app._ret_pending)
+
+
 class TestRetentionPagePruneList(unittest.TestCase):
     """Verify the prune list matches zfscleanup pool selection semantics."""
 
@@ -894,7 +952,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
     def test_prune_list_includes_online_configured_pools(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank", "archive"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank", "archive"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -922,7 +980,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
     def test_prune_list_uses_config_pools(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank", "nopolicy"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank", "nopolicy"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -947,10 +1005,13 @@ class TestRetentionPagePruneList(unittest.TestCase):
             self.assertIn("tank", pools)
             self.assertNotIn("nopolicy", pools)
 
-    def test_prune_list_falls_back_to_all_online_pools(self):
+    def test_prune_list_empty_registry_lists_nothing(self):
+        """Managed-pool scope: no registration, no prune rows — the GUI never
+        falls back to unregistered online pools (bin/zfscleanup keeps its
+        own CLI fallback)."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank", "nopolicy"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank", "nopolicy"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -968,12 +1029,46 @@ class TestRetentionPagePruneList(unittest.TestCase):
             rp.refresh_prune_pools(app)
 
             pools = [row[0] for row in app._ret_prune_store]
-            self.assertEqual(pools, ["nopolicy", "tank"])
+            self.assertEqual(pools, [])
+
+    def test_prune_list_shows_real_health(self):
+        """A registered DEGRADED pool is online per the Pools tab and lists
+        with its live health, not a hardcoded ONLINE."""
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._imported_pool_rows = MagicMock(
+                return_value=[
+                    SimpleNamespace(name="tank", health="ONLINE"),
+                    SimpleNamespace(name="archive", health="DEGRADED"),
+                ]
+            )
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={
+                    "retention": {
+                        "default": [{"name": "d", "retain": 3, "minage": 0}],
+                    },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                        {"name": "archive", "offsite_candidate": False},
+                    ],
+                },
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            app._ret_prune_store = _FakeStore()
+
+            rp.refresh_prune_pools(app)
+
+            health = {row[0]: row[1] for row in app._ret_prune_store}
+            self.assertEqual(health, {"archive": "DEGRADED", "tank": "ONLINE"})
 
     def test_prune_list_excludes_offline_configured_pool(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -1001,7 +1096,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
     def test_prune_list_preserves_existing_order_for_remaining_pools(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank", "archive"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank", "archive"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -1028,7 +1123,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
     def test_prune_list_uses_saved_order_on_refresh(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank", "archive"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank", "archive"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -1073,7 +1168,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
     def test_refresh_preserves_selected_pools(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank", "archive"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank", "archive"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -1114,7 +1209,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
     def test_refresh_does_not_reselect_missing_pool(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["archive"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("archive"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -1152,7 +1247,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
         """An online offsite-candidate pool is listed by name, never as <offsite>."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank", "z22tb"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank", "z22tb"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -1183,7 +1278,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
         """No <offsite> placeholder row appears when no offsite pool is online."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=["tank"])
+            rp._imported_pool_rows = MagicMock(return_value=_pool_rows("tank"))
 
             app = MagicMock()
             app.ctx = AppContext(
@@ -1222,7 +1317,7 @@ class TestTabNavigationWiring(unittest.TestCase):
     def test_spin_renderers_connect_editing_started(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             renderers = []
@@ -1269,7 +1364,7 @@ class TestTabNavigationWiring(unittest.TestCase):
     def test_editing_started_handler_wires_key_press(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             renderers = []
@@ -1345,7 +1440,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_mass_delete_widgets_created(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(rp, {"retention": {"default": []}})
 
@@ -1360,7 +1455,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_danger_frame_label_uses_red_markup(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(rp, {"retention": {"default": []}})
 
@@ -1375,7 +1470,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_ignore_checkbox_has_tooltip(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(rp, {"retention": {"default": []}})
 
@@ -1389,7 +1484,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_loads_saved_mass_delete_config(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(
                 rp,
@@ -1556,7 +1651,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_releaseholds_sensitive_when_not_ignoring(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(rp, {"retention": {"default": []}})
 
@@ -1570,7 +1665,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_filters_desensitized_when_not_ignoring(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(rp, {"retention": {"default": []}})
 
@@ -1583,7 +1678,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_filters_sensitive_when_ignoring(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(
                 rp,
@@ -1604,7 +1699,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
     def test_releaseholds_enabled_when_ignoring(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(
                 rp,
@@ -1628,7 +1723,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
         """If ignore is unchecked, releaseholds keeps its saved value."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = self._make_app(
                 rp,
@@ -1663,7 +1758,7 @@ class TestRetentionPageLayout(unittest.TestCase):
         """The returned page must be a ScrolledWindow so the window can shrink."""
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             sentinels = [MagicMock() for _ in range(3)]
@@ -1715,7 +1810,7 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
     def test_checkbox_created_and_loaded_from_config(self):
         with temp_config_dir():
             rp = self._fresh_module()
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
             app = MagicMock()
             app.ctx = AppContext(
@@ -1812,7 +1907,7 @@ class TestRetentionAdvancedLabel(unittest.TestCase):
             import retention_page as rp
 
             # Avoid filesystem / subprocess side effects during page creation
-            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._imported_pool_rows = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
 
             expanders = []

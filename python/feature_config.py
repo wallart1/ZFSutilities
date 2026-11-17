@@ -177,6 +177,73 @@ def get_offsite_candidate_names(config):
     return [p["name"] for p in get_pools(config) if p.get("offsite_candidate", False)]
 
 
+# Placeholder tokens that can appear where a pool name is expected but are
+# not pools: the "<offsite>" step endpoint and the "default" retention policy.
+POOL_NAME_PLACEHOLDERS = frozenset({"<offsite>", "default"})
+
+
+def get_managed_pool_names(config, online_pool_names):
+    """Return registered pool names that are currently online.
+
+    "Online" matches the Pools tab: the pool is imported and reported by
+    `zpool list`, whatever its health (ONLINE, DEGRADED, ...). Registry
+    rows shown as IMPORTABLE or OFFLINE are not online. Registry order is
+    preserved. Everywhere in the GUI except the Pool Registry table, only
+    managed pools may be listed or touched.
+    """
+    online = set(online_pool_names)
+    return [name for name in get_pool_names(config) if name in online]
+
+
+def non_managed_pool_names(pool_names, config, online_pool_names):
+    """Return referenced pool names that are unregistered or offline.
+
+    Powers the GUI save/run gates: a non-empty result refuses the save or
+    run. Placeholder tokens ("<offsite>", "default") are not pools and are
+    ignored. Order of first reference is preserved, duplicates dropped.
+    """
+    managed = set(get_managed_pool_names(config, online_pool_names))
+    offending = []
+    for name in pool_names:
+        if not name or name in POOL_NAME_PLACEHOLDERS or name in managed:
+            continue
+        if name not in offending:
+            offending.append(name)
+    return offending
+
+
+def pool_name_from_endpoint(endpoint):
+    """Return the local pool name a step endpoint refers to, or None.
+
+    Remote endpoints ("host:path"), non-dataset paths, and placeholder tokens
+    are not local pools — including placeholder-prefixed endpoints like
+    "<offsite>/dst". Mirrors scrub_manager._pool_from_dataset.
+    """
+    if not endpoint:
+        return None
+    if ":" in endpoint and not endpoint.startswith("/"):
+        return None
+    name = str(endpoint).split("/", 1)[0].strip()
+    if not name or name in POOL_NAME_PLACEHOLDERS:
+        return None
+    return name
+
+
+def non_managed_endpoint_pools(endpoints, config, online_pool_names):
+    """Return non-managed pool names referenced by step endpoints.
+
+    Same contract as non_managed_pool_names, for dataset-path endpoints
+    ("pool/dataset", "pool", "<offsite>", "host:path" — the last is remote
+    and ignored).
+    """
+    pools = []
+    for endpoint in endpoints:
+        name = pool_name_from_endpoint(endpoint)
+        if name and name not in pools:
+            pools.append(name)
+    return non_managed_pool_names(pools, config, online_pool_names)
+
+
 def save_pools(config, pools):
     config["pools"] = [_normalize_pool_entry(p) for p in pools]
     save_config(config)

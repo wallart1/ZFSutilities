@@ -26,7 +26,7 @@ import zfs_lock_manager as zlm
 from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
-from feature_config import get_pool_profiles
+from feature_config import get_pool_names, get_pool_profiles
 from gi.repository import Gtk
 from gui_helpers import (
     capped_treeview_scroll,
@@ -503,10 +503,11 @@ def _build_disks_page(dialog, state: _WizardState, ctx: _WizardContext, on_chang
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
-    # Dialog/wizard page: expand stays on so an enlarged wizard page grows
-    # the disk table; the default height follows the natural row count.
+    # Non-expanding, like every GUI table: the picker is only as tall as
+    # its rows (up to the 20-row cap) and scrolls inside beyond that; the
+    # wizard window carries any page-level overflow.
     scrolled = capped_treeview_scroll(view)
-    page.pack_start(scrolled, True, True, 0)
+    page.pack_start(scrolled, False, False, 0)
 
     def _refresh_disks():
         if any(disk.disk_type == "HDD" for disk in state.selected):
@@ -985,7 +986,14 @@ def on_disks_create_pool(app) -> None:
     if not profiles:
         log_msg("WARN: No pool profiles configured")
         return
-    existing_names = set(data.topologies) | repository.list_importable_pool_names()
+    # Name collisions are checked against imported pools, importable pools,
+    # AND the registry: a registered-but-offline name must not be shadowed
+    # by a freshly created pool either.
+    existing_names = (
+        set(data.topologies)
+        | repository.list_importable_pool_names()
+        | set(get_pool_names(app.config))
+    )
 
     result = show_create_pool_wizard(app, eligibility, profiles, existing_names)
     if result is None:

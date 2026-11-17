@@ -257,6 +257,7 @@ GUI Backup tab. Builds and launches the backup run; also owns the snapfile (prev
 | `VERB: Previous snapshot name found: ...` | Snapfile on disk contained a saved snapshot name, preloaded into the entry | Informational; reused unless regenerated |
 | `VERB: New snapshot name: ...` | A fresh snapshot name was generated into the entry | Informational |
 | `WARN: Generate or enter a snapshot name first` | Run Backup pressed with empty snapshot name | Run aborted |
+| `WARN: Pool '...' not registered — save refused` / `... offline — save refused` / `... not registered — backup run refused` / `... offline — backup run refused` | Managed-pool gate (shared with the other transfer tabs): a send/receive step names a pool outside the registry or not imported | Save/run aborted; register the pool on the Pools tab first |
 | `INFO: Backup cancelled` | User cancelled the pre-run confirmation dialog | Run aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Global dry-run toggle active for this run | Steps become "Would ..." messages; nothing executes |
 | `INFO: Dry-run: Would run pre-backup script` | Pre-backup script enabled but dry-run is active | Step skipped |
@@ -351,6 +352,7 @@ GUI Offsite tab. Builds and launches the offsite run and owns the tab's Save/Rev
 | `VERB: Offsite: previous snapshot name found: ...` | The offsite snapfile had a saved name, preloaded | Informational |
 | `VERB: Offsite: new snapshot name: ...` | A fresh offsite snapshot name was generated | Informational |
 | `WARN: Generate or enter a snapshot name first` | Run Offsite pressed with empty snapshot name | Run aborted |
+| `WARN: Pool '...' not registered — save refused` / `... offline — save refused` / `... not registered — offsite run refused` / `... offline — offsite run refused` | Managed-pool gate (shared with the other transfer tabs): a step names a pool outside the registry or not imported (`<offsite>` passes) | Save/run aborted; register the pool or use `<offsite>` |
 | `FATAL: No offsite pool online.` | None of the registry's offsite candidates is currently importable/online | Run aborted before the confirmation dialog |
 | `INFO: Offsite backup cancelled` | User cancelled the pre-run confirmation dialog | Run aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Dry-run active | Dry-run behavior pushed into the step builder |
@@ -428,6 +430,7 @@ GUI Restore tab. Validates source/destination and launches the restore. The same
 | -------------- | ------- | -------- |
 | `WARN: ...` (while editing destination) | Live recomputation of the auto-destination raised (the message names the bad source form) | Destination entry cleared; recompute aborted |
 | `WARN: Source dataset must be specified` | Run gate — empty source | Run aborted |
+| `WARN: Pool '...' not registered — restore refused` / `... offline — restore refused` | Managed-pool gate (shared with the other transfer tabs): the source or destination names a pool outside the registry or not imported | Run aborted; register the pool on the Pools tab first |
 | `WARN: Specify datasets, not snapshots (no '@' allowed)` | Source or destination contains a snapshot qualifier | Run aborted |
 | `WARN: Error: ...` (at run time) | Destination/parameter computation raised | Run aborted |
 | `WARN: Receive as encrypted requires a key location of the form file:///path/to/raw-key (a 32-byte raw key file)` | Run gate — Receive as encrypted is checked but the key location is missing or not a `file:///path` URI | Run aborted; the engine's FATAL validation is the backstop |
@@ -721,7 +724,8 @@ GUI Retention tab actions: policy add/remove and the prune run (launched through
 | `INFO: Removed retention policy for pool: ...` | Policy deleted after Yes/No confirm (the pool falls back to `default`) | Prune list refreshed |
 | `WARN: Retention page not initialized` | Prune view widget missing | Prune aborted |
 | `WARN: Select one or more pools in the Prune list` | Empty prune selection | Prune aborted |
-| `WARN: No online pools selected for pruning` | Selection left no online pools | Prune aborted |
+| `WARN: Pool '...' is unregistered or offline — skipped` | A selected pool is outside managed scope (defense in depth — the prune list itself lists managed pools only) | That pool skipped; others pruned |
+| `WARN: No managed pools selected for pruning` | Selection left no managed pools | Prune aborted |
 | `WARN: Retention runner not available` | No retention runner on the app | Prune aborted |
 | `WARN: A prune operation is already running` | Runner busy guard | Prune aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Dry-run toggle active for the prune run | Continue in no-change mode |
@@ -2005,7 +2009,8 @@ GUI Pools tab actions: watch windows, details dump, registry add/remove/save/rev
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `WARN: Select at least one pool to watch` / `to view details` / `to export` / `to scrub` / `to pause` / `to resume` / `to stop` / `registered pool to remove` | Selection guard for the corresponding action | Action aborted |
-| `WARN: Pool '...' is offline — cannot watch` | The selected pool's health is OFFLINE | That pool skipped; others still opened |
+| `WARN: Pool '...' is not imported — cannot watch` | The selected registry row is OFFLINE or IMPORTABLE — a managed pool (imported, any health) is required to watch | That pool skipped; others still opened |
+| `WARN: Pool '...' is not registered — scrub refused` / `— pause refused` / `— resume refused` / `— stop refused` | Scrub-button selection names a pool outside the pool registry (managed-pool scope) | That pool skipped; others still acted on |
 | `INFO: Opened watch window(s) for ... pool(s)` | Summary of watch windows opened | Informational |
 | `WARN: Error getting status for '...'` / `Error reading properties for '...'` | The status/property query returned empty | Details dump aborted |
 | `INFO: Pool details for ...:` / `INFO: zpool get all output for ...:` | Headers of the gated status/property dumps | Informational |
@@ -2071,7 +2076,7 @@ GUI dialogs for growing and maintaining pools: add data vdev, expand vdev (attac
 | -------------- | ------- | -------- |
 | `WARN: Pool growth is available only on the storage host` / `Pool maintenance is available only on the storage host` | Two-node gates — invoked on the compute node | Action aborted |
 | `WARN: Dataset runner not available` / `WARN: cannot add vdev to pool '...': ...` / `cannot expand vdev in pool '...'` / `cannot replace device in pool '...'` / `cannot detach device from pool '...'` / `cannot add ... vdev to pool '...'` | Runner tracker missing (defensive) / the pool's write lock is held by another operation at confirmation time (the message names the holder) | Action aborted |
-| `WARN: No imported pools to grow` / `No imported pools to maintain` | The inventory cache has no imported pools | Action aborted |
+| `WARN: No managed pools to grow` / `No managed pools to maintain` | No pool is both registered and imported, so there is nothing to pick | Action aborted; register pools on the Pools tab |
 | `WARN: Could not scan importable pools: ...` | The importable-devices scan failed | Continue with an empty importable set (eligibility may be stricter) |
 | `INFO: Add vdev cancelled for ...` / `Detach cancelled for ...` / `Replace cancelled for ...` / `Expand vdev cancelled for ...` / `Add ... vdev cancelled for ...` | The corresponding step was cancelled before completing | Skipped; state refreshed |
 | `WARN: Add vdev failed for pool '...' (rc=...)` / `Detach failed ...` / `Replace failed ...` / `Expand vdev failed ...` / `Add ... vdev failed ...` | The corresponding `zpool add/attach/replace/detach` step exited non-zero | Operation aborted; refresh anyway |
@@ -2093,7 +2098,7 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `INFO: Snapshot holds captured from '...' are preserved in ...; once the pool is imported, reapply them with: zfsreapplyholds --apply ... ...` | After a failed/cancelled cutover, the captured-holds TSV is kept and the recovery command is spelled out | Re-apply holds manually after import |
 | `WARN: Pool migration is available only on the storage host` | Two-node gate — invoked on the compute node | Action aborted |
 | `WARN: Dataset runner not available` | Runner tracker missing (defensive; logged inside the start-failed warning below) | Action aborted |
-| `WARN: No imported pools to migrate` | No imported pools found | Action aborted |
+| `WARN: No managed pools to migrate` | No pool is both registered and imported | Action aborted; register pools on the Pools tab |
 | `WARN: Could not list datasets of pool '...': ...` | Per-pool dataset listing failed during setup | Continue with an empty list for that pool |
 | `WARN: Could not read pool properties of '...': ...` | The curated pool-property read for the origin-derived defaults failed | The "Match origin pool" pseudo-profile falls back to empty pool properties; the wizard stays usable |
 | `WARN: Could not read root dataset properties of '...': ...` | The origin root dataset's live-property read failed | The "Match origin pool" pseudo-profile falls back to empty filesystem properties; the wizard stays usable |
@@ -2723,6 +2728,7 @@ Dashboard tab: status overview, peer-node version check, and task cancellation.
 | `Pool ... is configured in node.conf but not imported — offline, renamed, or replaced` | Dashboard pool-identity warning (Warnings section, two-node only): a configured pool is not imported. Pools marked as offsite candidates in the Pools tab are exempt — their absence is expected while the pool is rotated offsite, and an attached one is not flagged as unexpected either; only the GUID check still applies | Check whether the pool is merely offline; if renamed or replaced, resolve the identity by hand |
 | `Pool ... is imported but not configured in node.conf — add it to the node config or export it` | Dashboard pool-identity warning: an imported pool is outside the node-config expected set (pools marked as offsite candidates in the Pools tab are exempt — an attached rotation pool is a known pool) | Add the pool to the node config (or export it) after verifying what it is |
 | `Pool ... GUID changed — map recorded ..., live ... (pool renamed or replaced)` | Dashboard pool-identity warning: the pool under a known name carries a different GUID than the newest state map recorded | Verify which physical pool carries the name; nothing is renamed automatically |
+| `... unregistered pool(s) in node.conf not imported — see Pools tab` / `... imported pool(s) missing from node.conf — see Pools tab` / `... unregistered pool GUID mismatch(es) — see Pools tab` | Count-based variants of the identity warnings: the affected pool(s) are not in the pool registry, so their names appear only in the Pool Registry (managed-pool scope) | Open the Pools tab to see the pool names |
 | `INFO: Running repair-iscsi-luns...` | "Fix this" clicked on an iSCSI warning row | Repair script runs with a timeout, then refresh |
 | `INFO: repair-iscsi-luns completed successfully` / `WARN: repair-iscsi-luns exited ...` / `WARN: repair-iscsi-luns failed: ...` | The repair script's rc=0 / non-zero rc / launch failure outcome | Refresh follows |
 | `INFO: Removed ... stale lock file(s)` | The Fix Locks cleanup ran; count removed | Dashboard refreshed |
@@ -2863,6 +2869,8 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `WARN: Skipping ZFS keys backup — destination is not encrypted. Set zfs_keys_dest to an encrypted dataset.` | Safety gate — keys would land on an unencrypted dataset | Keys backup skipped; set an encrypted destination |
 | `VERB: Prune step restricted to the ... send/receive step(s)' source and destination datasets (derived at prune time).` | Prune scope narrowed to the active send/receive datasets | Informational |
 | `INFO: No active send/receive steps; skipping prune step (no new snapshots to prune).` | Retention-after-backup requested but no send/receive steps are active | Prune skipped |
+| `WARN: Pool '...' unregistered or offline — step skipped` | Managed-pool scope at run time: a backup/offsite step's source or destination names a pool outside the registry or not imported | That step skipped; the rest of the profile runs |
+| `WARN: Pool '...' unregistered or offline — restore skipped` | Managed-pool scope: the restore profile's source or destination names a non-managed pool | Restore aborts with rc=1 |
 | `FATAL: No active steps to run` | The profile produced zero executable steps | Profile aborts with rc=1 |
 | `INFO: Dry-run: Skipping snapfile cleanup (preserved for real run)` | Dry-run keeps the snapfile for the real run | Cleanup skipped |
 | `INFO: Removed snapshot file` | The snapfile was removed after a successful (non-dry-run) run | Informational |
@@ -2873,8 +2881,12 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `FATAL: Aborting restore because step failed` | The restore step returned non-zero | The run aborts with the step's rc |
 | `FATAL: No pools selected for pruning` | Retention profile has an empty prune-pools list | Aborts with rc=1 |
 | `WARN: <offsite> selected but no offsite pool is online` | `<offsite>` expanded to nothing | Continue with the remaining pools |
+| `WARN: Pool '...' unregistered or offline — skipped` | Managed-pool scope: a prune-pools entry names a non-managed pool | That pool skipped; the remaining pools pruned |
+| `FATAL: No managed pools to prune` | After the managed-scope filter, no pool remains | Aborts with rc=1 |
 | `FATAL: No pools selected for pruning after resolving <offsite>` | The expansion left no pools | Aborts with rc=1 |
 | `FATAL: Prune of ... failed (rc=...)` | A retention prune step failed for that pool | That pool's prune aborted; the remaining pools still run |
+| `WARN: Pool '...' unregistered or offline — not queued` | Managed-pool scope: a scrub-profile pool names a non-managed pool | That pool never enters the queue |
+| `FATAL: No managed pools to scrub` | After the managed-scope filter, no pool remains | Aborts with rc=1 |
 | `FATAL: No pools specified for scrub profile` | The scrub profile's pool list is empty | Aborts with rc=1 |
 | `INFO: Scrub profile started on ... pool(s), target=...` | The scrub profile begins with the given concurrency | Informational |
 | `INFO: Scrub queue — active=... pending=... paused=... finished=...` | Queue summary, emitted only when it changes | Informational while polling |

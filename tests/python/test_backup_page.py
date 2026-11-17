@@ -12,6 +12,7 @@ real-gi call in the process (the 2026-10-26 cross-file pytest pollution).
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -698,8 +699,6 @@ class _FakeBackupApp:
     """Minimal app stand-in for dialog-loop tests."""
 
     _dry_run_active = False
-    config: ClassVar[dict] = {}
-    ctx = AppContext(config=config, script_dir="", parent_dir="", version="dev")
 
     def clear_log_status(self):
         pass
@@ -708,6 +707,17 @@ class _FakeBackupApp:
         pass
 
     def __init__(self):
+        # Managed-pool scope: the fixture pools are registered and imported
+        # so run/save gates pass; the repository is a mock (no real zpool).
+        fixture_pools = ("threeamigos", "fivebays", "NVME1", "tank")
+        self.config = {
+            "pools": [{"name": name, "offsite_candidate": False} for name in fixture_pools]
+        }
+        self.ctx = AppContext(config=self.config, script_dir="", parent_dir="", version="dev")
+        self.ctx.zfs_repository = MagicMock()
+        self.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name=name, health="ONLINE") for name in fixture_pools
+        ]
         self.backup_runner = MagicMock()
         self.backup_runner.running = False
         self.backup_runner._runner_log = MagicMock()
@@ -956,7 +966,6 @@ class TestBackupRunDialog(unittest.TestCase):
         app.backup_sr_store.append([True, "threeamigos/proxmox", "fivebays"])
         app.backup_sr_store.append([False, "tank/off", "fivebays/off"])
         app.backup_sr_store.append([True, "NVME1", "fivebays"])
-        app.ctx.config = {"pools": [{"name": "z2", "offsite_candidate": False}]}
         dialog_mock = MagicMock()
         dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
         backup_page.Gtk.MessageDialog.return_value = dialog_mock
@@ -1030,6 +1039,129 @@ class TestBackupRunDialog(unittest.TestCase):
         app.backup_runner.start.assert_called_once()
         for call in mock_log.call_args_list:
             self.assertNotIn("restore", call[0][0].lower())
+
+
+class TestManagedPoolScopeGates(unittest.TestCase):
+    """Save/run refuse while send/receive endpoints name non-managed pools."""
+
+    def _app_with_step(self, source, dest):
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.backup_sr_store.append([True, source, dest])
+        return app
+
+    def test_run_refuses_unregistered_pool(self):
+        with mock_gtk(fresh=True):
+            import backup_page
+            import gui_helpers as gh
+
+        app = self._app_with_step("bootpool/data", "fivebays")
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with (
+            self._patch_collect(backup_page),
+            patch.object(gh, "log_msg") as mock_log,
+            patch.object(backup_page, "show_warning_dialog"),
+        ):
+            backup_page.on_backup_run(app, app.ctx)
+
+        app.backup_runner.set_steps.assert_not_called()
+        warning = " ".join(c[0][0] for c in mock_log.call_args_list)
+        self.assertIn("bootpool", warning)
+        self.assertIn("not registered", warning)
+
+    def test_run_refuses_offline_pool(self):
+        with mock_gtk(fresh=True):
+            import backup_page
+            import gui_helpers as gh
+
+        app = self._app_with_step("tank/data", "fivebays")
+        # tank is registered but not imported in the fixture's live list.
+        app.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name="fivebays", health="ONLINE")
+        ]
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with (
+            self._patch_collect(backup_page),
+            patch.object(gh, "log_msg") as mock_log,
+            patch.object(backup_page, "show_warning_dialog"),
+        ):
+            backup_page.on_backup_run(app, app.ctx)
+
+        app.backup_runner.set_steps.assert_not_called()
+        warning = " ".join(c[0][0] for c in mock_log.call_args_list)
+        self.assertIn("tank", warning)
+        self.assertIn("offline", warning)
+
+    def test_save_refuses_unregistered_pool(self):
+        with mock_gtk(fresh=True):
+            import backup_page
+            import gui_helpers as gh
+
+        app = _FakeBackupApp()
+        gate_log = MagicMock()
+        with (
+            patch.object(
+                backup_page,
+                "collect_backup_config",
+                return_value={
+                    "send_receive_steps": [
+                        {"active": True, "source": "bootpool/data", "dest": "fivebays"}
+                    ]
+                },
+            ),
+            patch.dict(gh.refuse_non_managed_pool_endpoints.__globals__, {"log_msg": gate_log}),
+            patch.object(backup_page, "save_backup_config") as mock_save,
+        ):
+            backup_page.on_backup_save(app, app.ctx)
+
+        mock_save.assert_not_called()
+        warning = " ".join(c[0][0] for c in gate_log.call_args_list)
+        self.assertIn("bootpool", warning)
+        self.assertIn("not registered", warning)
+
+    def test_save_with_send_receive_steps_proceeds(self):
+        """Collected steps are dicts — the save gate must read them as such."""
+        with mock_gtk(fresh=True):
+            import backup_page
+
+        app = _FakeBackupApp()
+        with (
+            patch.object(
+                backup_page,
+                "collect_backup_config",
+                return_value={
+                    "send_receive_steps": [
+                        {"active": True, "source": "tank/data", "dest": "fivebays"}
+                    ]
+                },
+            ),
+            patch.object(backup_page, "get_offsite_config", return_value={}),
+            patch.object(backup_page, "validate_gui_settings", return_value=[]),
+            patch.object(backup_page, "save_backup_config") as mock_save,
+            patch.object(backup_page, "refresh_checkagainst_derived"),
+        ):
+            backup_page.on_backup_save(app, app.ctx)
+
+        mock_save.assert_called_once()
+
+    @staticmethod
+    def _patch_collect(backup_page):
+        return patch.object(
+            backup_page,
+            "collect_backup_config",
+            MagicMock(
+                return_value={
+                    "variables": {},
+                    "post_steps": {"remove_snapfile": False, "run_retention": False},
+                }
+            ),
+        )
 
 
 class TestBackupSaveValidation(unittest.TestCase):

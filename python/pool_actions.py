@@ -10,7 +10,7 @@ import time
 import gi
 
 gi.require_version("Gtk", "3.0")
-from backup_config import log_msg, save_pools
+from backup_config import get_pool_names, log_msg, save_pools
 from gi.repository import Gtk
 from gui_helpers import (
     add_scrolled_text_view,
@@ -41,7 +41,11 @@ from scrub_manager import (
 
 
 def on_pools_watch(app):
-    """Open independent watch windows for all selected online pools."""
+    """Open independent watch windows for all selected managed pools.
+
+    Managed = registered in the pool registry AND imported (any health);
+    an IMPORTABLE or OFFLINE registry row has no live datasets to watch.
+    """
     rows = _get_selected_rows(app)
     known_names = {p["name"] for p in app.known_pools}
     selected = [(n, h) for n, h in rows if n in known_names]
@@ -51,8 +55,8 @@ def on_pools_watch(app):
 
     opened = 0
     for pool_name, health in selected:
-        if health == "OFFLINE":
-            log_msg(f"WARN: Pool '{pool_name}' is offline — cannot watch")
+        if health in ("OFFLINE", "IMPORTABLE"):
+            log_msg(f"WARN: Pool '{pool_name}' is not imported — cannot watch")
             continue
         if pool_name in app._watch_windows:
             app._watch_windows[pool_name].present()
@@ -437,11 +441,28 @@ def check_pools_dirty(app):
 # ---------------------------------------------------------------------------
 
 
+def _registered_scrub_pools(app, pools, action):
+    """Filter scrub-table selections to registered pools (managed-pool scope).
+
+    Unregistered pools are never touched: each offender is refused by name.
+    The scrub table only lists managed pools, so this is defense in depth.
+    """
+    registered = set(get_pool_names(app.config))
+    kept = [name for name in pools if name in registered]
+    for name in pools:
+        if name not in registered:
+            log_msg(f"WARN: Pool '{name}' is not registered — {action} refused")
+    return kept
+
+
 def on_scrub_start(app):
     """Add selected pools to the scrub queue."""
     pools = get_selected_pool_names(app.scrub_view)
     if not pools:
         log_msg("WARN: Select at least one pool to scrub")
+        return
+    pools = _registered_scrub_pools(app, pools, "scrub")
+    if not pools:
         return
     app.scrub_queue.add_pending(pools)
     from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
@@ -455,6 +476,9 @@ def on_scrub_pause(app):
     pools = get_selected_pool_names(app.scrub_view)
     if not pools:
         log_msg("WARN: Select at least one pool to pause")
+        return
+    pools = _registered_scrub_pools(app, pools, "pause")
+    if not pools:
         return
     app.scrub_queue.pause_pools(pools)
     for name in pools:
@@ -475,6 +499,9 @@ def on_scrub_resume(app):
     if not pools:
         log_msg("WARN: Select at least one pool to resume")
         return
+    pools = _registered_scrub_pools(app, pools, "resume")
+    if not pools:
+        return
     to_resume = [n for n in pools if n in app.scrub_queue.paused]
     if not to_resume:
         log_msg("WARN: Selected pools are not paused")
@@ -491,6 +518,9 @@ def on_scrub_stop(app):
     pools = get_selected_pool_names(app.scrub_view)
     if not pools:
         log_msg("WARN: Select at least one pool to stop")
+        return
+    pools = _registered_scrub_pools(app, pools, "stop")
+    if not pools:
         return
     for name in pools:
         stop_scrub(name)

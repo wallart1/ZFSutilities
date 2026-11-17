@@ -18,7 +18,11 @@ gi.require_version("Gtk", "3.0")
 
 from disk_repository import DiskInfo, DiskRepository
 from enclosure_inventory import EnclosureInfo, EnclosureInventory
-from feature_config import get_enclosures_config, save_enclosures_config
+from feature_config import (
+    get_enclosures_config,
+    get_managed_pool_names,
+    save_enclosures_config,
+)
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     bold_label,
@@ -584,6 +588,17 @@ def _refresh_disks_page_if_visible(app):
     return False
 
 
+def managed_display_pool_names(app, data):
+    """Managed pool names for Disks-page display and pickers (registered AND online).
+
+    The inventory cache keeps FULL pool membership — wipe safety and the
+    importable checks depend on it — so the registry scope applies only to
+    what is displayed and offered, never to the underlying data. Shared by
+    the growth/migration dialogs for their pool pickers.
+    """
+    return set(get_managed_pool_names(app.config, data.topologies.keys()))
+
+
 def refresh_disks_page(app):
     """Clear and repopulate the disk inventory, topology, and dataset views."""
     disks_view = app.disks_view
@@ -616,7 +631,10 @@ def refresh_disks_page(app):
         for enclosure in data.enclosures
     }
 
-    # Repopulate disk inventory
+    # Repopulate disk inventory. The Pools cell lists managed pools only —
+    # membership in unregistered pools stays in the inventory data (wipe
+    # safety) but never on screen; the Pool Registry shows those pools.
+    display_pools = managed_display_pool_names(app, data)
     app.disks_store.clear()
     for disk in data.disks:
         if disk.parent_path is not None:
@@ -639,15 +657,15 @@ def refresh_disks_page(app):
                 str(disk.physical_sector) if disk.physical_sector is not None else "-",
                 disk.transport,
                 enclosure_names.get(disk.enclosure_id, ""),
-                ", ".join(disk.pools),
+                ", ".join(p for p in disk.pools if p in display_pools),
                 disk.smart_health,
                 health_text,
                 False,
             ]
         )
 
-    # Rebuild pool selector
-    pool_names = sorted(data.topologies.keys())
+    # Rebuild pool selector (managed pools only)
+    pool_names = sorted(display_pools)
     selector.remove_all()
     for pool_name in pool_names:
         selector.append_text(pool_name)
@@ -686,7 +704,9 @@ def _repopulate_enclosures(app):
     Discovery data comes from the inventory cache (same TTL refresh as the
     disk list); names and current max rates come from the enclosures config
     section, so a rate saved through the dialog shows up on the next
-    repopulation without waiting for a device rescan.
+    repopulation without waiting for a device rescan. The Pools column lists
+    managed pools only; unregistered pools appear solely in the Pool
+    Registry (Pools tab).
     """
     store = app.enclosures_store
 
@@ -709,6 +729,7 @@ def _repopulate_enclosures(app):
     store.clear()
     data = app._disks_inventory_cache.get()
     entries = get_enclosures_config(app.config)
+    display_pools = managed_display_pool_names(app, data)
     for enclosure in data.enclosures:
         entry = entries.get(enclosure.id) or {}
         store.append(
@@ -717,7 +738,7 @@ def _repopulate_enclosures(app):
                 enclosure_display_name(enclosure, entry.get("name", "")),
                 f"{enclosure.kind} {enclosure.location}",
                 str(len(enclosure.members)),
-                ", ".join(enclosure.pools),
+                ", ".join(p for p in enclosure.pools if p in display_pools),
                 entry.get("max_rate", "") or "unlimited",
             ]
         )
@@ -1063,15 +1084,17 @@ def _on_pool_selector_changed(selector, app):
 
 
 def _repopulate_topology(app):
-    """Clear and refill the topology store with every pool's vdev tree.
+    """Clear and refill the topology store with every managed pool's vdev tree.
 
-    All pools stay visible as top-level rows; expansion is driven by the
-    selected pool, the topology selection, and teal-tinted devices (see
-    _apply_topology_expansion).
+    Managed pools (registered AND online) stay visible as top-level rows;
+    expansion is driven by the selected pool, the topology selection, and
+    teal-tinted devices (see _apply_topology_expansion). Unregistered pools
+    appear solely in the Pool Registry (Pools tab).
     """
     app.disks_topology_store.clear()
     data = app._disks_inventory_cache.get()
-    for pool_name in sorted(data.topologies.keys()):
+    display_pools = managed_display_pool_names(app, data)
+    for pool_name in sorted(display_pools):
         _populate_topology_store(app.disks_topology_store, None, data.topologies[pool_name])
     _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
     _sync_topology_highlight_from_inventory(app)
@@ -1108,7 +1131,6 @@ def update_disks_button_sensitivity(app):
         ("_disks_add_infra_vdev_btn", "Pool growth is available only on the storage host"),
         ("_disks_migrate_pool_btn", "Pool migration is available only on the storage host"),
         ("_disks_replace_btn", "Pool maintenance is available only on the storage host"),
-        ("_disks_detach_btn", "Pool maintenance is available only on the storage host"),
     )
     for attr, host_tooltip in growth_attrs:
         btn = getattr(app, attr, None)
@@ -1120,6 +1142,18 @@ def update_disks_button_sensitivity(app):
         else:
             btn.set_sensitive(True)
             set_action_tooltip(btn)
+
+    # Detach additionally follows the topology selection: mirror members are
+    # the only detachable nodes, so the button greys out for anything else.
+    detach_btn = getattr(app, "_disks_detach_btn", None)
+    if detach_btn:
+        if compute_host:
+            detach_btn.set_sensitive(False)
+            set_action_tooltip(detach_btn, "Pool maintenance is available only on the storage host")
+        else:
+            detachable, reason = _topology_selection_detach_gate(app)
+            detach_btn.set_sensitive(detachable)
+            set_action_tooltip(detach_btn, reason)
 
     # Proxmox enrollment acts on the selected pool.
     proxmox_btn = getattr(app, "_disks_proxmox_enroll_btn", None)
@@ -1179,6 +1213,33 @@ def update_disks_button_sensitivity(app):
             )
 
 
+def _topology_selection_detach_gate(app) -> tuple[bool, str | None]:
+    """Whether the topology selection allows Detach, plus a refusal tooltip.
+
+    Detach applies only to mirror-vdev members (per zpool-detach(8)), so the
+    button greys out while a non-detachable node — a raidz or stripe member,
+    a special/log/cache/spare/replacing device, a non-mirror vdev group, or
+    the pool root — is selected. With no topology selection the button stays
+    enabled: the dialog is the picker.
+    """
+    view = getattr(app, "disks_topology_view", None)
+    if view is None:
+        return True, None
+    rows = view.get_selection().get_selected_rows()
+    if not (isinstance(rows, tuple) and len(rows) == 2 and rows[1]):
+        return True, None
+    model, pathlist = rows
+    tree_iter = model.get_iter(pathlist[0])
+    node_type = model.get_value(tree_iter, COL_T_TYPE)
+    if node_type == "mirror":
+        return True, None
+    if node_type == "disk":
+        parent = model.iter_parent(tree_iter)
+        if parent is not None and model.get_value(parent, COL_T_TYPE) == "mirror":
+            return True, None
+    return False, "Only mirror members can be detached"
+
+
 def _selected_disk_is_hdd(app) -> bool:
     """Return True when the Disk Inventory selection is exactly one HDD row."""
     selection = app.disks_view.get_selection()
@@ -1197,7 +1258,10 @@ def _selected_disk_is_wipeable(app) -> bool:
 
     Uses ``wipe_block_reason`` (same rule as the handler and the zfswipe
     script): neither the row nor anything else on its backing disk may belong
-    to an imported pool.
+    to an imported pool. The Pools cell may read empty for a disk whose only
+    membership is an unregistered pool (managed-pool display scope), so the
+    decisive check is the FULL-membership ``wipe_block_reason`` below — the
+    fence must not depend on the filtered display.
     """
     selection = app.disks_view.get_selection()
     model, pathlist = selection.get_selected_rows()

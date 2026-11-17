@@ -316,6 +316,17 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
 | [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors and live enclosure rates with rolling charts             |
 
+### Pool scope
+
+Everywhere in the GUI except the Pool Registry table on the Pools tab, the
+GUI lists and acts on **managed pools** only — pools that are both
+**registered** (in the pool registry) and **online** (imported, whatever
+their health). An unregistered pool appears only in the Pool Registry, as a
+red row, and nothing outside that table ever names, lists, or touches it.
+A registered pool that is not imported right now (shown as IMPORTABLE or
+OFFLINE in the registry) is not listed outside the Pools tab either. To make
+a pool visible and manageable, register it on the Pools tab and save.
+
 ## Tooltips
 
 Nearly everything in the GUI explains itself when you hover the mouse
@@ -362,13 +373,15 @@ Live compilation of issues that need attention:
 - Pools with an active ZFS checkpoint
 - SSD/NVMe disks at or above 80% wear (e.g. `SSD "/dev/sda" (Samsung SSD 870 QVO 1TB) wear at 85%`); probed in the background and cached for a few minutes
 - Missing backup/offsite/checkagainst configuration
-- Unregistered pools
+- Unregistered pools (reported as a count that points at the Pools tab —
+  the pool names themselves appear only in the Pool Registry)
 - Pool-identity mismatches (two-node systems only): a pool configured in
   node.conf that is not imported — pools marked as offsite candidates in the
   Pools tab are exempt, since they are routinely disconnected by design, and
   an attached one is not flagged as unexpected either — an imported pool
   outside the node config, or a known pool name whose GUID changed (renamed
-  or replaced)
+  or replaced). Registered pools are named; pools missing from the registry
+  are summarized by count, never by name
 - Stale lock files in `/run/lock/zfsutilities/.locks/`
 
 ### Pool Health
@@ -387,6 +400,10 @@ A **Low-space warning threshold** spin button sits above the pool table. It
 sets the capacity percentage at which the Dashboard warns about low space.
 The default is **80 %** (range 50–95 %).
 
+The table lists managed pools only — pools that are both registered and
+online. Unregistered pools appear solely in the Pool Registry on the Pools
+tab.
+
 ### Tasks
 
 One merged table of everything zfsutilities is doing — tasks **waiting** for a
@@ -394,7 +411,9 @@ lock, tasks **running** right now, and the most recent **completed**
 operations. Waiting and running rows always sit at the top, sorted ascending
 by start time: the task that has been running longest comes first. Completed
 rows follow, newest first. Rows whose start time cannot be determined sort to
-the top of the waiting/running block.
+the top of the waiting/running block. Scrub and ZFS-operation rows appear
+only for managed pools (registered and online); an operation on an
+unregistered pool is not shown.
 
 | Column        | Meaning                                                                                                                                                    |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -532,6 +551,9 @@ remote host cannot be reached, its version is shown as *unknown*.
 ## Backup Tab
 
 This tab configures and runs the daily backup job ([`zfsdailybackup`](../commands-and-modules/commands.md#zfsdailybackup)).
+**Save Config** and **Run Backup** are refused while any send/receive step
+names a pool that is unregistered or offline — the warning names each pool;
+register it on the Pools tab first.
 
 ### Layout
 
@@ -629,6 +651,10 @@ entry; answer them as `N response` (see [Bottom panel](#bottom-panel)).
 ## Offsite Tab
 
 This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite)).
+**Save Config** and **Run Offsite** are refused while any step names a pool
+that is unregistered or offline. Reference the rotation pool with the
+`<offsite>` placeholder rather than by name — a detached rotation pool is
+offline most of the time.
 
 ### Layout
 
@@ -676,6 +702,10 @@ This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/
 
 This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)).
 When the window is shorter than the page, the page itself scrolls.
+**Run Restore** is refused while the source or destination names a pool that
+is unregistered or offline, and auto-destination only proposes managed
+pools — register the pool on the Pools tab first (for a bare-metal restore,
+register the freshly created pool before restoring into it).
 
 ### Layout
 
@@ -839,7 +869,12 @@ the Actions panel. A dialog asks for a custom name and prepends the
 exist, the dialog also lists them below the name field — click a row to copy
 its name into the field and confirm the overwrite when asked. The current
 tab settings — including the **Dry Run** toggle state — are placed into the
-profile file.
+profile file. A profile cannot be created or updated while its captured
+settings reference a pool that is unregistered or offline.
+
+At run time, a scheduled profile skips any step or pool whose pool has
+become unregistered or offline since the profile was saved: each is skipped
+with a `WARN` naming the pool, and the rest of the profile runs.
 
 !!! note
     Clicking **Add Profile to Schedule** does **not** save the tab's normal config
@@ -991,7 +1026,10 @@ This tab manages per-pool retention policies (see also
 The drop-down list at the top lists `default` plus every pool with an
 explicit entry. Selecting a pool loads its bucket list into the editor
 table; edits show **Unsaved changes** in orange until you click **Save**
-or **Revert**.
+or **Revert**. **Save** is refused while any pool it would write is
+unregistered or offline — register the pool on the Pools tab first, or
+remove its policy. **Add Policy** offers managed pool names only (plus
+`<offsite>`).
 
 The label above the editor table shows which pool is currently being edited
 (e.g. *"Editing retention policy for pool: default"*).
@@ -1031,9 +1069,12 @@ or when a Min Age is set on a bucket whose Retain Count is 0.
 
 ### Prune runner
 
-Below the editor, a multi-select list shows the pools that `zfscleanup` would
-prune: the pools registered in the JSON config (`config.pools`) that are
-currently online, or all online pools when `config.pools` is empty. Drag rows to
+Below the editor, a multi-select list shows the managed pools — the pools
+registered in the JSON config (`config.pools`) that are currently imported,
+whatever their health (a **DEGRADED** pool still lists, with its live
+health). Unregistered pools never appear, and an empty registry lists
+nothing — unlike the `zfscleanup` command, which falls back to all online
+pools when run without a pool argument. Drag rows to
 reorder the pool list. Select one or more, set the snapshot label (default
 `dailybackup`), and click **Prune** to run a prune job for each pool in
 sequence. Pools without an explicit policy are pruned using the `default`
@@ -1114,6 +1155,10 @@ additional confirmation for each snapshot.
 
 This tab edits the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)
 table used for verification when deleting snapshots.
+**Save** is refused while a user entry references a pool that is
+unregistered or offline, and the Add Pair assistant's completion offers
+managed pool names only (plus `<offsite>`); derived rows follow their
+source tabs, which enforce the same rule at their own saves.
 
 The table is split into four sections:
 
@@ -1516,6 +1561,11 @@ context.
   enclosure against its configured cap — see
   [Live enclosure rates](#live-enclosure-rates).
 
+The per-device tables and the Enclosures **Pools** column show managed pools
+only — pools that are both registered and online. An enclosure whose disks
+all belong to unregistered pools shows an empty Pools cell; its traffic
+rates are still live, because the enclosure itself is hardware.
+
 The device tables have user-resizable columns whose widths are
 retained across GUI restarts, like the tables on the other tabs. Each
 sits in its own scrolled window that sizes to its rows: the window grows
@@ -1598,7 +1648,8 @@ view refreshes only while it is the visible view.
 The **Alignment** view examines the blocksize stack — physical disk →
 zpool (`ashift`) → ZFS dataset (`recordsize` / `volblocksize`) → VM disk
 options — and reports where neighbouring layers disagree, plus tuning
-recommendations drawn from **two bases**:
+recommendations drawn from **two bases**. Every table in this view lists
+managed pools only — pools that are both registered and online:
 
 - **Observed workload**: since-boot request-size histograms
   (`zpool iostat -r`, per pool and IO class), per-dataset I/O counters
@@ -1785,6 +1836,11 @@ actions and disk highlights follow. The tab content scrolls
 vertically as a whole when the window is too short; it also keeps a minimum
 height so it stays usable instead of being squashed.
 
+The tab's tables and the tables in every dialog it opens follow the universal
+table rule: a table grows with its rows up to 20 rows and then scrolls inside
+its own window. Dialog windows scroll the same way — when a dialog's content is
+taller than its window, the window scrolls instead of squashing its tables.
+
 ### Disk inventory
 
 The Disk Inventory pane lists every physical block device detected on the system, plus
@@ -1806,7 +1862,7 @@ pickers:
 | Phy-sec   | Physical sector size                                                                                                                                                                                                                           |
 | Transport | Transport type (e.g. `sata`, `nvme`, `sas`)                                                                                                                                                                                                    |
 | Enclosure | Display name of the multi-bay enclosure holding the disk (blank for internal disks; see [Enclosures](#enclosures))                                                                                                                              |
-| Pools     | Pool membership determined from vdev topology (a pool built on partitions shows on the whole disk's row too)                                                                                                                                    |
+| Pools     | Pool membership determined from vdev topology (a pool built on partitions shows on the whole disk's row too). Managed pools only — membership in an unregistered pool still protects the disk from wiping, but its name shows solely in the Pool Registry |
 | SMART     | Overall SMART health (`PASSED`, `FAILED`, or `n/a`). Physical devices only — partition rows are blank, since SMART data never pertains to a partition.                                                                                          |
 | Wear/Test | For SSD/NVMe, the wear percentage from SMART data (`85%`). For HDDs, the surface self-test status (see [Surface Test](#surface-test)): `-`, `42% (1h 23m)` while running, or `Passed`/`Failed`/`Aborted`/`Canceled`. `-` when neither applies. Physical devices only — partition rows are blank. |
 
@@ -1834,7 +1890,7 @@ hardware reports the same bridge serial as its siblings:
 | Name          | The name you assigned, or a self-describing fallback (`usb usb2/2-2`) until you name it          |
 | Kind/Location | `usb` with root-hub/port group, or `esata` with the PCI controller                                |
 | Disks         | Number of member disks                                                                            |
-| Pools         | Pool membership across the members (an enclosure can hold disks of several pools)                 |
+| Pools         | Pool membership across the members (an enclosure can hold disks of several pools); managed pools only — names of unregistered pools appear solely in the Pool Registry |
 | Max I/O Rate  | The configured cap, or `unlimited` when none is set                                               |
 
 Select an enclosure and click **Set Max I/O Rate…** to give it a name and a
@@ -1863,8 +1919,9 @@ Performance tab (see [Live enclosure rates](#live-enclosure-rates)).
 
 ### Pool topology
 
-The Pool Topology pane always shows the vdev topology of every imported pool,
-each pool as a top-level row of one tree. A pool with nothing to show you
+The Pool Topology pane always shows the vdev topology of every managed pool
+(registered and online), each pool as a top-level row of one tree. Unregistered
+pools appear solely in the Pool Registry on the Pools tab. A pool with nothing to show you
 stays collapsed; a pool expands automatically when it is the selected pool,
 when it contains the topology selection, or when one of its devices is
 tinted, and collapses again when none of that applies. Selecting a node
@@ -1924,7 +1981,8 @@ The wizard has four steps:
    its smallest member. A live capacity estimate shows both raw and effective
    capacity for the pool profile's record size.
 3. **Pool settings** — enter the pool name (validated against `zpool` naming
-   rules and checked for collisions with imported and importable pools),
+   rules and checked for collisions with imported, importable, and registered
+   pools — a registered-but-offline name cannot be shadowed),
    pick a **pool profile**, and confirm or change the pool blocksize. A pool
    profile is the pool-scope counterpart of a workload profile: a named
    bundle of the settings that shape a pool at creation. It supplies the
@@ -1998,7 +2056,9 @@ on the compute host the button is disabled with an explanatory tooltip.
 
 ### Growing and Maintaining Pools
 
-Five actions grow or maintain an existing pool. Every one of them follows the
+Five actions grow or maintain an existing pool. The pool pickers offer managed
+pools only — pools that are both registered and online. Every one of them
+follows the
 same safety pattern as the create-pool wizard: you pick the pool (it defaults to
 the pool selected in the topology pane) and the disks or members involved, then
 a review page shows the exact command that will run, warnings tailored to how
@@ -2074,6 +2134,12 @@ reduces redundancy and is not undoable without re-attaching a device, and
 that detaching one leg of a 2-member mirror leaves a single non-redundant
 disk. Because the operation is irreversible, it confirms with typed
 confirmation of the pool name. The exact command is `zpool detach <pool> <by-id>`.
+
+The toolbar button follows the topology selection. Any node except a mirror
+vdev or one of its members disables the button: raidz and stripe members,
+special/log/cache/spare devices, non-mirror groups, and the pool row. The
+tooltip explains that only mirror members can be detached. With nothing
+selected, the button stays enabled and the dialog guides the choice.
 
 #### Add Infrastructure Vdev
 
@@ -2623,6 +2689,10 @@ to log** requires a single selected pool.
 Below the pool registry is the Scrub Manager, separated by a draggable
 divider. It maintains a queue of pending, active, paused, and finished
 scrubs. The queue is saved to disk automatically and survives GUI restarts.
+The scrub table lists managed pools only — pools that are both registered
+and online. A scrub running on an unregistered pool (started outside the
+GUI) is not adopted into the queue, shown, or touched; the Pool Registry is
+the only place that pool appears.
 
 A scrub shows **paused** only when a person (or a backup step holding pools
 during a transfer) paused it. When the number of running scrubs exceeds the
@@ -2722,7 +2792,8 @@ from being mistakenly marked finished while ZFS is still initializing them.
 ### Pool Watch Windows
 
 The **Watch** action on the Pools tab opens an **independent** window for
-the selected pool. Each window:
+the selected managed pool (registered and imported — an IMPORTABLE or
+OFFLINE registry row has nothing to watch). Each window:
 
 - Has its own dataset tree, refreshed every 30 seconds
 - Starts collapsed; use **Expand All** / **Collapse All**
@@ -2740,7 +2811,9 @@ The list inside a Pool Watch window follows the same conventions as the
 This tab displays a hierarchical, collapsible tree of all datasets, snapshots,
 and hold tags. The tree sizes to its rows up to 20 rows and scrolls inside
 beyond that; when the window is shorter than the page, the page itself
-scrolls rather than squeezing the tree.
+scrolls rather than squeezing the tree. The top level lists managed pools
+only — pools that are both registered and online; unregistered pools appear
+solely in the Pool Registry on the Pools tab.
 
 ### Tree conventions
 

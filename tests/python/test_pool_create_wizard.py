@@ -550,7 +550,7 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(pcw._settings_problems(state, set(), profiles), [])
         self.assertEqual(
             pcw._settings_problems(state, {"newpool"}, profiles),
-            ["pool 'newpool' already exists (or is importable)"],
+            ["pool 'newpool' already exists, is importable, or is registered"],
         )
         state.pool_name = "mirror"
         self.assertTrue(pcw._settings_problems(state, set(), profiles))
@@ -1074,6 +1074,22 @@ class TestHandlerGuards(unittest.TestCase):
             any("storage host" in line for line in logs),
             logs,
         )
+
+    def test_existing_names_include_registered_offline_pools(self):
+        """Managed-pool scope: a registered-but-offline name cannot be shadowed."""
+        pcw = _import_wizard()
+        app = _make_app()
+        app.config = {"pools": [{"name": "ghostpool", "offsite_candidate": False}]}
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
+        with (
+            patch.object(pcw, "node_config", nc),
+            patch.object(pcw, "show_create_pool_wizard", return_value=None) as wiz,
+        ):
+            pcw.on_disks_create_pool(app)
+        wiz.assert_called_once()
+        existing_names = wiz.call_args[0][3]
+        self.assertIn("ghostpool", existing_names)
 
     def test_lock_conflict_refuses_with_holder_detail(self):
         pcw = _import_wizard()

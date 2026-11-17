@@ -46,7 +46,11 @@ import node_config
 import zfs_lock_manager as zlm
 from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
-from disks_page import refresh_disks_page, update_disks_button_sensitivity
+from disks_page import (
+    managed_display_pool_names,
+    refresh_disks_page,
+    update_disks_button_sensitivity,
+)
 from feature_config import get_pool_profiles
 from gi.repository import Gtk
 from gui_helpers import create_dialog, create_scrolled_dialog, set_action_tooltip
@@ -1224,7 +1228,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     content.pack_start(mode_box, False, False, 0)
 
     new_disks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-    content.pack_start(new_disks_box, True, True, 0)
+    content.pack_start(new_disks_box, False, False, 0)
 
     topology_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
     topology_label = Gtk.Label(label="Topology for the new / rebuilt pool:")
@@ -1356,8 +1360,8 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     )
     holding_box.pack_start(holding_hint, False, False, 0)
     holding_picker_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-    holding_box.pack_start(holding_picker_box, True, True, 0)
-    content.pack_start(holding_box, True, True, 0)
+    holding_box.pack_start(holding_picker_box, False, False, 0)
+    content.pack_start(holding_box, False, False, 0)
 
     holding_picker_state = _HoldingPickerState(eligibility=[])
     holding_picker_page = None
@@ -1408,7 +1412,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             rows=rows,
             preselect=preselect,
         )
-        holding_picker_box.pack_start(holding_picker_page, True, True, 0)
+        holding_picker_box.pack_start(holding_picker_page, False, False, 0)
         holding_picker_box.show_all()
 
     rate_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1532,8 +1536,8 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             "Select the disks for the new pool. Disks already in any pool or "
             "otherwise unusable are greyed out.",
         ),
-        True,
-        True,
+        False,
+        False,
         0,
     )
     for mode, radio in mode_radios.items():
@@ -1829,9 +1833,13 @@ def on_disks_migrate_pool(app) -> None:
 
     repository = app.ctx.zfs_repository
     data = app._disks_inventory_cache.get()
-    pools_all = sorted(data.topologies)
+    # Migration sources and holding pools are managed pools (registered AND
+    # online); unregistered pools appear solely in the Pool Registry. The
+    # eligibility and name-collision checks below still use the FULL
+    # topology data — safety must not depend on the display scope.
+    pools_all = sorted(managed_display_pool_names(app, data))
     if not pools_all:
-        log_msg("WARN: No imported pools to migrate")
+        log_msg("WARN: No managed pools to migrate")
         return
 
     pool_alloc: dict[str, int] = {}
@@ -1868,7 +1876,7 @@ def on_disks_migrate_pool(app) -> None:
         _show_info_dialog(
             app,
             "No migratable pools",
-            "Every imported pool either hosts the root filesystem (and "
+            "Every managed pool either hosts the root filesystem (and "
             "cannot be exported) or has no datasets to copy.",
         )
         return

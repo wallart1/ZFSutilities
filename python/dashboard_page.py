@@ -16,6 +16,11 @@ import paths
 gi.require_version("Gtk", "3.0")
 from backup_history import load_history
 from config_core import get_dashboard_config, save_dashboard_config
+from feature_config import (
+    get_managed_pool_names,
+    get_offsite_candidate_names,
+    get_pool_names,
+)
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     attach_cell_tooltips,
@@ -315,11 +320,12 @@ def _parse_cap(cap_str):
     return 0
 
 
-def _get_pool_health(repo=None):
-    """Run zpool list, return list of pool health dicts.
+def _get_pool_health(repo=None, config=None):
+    """Run zpool list, return list of pool health dicts for managed pools.
 
     Each dict contains: name, health, cap, cap_int, scrub_date, status_errors,
-    ckpoint.
+    ckpoint. With *config*, only managed pools (registered AND online) are
+    returned; unregistered pools are shown solely in the Pool Registry.
     Returns None if the command fails or times out.
     """
     repo = repo or get_default_repository()
@@ -328,6 +334,9 @@ def _get_pool_health(repo=None):
         rows = repo.list_pools()
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None
+    if config is not None:
+        managed = set(get_managed_pool_names(config, [row.name for row in rows]))
+        rows = [row for row in rows if row.name in managed]
     for row in rows:
         cap_int = _parse_cap(row.cap)
         scrub_date = _get_scrub_date(row.name, repo=repo)
@@ -1210,6 +1219,11 @@ def _compute_pool_identity_warnings(repo=None, config=None):
     shape still applies — an imported offsite pool must pass the identity
     check.
 
+    With *config*, warnings also respect the pool registry scope: a warning
+    may name a pool only when it is registered; pools that are not in the
+    registry are reported as a count pointing at the Pools tab, the one
+    place unregistered pools are shown.
+
     Returns a list of warning strings, [] in single-node mode or when
     everything is consistent, and None when the live pool list could not
     be read (not cached; the next refresh retries — same transient-failure
@@ -1221,10 +1235,10 @@ def _compute_pool_identity_warnings(repo=None, config=None):
 
     expected = _get_node_config().get("pools") or set()
     offsite = set()
+    registered = None
     if config is not None:
-        from feature_config import get_offsite_candidate_names
-
         offsite = set(get_offsite_candidate_names(config))
+        registered = set(get_pool_names(config))
 
     repo = repo or get_default_repository()
     try:
@@ -1238,27 +1252,49 @@ def _compute_pool_identity_warnings(repo=None, config=None):
         return None
     live = {row.name: row.guid for row in rows}
 
+    def _named_and_hidden(pool_names):
+        """Split names into (registered, unregistered-count) for warnings."""
+        if registered is None:
+            return sorted(pool_names), 0
+        named = sorted(name for name in pool_names if name in registered)
+        return named, len(pool_names) - len(named)
+
     warnings = []
-    for pool in sorted(expected - set(live) - offsite):
+    not_imported, hidden_count = _named_and_hidden(expected - set(live) - offsite)
+    for pool in not_imported:
         warnings.append(
             f"Pool {pool} is configured in node.conf but not imported — "
             "offline, renamed, or replaced"
         )
-    for pool in sorted(set(live) - expected - offsite):
+    if hidden_count:
+        warnings.append(
+            f"{hidden_count} unregistered pool(s) in node.conf not imported — see Pools tab"
+        )
+    not_configured, hidden_count = _named_and_hidden(set(live) - expected - offsite)
+    for pool in not_configured:
         warnings.append(
             f"Pool {pool} is imported but not configured in node.conf — "
             "add it to the node config or export it"
         )
+    if hidden_count:
+        warnings.append(f"{hidden_count} imported pool(s) missing from node.conf — see Pools tab")
 
     # A GUID column that did not resolve (e.g. "-") is not an identity
     # signal — only a definite numeric mismatch is.
     map_pools = _read_newest_state_map_pools(expected)
-    for pool in sorted(set(map_pools) & set(live)):
-        if map_pools[pool].isdigit() and live[pool].isdigit() and map_pools[pool] != live[pool]:
-            warnings.append(
-                f"Pool {pool} GUID changed — map recorded {map_pools[pool]}, "
-                f"live {live[pool]} (pool renamed or replaced)"
-            )
+    guid_mismatch = [
+        pool
+        for pool in set(map_pools) & set(live)
+        if map_pools[pool].isdigit() and live[pool].isdigit() and map_pools[pool] != live[pool]
+    ]
+    guid_named, hidden_count = _named_and_hidden(guid_mismatch)
+    for pool in sorted(guid_named):
+        warnings.append(
+            f"Pool {pool} GUID changed — map recorded {map_pools[pool]}, "
+            f"live {live[pool]} (pool renamed or replaced)"
+        )
+    if hidden_count:
+        warnings.append(f"{hidden_count} unregistered pool GUID mismatch(es) — see Pools tab")
     return warnings
 
 
@@ -1736,7 +1772,9 @@ def _gather_dashboard_data(app):
     dashboard_cfg = get_dashboard_config(app.config)
     threshold = dashboard_cfg.get("low_space_threshold", 80)
 
-    pools, pools_stale = _get_cached_or_fresh(app, "_dashboard_pools", _get_pool_health())
+    pools, pools_stale = _get_cached_or_fresh(
+        app, "_dashboard_pools", _get_pool_health(config=app.config)
+    )
     recent = _get_recent_entries(10)
     _attach_highest_levels(recent)
     missing_luns, iscsi_stale = _get_cached_or_fresh(
@@ -1744,10 +1782,14 @@ def _gather_dashboard_data(app):
     )
     stale_count = _count_stale_locks()
 
-    # Scrub status for dashboard
+    # Scrub status for dashboard — managed pools only, matching the pool
+    # health grid (the managed set derived from the grid's own live list).
     from scrub_manager import get_all_pool_scrub_states
 
-    scrub_states = get_all_pool_scrub_states()
+    managed_names = {p["name"] for p in (pools or [])}
+    scrub_states = {
+        name: state for name, state in get_all_pool_scrub_states().items() if name in managed_names
+    }
 
     tasks = _collect_running_tasks(app)
     waiting_tasks = [t for t in tasks if t.get("waiting_for_lock")]
@@ -2586,7 +2628,12 @@ def _collect_running_tasks(app):
         # in-memory queue is stale.
         queue.reload()
         queue.tick(scrub_states)
+        # Managed pools only: reconcile against the full live states above,
+        # but display rows solely for registered, online pools.
+        managed_scrubs = set(get_managed_pool_names(app.config, scrub_states.keys()))
         for pool_name in queue.active:
+            if pool_name not in managed_scrubs:
+                continue
             info = scrub_states.get(pool_name)
             status = "Running"
             if info and info.state == ScrubState.SCANNING:
@@ -2609,7 +2656,13 @@ def _collect_running_tasks(app):
 
     repo = getattr(app.ctx, "zfs_repository", None) or get_default_repository()
     raw_status = repo.all_pool_status_text()
-    for pool_name, section in _split_pool_status_sections(raw_status):
+    sections = _split_pool_status_sections(raw_status)
+    # Managed pools only: a resilver or expand on an unregistered pool is
+    # not shown — the Pool Registry is where unregistered pools appear.
+    managed_ops = set(get_managed_pool_names(app.config, [name for name, _ in sections]))
+    for pool_name, section in sections:
+        if pool_name not in managed_ops:
+            continue
         op = parse_pool_operations(pool_name, section)
         if op is None:
             continue

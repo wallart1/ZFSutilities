@@ -9,6 +9,7 @@
 gi tests/python/test_datasets_tree.py
 gi tests/python/test_alignment_realized.py
 gi tests/python/test_backup_realized.py
+gi tests/python/test_disks_dialogs_realized.py
 gi tests/python/test_rolling_realized.py
 gi tests/python/test_dashboard_page.py
 gi tests/python/test_profile_dialogs.py

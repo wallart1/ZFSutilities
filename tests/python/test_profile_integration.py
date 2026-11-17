@@ -177,8 +177,13 @@ def _run_profile_worker(profile, runner_name, result_queue):
 
     shim = types.SimpleNamespace(**vars(_real_subprocess))
     shim.Popen = _LockingPopen()
+    # Managed-pool scope: the fixtures' pools count as managed; the child
+    # has no usable zpool as the unprivileged test user.
     with patch.object(profile_runner, "subprocess", shim):
-        rc = runner(profile, {}, "/bin")
+        with patch.object(
+            profile_runner, "_managed_pools", return_value={"tank", "backup", "archive"}
+        ):
+            rc = runner(profile, {}, "/bin")
     result_queue.put(rc)
 
 

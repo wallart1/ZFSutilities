@@ -32,6 +32,7 @@ from gui_helpers import (
     on_cell_edited,
     on_row_activated,
     on_toggle,
+    refuse_non_managed_pool_endpoints,
     set_column_header_tooltip,
     setup_row_scroll,
     show_warning_dialog,
@@ -569,6 +570,15 @@ def on_offsite_run(app, ctx):
     app.offsite_runner.prepare_session_log()
 
     offsite_cfg = collect_offsite_config(app)
+    # Managed-pool scope: the run is refused while any ACTIVE step endpoint
+    # names an unregistered or offline pool ("<offsite>" expands to the
+    # detected registered pool and passes).
+    active_rows = [row for row in app.offsite_step_store if row[0]]
+    endpoints = []
+    for row in active_rows:
+        endpoints.extend([row[1], row[2]])
+    if refuse_non_managed_pool_endpoints(app, ctx, endpoints, "offsite run"):
+        return
     variables = offsite_cfg["variables"]
     dryrun = getattr(app, "_dry_run_active", False)
 
@@ -636,9 +646,19 @@ def on_offsite_cancel(app, ctx):
     app.update_action_buttons("offsite")
 
 
+def _step_endpoints(steps):
+    """Source/dest endpoint strings from offsite step dicts."""
+    endpoints = []
+    for step in steps:
+        endpoints.extend([step["source"], step["dest"]])
+    return endpoints
+
+
 def on_offsite_save(app, ctx):
     """Save current offsite config to JSON."""
     offsite_data = collect_offsite_config(app)
+    if refuse_non_managed_pool_endpoints(app, ctx, _step_endpoints(offsite_data["steps"]), "save"):
+        return
     backup_cfg = get_backup_config(ctx.config)
     warnings = validate_gui_settings(backup_cfg, offsite_data)
     if warnings:

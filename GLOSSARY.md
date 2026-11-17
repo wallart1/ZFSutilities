@@ -442,6 +442,15 @@ dimension necessary). The safe-save gate compares LUN mappings, not
 backstore counts, precisely because the 2026-10-27 incident passed
 every count gate with 33 backstores defined and only 3 LUNs mapped.
 
+## managed pool
+
+A pool that is both registered and online. Managed pools are the only
+pools the GUI may list or act on outside the Pool Registry table on
+the Pools page. The scope helper `get_managed_pool_names`
+(`feature_config.py`) intersects the saved registry with the imported
+pool names, preserving registry order. See **registered** and
+**online** for the two halves.
+
 ## message-level gate
 
 A filter on what a script prints to the terminal, set with the
@@ -493,6 +502,14 @@ detectors consult: a pool flagged this way is exempt from the
 state; attached is still a known pool), while the GUID check still
 applies — an attached rotation pool's GUID is recorded in the state map
 so a pool reused under its name is caught.
+
+## online
+
+Imported and reported by `zpool list`, whatever the health value
+(ONLINE, DEGRADED, …) — exactly the Pools page status. The word is
+deliberately wider than a strict `health == ONLINE` check: a degraded
+pool is still online. A registry row shown as IMPORTABLE or OFFLINE is
+not online. See **managed pool** and **registered**.
 
 ## oracle
 
@@ -623,6 +640,16 @@ LUN tooling would look under the new prefix while Proxmox keeps
 logging into the old ones. Born from the 2026-10 production incident;
 first exercised on the reinstall path by the j24 journey (uninstall,
 then reinstall over the untouched live targets).
+
+## registered
+
+Present in the saved JSON config's `pools` key — the Pool Registry on
+the Pools page. Registration is what includes a pool in backups and
+retention, and it is the on-ramp for every other GUI page: an
+unregistered pool appears only in the Pool Registry table (red row),
+no matter its import state. Unsaved Pools-page edits are not yet
+registration; the Save button commits them. See **managed pool** and
+**online**.
 
 ## relabel mode
 

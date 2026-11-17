@@ -5,18 +5,21 @@ Implements the zfsrestore workflow: a two-step process (full copy from oldest
 snapshot, then incremental copy of remaining snapshots) driven from the GUI.
 """
 
+import subprocess
+
 import gi
 
 gi.require_version("Gtk", "3.0")
 from feature_config import (
     RESTORE_DEFAULTS,
-    get_pool_names,
+    get_managed_pool_names,
     get_restore_config,
     save_restore_config,
 )
 from gi.repository import Gtk
 from gui_helpers import (
     bold_label,
+    refuse_non_managed_pool_endpoints,
     set_button_markup_red,
     set_page_tab_attention,
     style_expander_label,
@@ -379,6 +382,22 @@ def _style_restore_save_button(app, dirty):
     set_page_tab_attention(app, "restore", "dirty", dirty)
 
 
+def _online_pool_names(ctx):
+    """Imported pool names via the shared repository; empty on failure.
+
+    A missing repository lists nothing — auto-destination then proposes
+    nothing, which is the safe direction.
+    """
+    repo = getattr(ctx, "zfs_repository", None)
+    if repo is None:
+        return []
+    try:
+        return [row.name for row in repo.list_pools()]
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+        log_msg(f"WARN: Error listing pools: {e}")
+        return []
+
+
 def refresh_restore_destination(app):
     """Recompute and install the default destination when auto is active.
 
@@ -397,7 +416,10 @@ def refresh_restore_destination(app):
         app.restore_dest_entry.set_text("")
         return None
 
-    known_pools = get_pool_names(app.ctx.config)
+    # Managed-pool scope: auto-destination only proposes managed pools —
+    # a registered-but-offline pool is not a valid target.
+    online_pools = _online_pool_names(app.ctx)
+    known_pools = get_managed_pool_names(app.ctx.config, online_pools)
     try:
         dest = compute_auto_destination(source, known_pools)
     except ValueError as exc:
@@ -467,7 +489,9 @@ def on_restore_run(app, ctx):
 
     auto_dest = restore_cfg.get("auto_dest", False)
     if auto_dest:
-        known_pools = get_pool_names(ctx.config)
+        # Managed-pool scope: auto-destination only proposes managed pools.
+        online_pools = _online_pool_names(ctx)
+        known_pools = get_managed_pool_names(ctx.config, online_pools)
         try:
             dest = compute_auto_destination(source, known_pools)
         except ValueError as e:
@@ -478,6 +502,11 @@ def on_restore_run(app, ctx):
         return
     elif "@" in dest:
         log_msg("WARN: Specify datasets, not snapshots (no '@' allowed)")
+        return
+
+    # Managed-pool scope: unregistered pools are never touched — register
+    # the pool on the Pools tab first, then restore.
+    if refuse_non_managed_pool_endpoints(app, ctx, [source, dest], "restore"):
         return
 
     try:

@@ -27,7 +27,6 @@ from gi.repository import Gtk
 from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
-    create_dialog,
     create_scrolled_dialog,
     set_action_tooltip,
     set_column_header_tooltip,
@@ -204,7 +203,7 @@ def _is_builtin_profile_name(name: str) -> bool:
 
 def show_manage_pool_profiles_dialog(app):
     """Show the Manage Pool Profiles dialog."""
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Manage Pool Profiles",
         app,
         [
@@ -213,7 +212,6 @@ def show_manage_pool_profiles_dialog(app):
         default_response=Gtk.ResponseType.CLOSE,
         size=(700, 500),
     )
-    content = dialog.get_content_area()
 
     store = Gtk.ListStore(str, str, str, str)
     view = Gtk.TreeView(model=store)
@@ -238,10 +236,11 @@ def show_manage_pool_profiles_dialog(app):
         configure_treeview_column(col, width=width)
         view.append_column(col)
 
-    # Dialog table: expand stays on so an enlarged dialog grows the list;
-    # the default height follows the natural row count.
+    # Non-expanding, like every GUI table: the list is only as tall as its
+    # rows (up to the 20-row cap) and scrolls inside beyond that; the
+    # dialog window carries any overflow.
     scrolled = capped_treeview_scroll(view)
-    content.pack_start(scrolled, True, True, 0)
+    content.pack_start(scrolled, False, False, 0)
 
     btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     btn_box.set_halign(Gtk.Align.START)

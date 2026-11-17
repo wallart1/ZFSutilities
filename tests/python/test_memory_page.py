@@ -79,7 +79,8 @@ def _log_vdev(pool="fivebays", vdev="mirror-2", write_bps=5138022):
 def _make_app():
     """Return a mock app with a real config dict, ready for the Performance page."""
     app = MagicMock()
-    app.config = {}
+    # Managed-pool scope: the fixture vdev pool "fivebays" is registered.
+    app.config = {"pools": [{"name": "fivebays", "offsite_candidate": False}]}
     app.ctx = MagicMock()
     app.ctx.zfs_caps = None
     return app
@@ -595,6 +596,19 @@ class TestApplyMemorySample(unittest.TestCase):
         mp._apply_memory_sample(app, _arc_sample(105.0))
         store.remove.assert_called_once_with(tree_iter)
 
+    def test_unregistered_pool_vdevs_hidden(self):
+        """Managed-pool scope: cache/log vdevs of an unregistered pool stay off."""
+        mp, app = self._prepared()
+        sample = _arc_sample(100.0)
+        sample.vdevs = [_cache_vdev(pool="bootpool"), _log_vdev(pool="bootpool")]
+        mp._apply_memory_sample(app, sample)
+        self.assertEqual(app._memory_l2_store.append.call_args_list, [])
+        self.assertEqual(app._memory_slog_store.append.call_args_list, [])
+        # The empty-table notes fire: as far as this page is concerned, no
+        # cache or log vdevs exist.
+        self.assertIn("No cache vdevs", app._memory_l2_note.set_markup.call_args[0][0])
+        self.assertIn("No log vdevs", app._memory_slog_note.set_markup.call_args[0][0])
+
     def test_charts_append_per_sample(self):
         mp, app = self._prepared()
         mp._apply_memory_sample(app, _arc_sample(100.0))
@@ -842,6 +856,12 @@ class TestEnclosuresSection(unittest.TestCase):
         )
         mp, app = self._prepared(data)
         app.config = {
+            # Managed-pool scope: both member pools stay registered so the
+            # Pools column keeps showing them.
+            "pools": [
+                {"name": "fivebays", "offsite_candidate": False},
+                {"name": "threeamigos", "offsite_candidate": False},
+            ],
             "enclosures": {"enc-a": {"name": "fivebays", "max_rate": "20M"}},
         }
         sample = self._sample_with_vdevs(

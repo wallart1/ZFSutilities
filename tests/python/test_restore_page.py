@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 from unittest.mock import call as mock_call
@@ -141,6 +142,17 @@ class _FakeApp:
 def _restore_app(source="", dest="", auto_dest=False, recursive=False):
     """Return an app mock with the widgets required by restore_page helpers."""
     app = _FakeApp()
+    # Managed-pool scope: the fixture pools are registered and imported so
+    # auto-destination and the run gate pass; the repository is a mock.
+    app.ctx = MagicMock()
+    app.ctx.config = {
+        "pools": [{"name": "backuppool"}, {"name": "threeamigos"}, {"name": "fivebays"}]
+    }
+    app.ctx.zfs_repository = MagicMock()
+    app.ctx.zfs_repository.list_pools.return_value = [
+        SimpleNamespace(name=name, health="ONLINE")
+        for name in ("backuppool", "threeamigos", "fivebays")
+    ]
     app.restore_source_entry = _FakeEntry(source)
     app.restore_dest_entry = _FakeEntry(dest)
     app.restore_auto_dest_check = _FakeCheckButton(auto_dest)
@@ -567,6 +579,46 @@ class TestReceiveEncrypted(unittest.TestCase):
         app.restore_keylocation_entry.set_text("file:///old/key")
         app._restore_update_advanced_label()
         self.assertIn('foreground="orange"', label_tc._label_markup(expander))
+
+
+class TestRestoreManagedScopeGate(unittest.TestCase):
+    """on_restore_run refuses endpoints naming non-managed pools."""
+
+    def test_refuses_unregistered_destination_pool(self):
+        app = TestRestoreRunDialog()._make_app()
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = rp.Gtk.ResponseType.OK
+
+        with (
+            patch.object(rp.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(
+                rp,
+                "collect_restore_config",
+                return_value={
+                    "source": "backuppool/threeamigos/data",
+                    "dest": "bootpool/data",
+                    "auto_dest": False,
+                    "recursive": False,
+                    "variables": {},
+                    "pause_scrubs": False,
+                },
+            ),
+            patch.object(rp, "build_restore_command") as mock_build,
+            patch.object(rp, "attach_step_scrub_callbacks"),
+        ):
+            # Patch the gate's own module globals: under parallel workers the
+            # sys.modules gui_helpers instance can differ from the one the
+            # imported gate function closed over.
+            gate_log = MagicMock()
+            gate_globals = rp.refuse_non_managed_pool_endpoints.__globals__
+            with patch.dict(gate_globals, {"log_msg": gate_log}):
+                rp.on_restore_run(app, app.ctx)
+
+        app.restore_runner.set_steps.assert_not_called()
+        mock_build.assert_not_called()
+        warning = " ".join(c[0][0] for c in gate_log.call_args_list)
+        self.assertIn("bootpool", warning)
+        self.assertIn("not registered", warning)
 
 
 class TestReceiveEncryptedValidation(unittest.TestCase):

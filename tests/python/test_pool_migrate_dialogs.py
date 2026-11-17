@@ -1324,7 +1324,9 @@ def _dataset_row(name):
 def _make_app(pools=("pool1", "pool2"), root_pool=None):
     """Return a mocked app object ready for Migrate-Pool handler tests."""
     app = MagicMock()
-    app.config = {"pools": []}
+    # Managed-pool scope: the fixture pools are registered so migration
+    # sources and holding pools stay pickable.
+    app.config = {"pools": [{"name": pool, "offsite_candidate": False} for pool in pools]}
     app.stack.get_visible_child_name.return_value = "disks"
 
     data = MagicMock()
@@ -1514,7 +1516,7 @@ class TestHandlerGuards(unittest.TestCase):
         ):
             pmd.on_disks_migrate_pool(app)
         dialog.assert_not_called()
-        self.assertTrue(any("No imported pools" in m for m in logs))
+        self.assertTrue(any("No managed pools" in m for m in logs))
 
     def test_root_pool_only_shows_info_dialog(self):
         pmd = _import_dialogs()
@@ -1527,6 +1529,18 @@ class TestHandlerGuards(unittest.TestCase):
             pmd.on_disks_migrate_pool(app)
         dialog.assert_not_called()
         info.assert_called_once()
+
+    def test_unregistered_pool_not_a_source_or_holding(self):
+        """Managed-pool scope: unregistered pools are neither source nor holding."""
+        pmd = _import_dialogs()
+        app = _make_app(pools=("pool1", "bootpool"))
+        app.config = {"pools": [{"name": "pool1", "offsite_candidate": False}]}
+        with patch.object(pmd, "show_migrate_pool_dialog", return_value=None) as dialog:
+            pmd.on_disks_migrate_pool(app)
+        dialog.assert_called_once()
+        state = dialog.call_args[0][1]
+        self.assertEqual(state.pools, ["pool1"])
+        self.assertEqual(state.holding_pools, ["pool1"])
 
     def test_preselected_valid_source_opens_wizard_with_that_pool(self):
         pmd = _import_dialogs()

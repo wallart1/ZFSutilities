@@ -875,3 +875,119 @@ plan dir.)
   with "rc=5, duration=43s", then the single suite reran all-green
   (21.4s, over budget but passing). Timing-sensitive under load; not
   filed as PREEXISTING — rerun-green, nothing actionable.
+
+## 2026-11-16 (pub3) — Disks-page modal tables: natural sizing + scrollable windows
+
+- User request (scope widened mid-turn to ALL Disks-page action buttons):
+  every treeview including the ones in modal windows gets the universal
+  treatment — natural growth up to 20 rows then scroll — and the window
+  becomes scrollable.
+- Both defects probe-verified under private Xvfb with the repo's own
+  helpers (probe scripts deleted after use): (1) the dialog builders
+  packed the capped scrolls expand=True, so a 6-row picker stretched to
+  fill a 646px table window — the "expand stays on" comments
+  overrode the main-page idiom; (2) create_scrolled_dialog left the
+  viewport on the default MINIMUM vscroll policy, so a short dialog
+  crushed content toward the capped windows' 60px floors instead of
+  scrolling (NATURAL policy → vadj upper 484 > page 316, scrolls).
+- Fix (all in-repo idioms, no new mechanisms):
+  - gui_helpers.create_scrolled_dialog sets viewport
+    vscroll_policy=NATURAL behind the dashboard-style hasattr guard —
+    one change covers every scrolled modal incl. Wipe Labels.
+  - Non-expanding packs: _build_disk_picker + _build_target_tree
+    (pool_growth_dialogs), wizard _build_disks_page, the five growth
+    dialogs' page-level packs, five migrate-dialog packs.
+  - Manage Pool Profiles converted create_dialog →
+    create_scrolled_dialog (size (700,500) kept) + non-expanding table;
+    create_dialog import dropped from the module.
+- Tests: NATURAL-policy assertion added to
+  test_create_scrolled_dialog_returns_dialog_and_box;
+  test_pool_profile_dialogs' nine create_dialog patch sites rewritten to
+  the (dialog, MagicMock()) tuple shape (editor precedent); NEW
+  tests/python/disks_dialogs_realized_check.py (child process, private
+  Xvfb, mirrors backup_realized_check.py: 6-row picker hugs rows,
+  30-row picker caps ~20 rows + scrolls inside, dialog window carries
+  overflow, NATURAL policy asserted).
+- REMAINING: none — completed in the follow-up turn: wrapper
+  test_disks_dialogs_realized.py + requirements.manifest `gi` line;
+  gtk-gui.md Disks-Tab intro paragraph (universal table rule + dialog
+  windows scroll); affected suites green; FULL python suite green
+  (skips = root-gated by design); ruff clean; probe scripts removed.
+  Buttons 8/10-14 (Enroll, Wipe, SMART, Surface Test, Rate, Refresh)
+  audited: no treeviews; Wipe benefits via the shared factory fix.
+  Realized-check scratch dirs under /tmp (mkdtemp, no cleanup) follow
+  the backup_realized_check convention.
+
+## Managed-pool scope campaign (2026-11-16, pub3, uncommitted)
+
+Policy: everywhere except the Pools-tab Pool Registry table, the GUI lists
+and acts on managed pools ONLY (registered AND online; "online" = imported,
+any health — DEGRADED counts, IMPORTABLE/OFFLINE do not). Unregistered pools
+appear nowhere else and are never touched. Configs cannot be SAVED naming
+unregistered/offline pools; stored profiles keep them but skip+WARN at run.
+
+- Canonical helpers in feature_config.py: get_managed_pool_names,
+  non_managed_pool_names, pool_name_from_endpoint (placeholder-prefixed
+  endpoints like "<offsite>/dst" return None — the first cut missed that
+  and skipped every offsite step), non_managed_endpoint_pools. Shared
+  interactive gate: gui_helpers.refuse_non_managed_pool_endpoints (WARN per
+  pool + dialog; early-exits before any zpool call when no endpoints).
+- Display surfaces filtered: dashboard (health grid, tasks, scrub rows,
+  identity warnings — unregistered names suppressed to counts, registered
+  keep names), datasets roots, memory L2ARC/SLOG + enclosure Pools column
+  (alignment via alignment_page._restrict_to_managed_pools on the worker
+  thread), disks Pools column/topology/selector/enclosures (inventory cache
+  keeps FULL membership), growth+migrate pickers (managed), create-wizard
+  name collisions now include registry names.
+- WIPE FENCE: unchanged full-membership wipe_block_reason is the fence;
+  _selected_disk_is_wipeable docstring now states the filtered Pools cell
+  must never be the gate (dedicated tests both sides).
+- Scrub: refresh_scrub_table shows managed only (tick still gets FULL
+  states); ScrubQueue(registered_names=callable) gates external adoption;
+  scrub handlers refuse unregistered selections by name.
+- Retention: prune list managed (fallback REMOVED — empty registry lists
+  nothing; zfscleanup CLI keeps its own), live health shown per row,
+  add-policy candidates managed, _on_ret_save save gate, prune runner
+  defense-in-depth skip. _get_online_pool_names deleted (deprecated).
+- Transfer pages: backup/offsite save+run gates (endpoints; <offsite>
+  passes), restore run gate + managed auto-destination, checkagainst
+  user-entry save gate + managed completion. Profile save gated in
+  show_add_profile_dialog (_profile_pool_refs per tab type).
+- profile_runner: _managed_pools (subprocess zpool list; fail-closed) +
+  skip+WARN for backup/offsite steps, restore abort, retention pools,
+  scrub never-queued; backup prune pairs restricted to steps that RAN.
+- Test-side convention added in this campaign: MagicMock app/config
+  fixtures now carry real registry dicts + mocked zfs_repository rows
+  (dashboard tasks, datasets, disks, memory, alignment, retention, scrub,
+  backup, restore, profile_runner MANAGED_FIXTURE_POOLS setUp patcher).
+- Docs: gtk-gui.md (Pool scope section under Tabs + per-page notes),
+  data-structures.md pools-key policy, GLOSSARY (managed pool/online/
+  registered), architecture.md feature_config row, messages manual rows
+  for every new WARN/FATAL. Strict mkdocs build green.
+- All affected suites green; ruff clean; FULL suite green
+  (tests/run-tests --log: 114 suites passed, 0 failed; python skips =
+  root-gated by design). Two extra suites the plan missed were swept in
+  (test_page_runners, test_checkagainst_page, test_profile_integration)
+  plus the parallel-worker __globals__ patch pattern for gate WARN
+  assertions. Awaiting commit cue (coexists with the uncommitted
+  Disks-modal natural-sizing work in this tree).
+
+## 2026-11-16 (pub3) — Disks page: Detach button gated to mirror vdevs
+
+- User request: the Detach button should be disabled for non-mirror vdevs.
+- disks_page._topology_selection_detach_gate (new) reads the topology-pane
+  selection: enabled for a mirror group row, a disk leaf whose parent is a
+  mirror, or no selection (the dialog is the picker); disabled with the
+  tooltip "Only mirror members can be detached" for raidz/stripe members,
+  special/log/cache/spare/replacing devices, non-mirror groups, and the
+  pool row. Compute-host gate unchanged and takes precedence.
+- update_disks_button_sensitivity: _disks_detach_btn left the shared
+  growth_attrs loop for a dedicated block styled after the Proxmox button.
+- assess_detach (pool_growth.py) untouched — the dialog remains the
+  enforcement; the gate is UI feedback only.
+- Tests: TestDetachButtonMirrorGate (9 cases, truth table incl. host-gate
+  precedence + Replace unaffected) with a path-tuple FakeTopologyStore in
+  test_disks_page_growth_buttons; FakeTreeStore in test_disks_page grew
+  iter_parent (product now reads it; paths are tuples).
+- Docs: gtk-gui.md Detach section gained a button-gating paragraph;
+  testing.md growth-buttons row extended.

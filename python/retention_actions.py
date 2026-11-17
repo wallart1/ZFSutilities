@@ -16,11 +16,12 @@ from backup_config import (
     save_retention,
 )
 from command_builders import BashStep, _dryrun_assignments
+from feature_config import get_managed_pool_names, non_managed_pool_names
 from gi.repository import Gtk
 from gui_helpers import show_error
 from retention_page import (
     BUCKET_LABELS,
-    _get_online_pool_names,
+    _imported_pool_rows,
     _on_ret_revert,
     _on_ret_save,
     _style_retention_buttons,
@@ -29,21 +30,22 @@ from retention_page import (
 )
 
 
+def _managed_retention_pool_names(ctx):
+    """Managed pool names (registered AND online) for retention surfaces."""
+    imported = [row.name for row in _imported_pool_rows(ctx)]
+    return get_managed_pool_names(ctx.config, imported)
+
+
 def on_retention_add_policy(app, ctx):
     """Create a new retention policy for a pool, seeded from `default`."""
     retention = get_all_retention(ctx.config)
-    known = list(getattr(app, "known_pools", []) or [])
-    known_names = [p["name"] for p in known]
-    online = _get_online_pool_names()
-    candidates = []
-    for p in known_names + online:
-        if p not in retention and p not in candidates:
-            candidates.append(p)
+    managed = _managed_retention_pool_names(ctx)
+    candidates = [p for p in managed if p not in retention]
     # The <offsite> placeholder is always available if not already present.
-    if "<offsite>" not in retention and "<offsite>" not in candidates:
+    if "<offsite>" not in retention:
         candidates.append("<offsite>")
 
-    valid_names = set(known_names) | set(online) | {"<offsite>"}
+    valid_names = set(managed) | {"<offsite>"}
 
     dlg = Gtk.Dialog(
         title="Add Retention Policy",
@@ -194,8 +196,17 @@ def on_retention_prune(app, ctx):
     # Walk the model in visual order so execution order matches the list.
     pools = [row[0] for row in model if row[0] in selected]
 
+    # Managed-pool scope, defense in depth: the prune list only contains
+    # managed pools, but the runner refuses anything else by name too.
+    imported = [row.name for row in _imported_pool_rows(ctx)]
+    offenders = non_managed_pool_names(pools, ctx.config, imported)
+    if offenders:
+        for pool in offenders:
+            log_msg(f"WARN: Pool '{pool}' is unregistered or offline — skipped")
+        pools = [pool for pool in pools if pool not in set(offenders)]
+
     if not pools:
-        log_msg("WARN: No online pools selected for pruning")
+        log_msg("WARN: No managed pools selected for pruning")
         return
 
     runner = getattr(app, "retention_runner", None)

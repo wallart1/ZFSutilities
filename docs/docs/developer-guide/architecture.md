@@ -490,7 +490,7 @@ same bash orchestration contract:
 | ------ | -------------- |
 | `app_context.py` | `AppContext` dataclass — cross-cutting, non-GTK state (config, script/parent dirs, version, `ZfsRepository`). Pages receive this instead of treating the GTK window as a generic state bucket. |
 | `config_core.py` | Core JSON config: `load_config`/`save_config`, path helpers, UI state, log/history retention, dashboard config. |
-| `feature_config.py` | Per-feature getters/setters: backup, offsite, restore, retention, pools, checkagainst, snapshot names, scrub manager. |
+| `feature_config.py` | Per-feature getters/setters: backup, offsite, restore, retention, pools, checkagainst, snapshot names, scrub manager — plus the managed-pool scope helpers (`get_managed_pool_names`, `non_managed_pool_names`, endpoint parsing) that gate every GUI pool list, save, and run. |
 | `logging_config.py` | `log_msg`, message levels, GUI sink, `session_log_context()`. |
 | `runner_factory.py` | Creates `BackupRunner` instances with shared GUI callbacks; keeps runner ownership out of `gui_helpers.py`. |
 | `zfs_repository.py` | Repository pattern wrapper for all direct `zfs`/`zpool` subprocess calls; returns typed dataclasses (`PoolRow`, `DatasetRow`, `SnapshotRow`, `HoldRow`). |

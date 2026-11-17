@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -24,7 +25,10 @@ def _mock_app_with_runner():
     app.offsite_runner.running = False
     app.restore_runner = MagicMock()
     app.restore_runner.running = False
-    app.config = {}
+    # Managed-pool scope: the fixture pools are registered and imported so
+    # the run gates pass; the repository is a mock (no real zpool).
+    fixture_pools = ("tank", "backuppool")
+    app.config = {"pools": [{"name": name} for name in fixture_pools]}
     app._dry_run_active = False
     app.ctx = AppContext(
         config=app.config,
@@ -32,6 +36,10 @@ def _mock_app_with_runner():
         parent_dir=REPO_ROOT,
         version="dev",
     )
+    app.ctx.zfs_repository = MagicMock()
+    app.ctx.zfs_repository.list_pools.return_value = [
+        SimpleNamespace(name=name, health="ONLINE") for name in fixture_pools
+    ]
     return app
 
 
@@ -54,7 +62,7 @@ class TestRestorePageRun(unittest.TestCase):
                     "variables": {},
                 }
             ),
-            get_pool_names=MagicMock(return_value=["tank", "backuppool"]),
+            get_managed_pool_names=MagicMock(return_value=["tank", "backuppool"]),
             compute_auto_destination=MagicMock(return_value="tank/source"),
             compute_restore_params=MagicMock(return_value=(1, "tank")),
             build_restore_command=MagicMock(
@@ -85,7 +93,9 @@ class TestRestorePageRun(unittest.TestCase):
             patch.object(
                 restore_page, "compute_auto_destination", return_value="tank/source"
             ) as mock_auto,
-            patch.object(restore_page, "get_pool_names", return_value=["tank", "backuppool"]),
+            patch.object(
+                restore_page, "get_managed_pool_names", return_value=["tank", "backuppool"]
+            ),
             patch.object(
                 restore_page,
                 "collect_restore_config",
