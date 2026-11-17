@@ -2310,15 +2310,16 @@ GUI scrub engine: queue/state machine for start/pause/resume/stop, backup-coordi
 | `WARN: Could not list pools for scrub status: ...` | Pool listing failed while building all-pool scrub states | Continue with an empty state map |
 | `INFO: Skipping scrub action on '...': current state is ..., allowed states are ...` | State-machine gate — the requested transition is invalid for the live state | Action skipped |
 | `INFO: Starting scrub on pool '...'` / `Pausing scrub on pool '...'` / `Resuming scrub on pool '...'` / `Stopping scrub on pool '...'` | The transition passed its state gate and the command follows | Continue |
-| `INFO: Scrub started on '...'` / `Scrub paused on '...'` / `Scrub resumed on '...'` / `Scrub stopped on '...'` | The corresponding command succeeded | Continue |
-| `WARN: cannot start/pause/resume/stop scrub on '...': ...` | Subprocess timeout/OSError during the transition | That transition aborted |
-| `WARN: Failed to start/pause/resume/stop scrub on '...'` | The zpool scrub command returned non-zero | Transition aborted; the queue may retry |
+| `INFO: Scrub started on '...'` / `Scrub stopped on '...'` | The corresponding command succeeded | Continue |
+| `INFO: Scrub paused on '...'` / `Scrub resumed on '...'` | Pause/resume confirmed by the pool's live scrub state, whatever the zpool client returned | Continue |
+| `WARN: cannot start/stop scrub on '...': ...` | Subprocess timeout/OSError during the transition | That transition aborted |
+| `WARN: Failed to start/stop scrub on '...'` | The zpool scrub command returned non-zero | Transition aborted; the queue may retry |
+| `VERB: pause/resume command timed out/failed on '...'; state poll confirms paused/scanning` | The pause/resume client was abandoned at its 30 s bound (or exited non-zero), but the state poll confirmed the transition landed anyway — the kernel completes it without the client | Continue; the scrub is paused/resumed as requested |
 | `DEBUG: Pool '...' is not online; skipping scrub pause` / `... scrub resume` | The pool vanished from the live states | That pool skipped |
 | `DEBUG: Scrub on '...' is ...; not pausing` | The pool is online but not SCANNING | Pause skipped |
 | `INFO: Dry-run: would pause scrub on '...'` / `would resume scrub on '...'` | Dry-run mode — no state change | Continue without pausing/resuming |
 | `VERB: Scrub paused on '...'` / `Scrub resumed on '...'` | Backup-coordinated pause/resume confirmed by state poll | Continue |
-| `WARN: Scrub on '...' did not pause (state: ...); scan line: ...; raw status: ...` / `WARN: Scrub on '...' did not resume (state: ...); ...` | The state did not reach PAUSED/SCANNING after the command succeeded | Pool not counted as paused/resumed; the backup step proceeds |
-| `WARN: Failed to pause scrub on '...'` / `WARN: Failed to resume scrub on '...'` | The pause/resume returned failure in the coordinated path | Pool not counted |
+| `WARN: Scrub on '...' did not pause (state: ...); scan line: ...; raw status: ...` / `WARN: Scrub on '...' did not resume (state: ...); ...` | The state did not reach PAUSED/SCANNING within the verification window, whatever the zpool client returned | Pool not counted as paused/resumed; the backup step proceeds |
 | `INFO: Scrubs paused: ...` / `INFO: Scrubs resumed: ...` | Final summary of pools paused/resumed | Informational |
 | `VERB: Scrub on '...' is already running; no resume needed` | Externally resumed or never paused | Cleared from paused buckets |
 | `INFO: Scrub on '...' finished while paused; no resume needed` | State FINISHED/NONE while paused | Moved to finished |

@@ -341,6 +341,63 @@ plan dir.)
 
 ## Active / parked threads
 
+- **architecture.md C4 restructure (2026-11-16, uncommitted).** Per user
+  request, added five mermaid C4 diagrams (system context, containers, bash
+  library components, Python app components, deployment view) guided by the
+  plan-dir C4 book, and reorganized the whole file under C4-ordered parents
+  (662→~940 lines). All 34 pre-existing heading anchors preserved verbatim
+  (6 inbound-linked); content lines verified byte-preserved by a counter
+  diff (0 lost); 7 new anchors. Mermaid render verified in-browser: all 11
+  diagrams parse and draw (5 new), zero node/label box overlaps by DOM
+  geometry. Gotcha found while verifying: ZCode's embedded browser never
+  auto-renders mermaid on Material pages (pre-existing — identical on the
+  unmodified HEAD build; `window.mermaid.run()` works manually), so
+  render checks there need manual run + DOM geometry, not block counting
+  (the 11 "SVGs" initially counted were Material UI icons). Generic role
+  names only in the deployment diagram (rule 10). Same pub merge-conflict
+  expectation as the other doc rewrites. Follow-up same day (user catch):
+  the Send/Receive Decision Flow chart merged the incremental and full-copy
+  paths (shared Prep/Transfer nodes plus a spurious Inc→Transfer edge, VM
+  check on the shared trunk). Rewritten code-verified against
+  bin/zfs-send-receive: separate size estimates, a Path? fork after the
+  space check, VMs+prep on the full-copy branch only, one do_transfer
+  (incremental) vs the two-step full+(-I) pair, converge at verify. Two Key
+  branches bullets synced (VM check guards preparation and needs the
+  destination to exist; prep also runs when force='Y' overrides an
+  incremental — line 827). Word ruling same day (user): NOTHING in
+  ZFSutilities runs in containers — the C4 word "container" is now defined
+  at first use (intro bullet + Containers lead: C4 term, never Docker/LXC)
+  and confined to that section; every other diagram/prose use says
+  program/application/process (L3a/L3b labels, deployment labels). The
+  ITF e2e "dev container" tier in integrated-testing.md is a real runtime
+  container and keeps the word.
+
+- **data-structures.md writing-rules rewrite (2026-11-16, uncommitted).**
+  Whole-file pass per Writing Rules.md, same treatment as
+  integrated-testing.md: headings byte-identical (all inbound anchors
+  preserved; docs-integrity suite green), every fact kept (+265/−222).
+  Walls dissolved: ScrubQueue → 7 labeled rule bullets; state-map
+  Semantics 6 → 9 topic-first bullets; Alignment source enumeration and
+  expected-backstores maintainers → bullets; 60–120-word table cells and
+  sentences split. Seven history-narration spots dropped ("historically
+  from zfsallthepools", BashStep "before the refactor", memory-key
+  parenthetical, "as before caps existed", "campaign decision",
+  "pre-existing one" hard failure, "non-grammar now"). One content fix
+  beyond form, code-verified against bin/iscsi-recover-encrypted-luns:
+  the truncated "when `saveconfig.json`;" clause now reads "when
+  saveconfig.json records no index for the backstore" (saveconfig is
+  primary; the map answers only when it is silent). Expect a merge
+  conflict vs pub's hand-edited copy at the next lane merge, like
+  integrated-testing.md. Validation pair green; served tree rebuilt;
+  full suite green. Follow-up same day (user catch): the retention
+  arrays section's code span read `$bktlen=${#bktname[@]}` — a `$` on
+  the assignment's left side is never valid bash; bin/zfsretain:84 has
+  the correct `bktlen=${#bktname[@]}`, and the doc now matches it. A
+  docs-tree sweep found no other `$var=` spans. Second follow-up same day
+  (user request): fss-table intro now links `zfsconfig_get_checkagainst`
+  to its helper table under modules.md#zfsconfig, matching the existing
+  in-file link pattern; mkdocs build clean, anchor verified in built page.
+
 - **0.141.0 wrap-up review pass (2026-11-11, uncommitted on top of the
   cycle).** PREEXISTING emptied (all four entries resolved): disks-page
   partition-member pools now credit the whole disk row
@@ -875,3 +932,101 @@ plan dir.)
   with "rc=5, duration=43s", then the single suite reran all-green
   (21.4s, over budget but passing). Timing-sensitive under load; not
   filed as PREEXISTING — rerun-green, nothing actionable.
+
+## 2026-11-16 (pub2) — Disks: pool names live on partition rows, not partitioned-disk rows
+
+- User rule: on a disk with partitions the disk itself is never a pool
+  member (partitions on one disk can belong to different pools), so the
+  disk row must not name a pool; each partition row names the pool it
+  belongs to. Matches the standing rows-carry-only-their-own-data law.
+- Fix: `DiskInventoryCache._credit_backing_disks` deleted (it existed
+  solely to copy partition members' pools onto the whole-disk row).
+  Partition rows already resolved their own pools via `_pools_for_disk`;
+  whole-disk members (a pool whose leaf names the disk itself) keep the
+  name via the direct path match — that case never used the credit and
+  is unchanged.
+- Verified consequences: selected-pool teal tint still lands on
+  whole-disk rows (partition members map to parent_path in
+  `_highlight_pool_disks`); selecting a partitioned disk row now takes
+  the existing no-pool branch (clears tints + pool selector), covered by
+  the nonmember-selection test; wipe fence intact via
+  `wipe_block_reason`'s same-disk sibling scan — refusal now names the
+  partition; enclosure pools and pool-create eligibility compute
+  membership independently.
+- Tests: the two credit tests rewritten (disk-row assertions flipped to
+  []), plus two `_selected_disk_is_wipeable` tests pinning the GUI fence
+  for the blank-disk-row shape. Pools column tooltip reworded;
+  gtk-gui.md Pools row + pane-sync paragraph updated.
+
+## 2026-11-17 (pub2) — Scrub pause judged by pool state, not the zpool client (stewie incident)
+
+- Incident (stewie, 0.141.0, zfs 2.4.4-pve1, 2026-11-16 12:01, profile
+  root-backup-dailybackup2): `zpool scrub -p threeamigos` blocked ~43 s
+  in-kernel (synchronous ioctl; scrub ~48% + backup starting). The 30 s
+  subprocess timeout killed the client (TimeoutExpired surfaced 44 s after
+  issue — the kill itself waited on the D-state ioctl), but the kernel
+  completed the pause anyway ("paused since 12:01:57" vs WARN 12:01:58).
+  pause_scrubs_for_pools trusted the exception: pool left out of the paused
+  list → post-step resume never ran → scrub stranded paused at 47.98% until
+  the user resumed it manually; the persisted queue never recorded the pause
+  either. Session log:
+  /var/log/zfsutilities/sessions/2026-11-16_12-00-01_backup_profile-root-backup-dailybackup2.log
+- Fix: new `_transition_scrub_verified` helper — issue pause/resume with the
+  30 s client bound, then poll zpool status for up to 120 s regardless of how
+  the command returned; state confirms → success (honest VERB when the client
+  timed out/failed); window expires → the one did-not-pause/resume WARN with
+  raw status. All four call sites rewired (pause/resume wrappers used by GUI
+  buttons + queue tick, and both coordinated for_pools paths).
+  `_wait_for_scrub_state` is now attempt-bounded (timeout/interval) instead
+  of wall-clock-bounded, so mocked-sleep tests can't hot-spin.
+  start/stop deliberately unchanged: their outcomes self-heal via tick
+  reconciliation, unlike pause/resume where a false negative strands state.
+- Tests: wrapper success/failure tests reworked for the state poll; new
+  timeout-but-confirmed cases (wrapper + coordinated, pause + resume — the
+  incident, red-proofed), slow-flip case pinning the widened window (40
+  non-matching polls > the old 25-attempt window). 126 pass in ~4 s.
+- messages-manual scrub block restructured (started/stopped = command
+  succeeded; paused/resumed = state-confirmed; new timeout-but-confirmed VERB
+  row; coordinated "Failed to pause/resume" rows absorbed into the state
+  WARN). daily-backup.md pause-scrubs section gained the state-judged bullet.
+
+## 2026-11-17 (pub2) — integrated-testing.md writing-rules rewrite + full fact re-verification; ubuntu template joins the guard
+
+- Re-verification method: every claim in the doc checked against the tree —
+  five parallel claim-cluster verifications (upgrade journeys j10/j12/j19/
+  j23/j25; recovery journeys j15–j18 incl. every S/M scenario; lab + two-node
+  machinery; survey/e2e/framework suites; docs cross-links + FINDINGS/
+  REQUIREMENTS/repair-plan ledgers, several via git history since published
+  rows are pruned) plus first-hand reads of the driver, base/runlock/guest/
+  template/report libs, site config, common.sh rerun staging.
+- Fact fixes landing in the rewrite: j15 S1 oracle is PENDING+DRIFT (was
+  "FAILED+DRIFT", pre-repair-027 wording); j12's SIGKILL fires on version-dir
+  appearance, not the transcript marker (deliberate, j12:205-208); j25's
+  printed activation commands are absolute paths (was "login-shell
+  wrapped"); `itf vmimage build` added to the run-lock entry points and the
+  loose `|| rc=$?` set; framework-tests section now lists all nine itf
+  suites (survey-journey + watch were missing) and says all three template
+  profiles; storage base named as home of BOTH Debian and ubuntu templates
+  (intro + role-split bullet); test-pools callers corrected (j01/j05/j21
+  direct; j04/j11/j20/j22 via the single-node lab); manual-steps claim
+  scoped to dev-side setup (base-PVE prep lives in tests/integrated/README
+  + site-config comments, verified by preflight); template freshness is a
+  skip-with---force-pointer, clone reach "a minute or two"; FINDINGS/
+  REQUIREMENTS legends aligned with the actual ledgers + one pruning note;
+  fence-timer restart worded to j16 (asserts) vs j18 (restarts); j05 prereq
+  failure nuance; watch named as tailing steps.tsv too. F-number/plan
+  identifiers kept (verified via git history). Headings byte-identical;
+  docs-integrity suite + clean mkdocs build green.
+- Guard fix (user-approved): `ITF_UBUNTU_TEMPLATE_NAME` added to
+  `_itf_template_names` (base-lib.sh) — the ubuntu probe template is now
+  refusal-protected like storage/compute; test-itf-base-guard gained the
+  ubuntu refusal case (destroy refused + refusal names the template, other
+  two baselines still protected, clone exempt). Suite green.
+- PREEXISTING: 2 entries resolved (stale two-node passage — fixed in the
+  rewrite; ubuntu guard gap — fixed above); 3 filed (stale `sudo
+  switch-version` transcript markers in j10/j12/j19/j23/j25 vs the
+  absolute-path prints since 4b232a4; stale "FAILED+DRIFT" wording in
+  journeys/README.md:187 + j18 header; tests/integrated/README.md profile
+  count + run-lock entry-point staleness). 4 entries remain (incl. the
+  snapshot-dialog tooltip full-run flake, which did NOT fire today).
+- Full suite green at the end (all suites passed; log /tmp/zfs-run.log).

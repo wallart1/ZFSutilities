@@ -179,11 +179,14 @@ _itf_template_vmid_resolve() {
 # _itf_template_names
 #
 # Echoes every configured template name, one per line: the storage-role
-# baseline always, the compute-role baseline when the site configures
-# two-node keys.
+# baseline always; the compute-role baseline when the site configures
+# two-node keys; the ubuntu probe baseline when the site configures the
+# Ubuntu ISO pair (it lives on the storage base like the Debian one —
+# name-resolved protection matches it only where it exists).
 _itf_template_names() {
     local n
-    for n in "${ITF_TEMPLATE_NAME:-}" "${ITF_COMPUTE_TEMPLATE_NAME:-}"; do
+    for n in "${ITF_TEMPLATE_NAME:-}" "${ITF_COMPUTE_TEMPLATE_NAME:-}" \
+        "${ITF_UBUNTU_TEMPLATE_NAME:-}"; do
         [[ -n "$n" ]] && printf '%s\n' "$n"
     done
     return 0

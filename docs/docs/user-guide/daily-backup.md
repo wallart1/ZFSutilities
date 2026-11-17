@@ -251,6 +251,11 @@ resume automatically when the step finishes.
 - When a step finishes, the runner attempts to resume any scrub it paused. If
   the scrub was already resumed by another process or finished on its own, the
   session log records that fact instead of silently doing nothing.
+- Pause and resume are judged by the pool's actual scrub state, not by whether
+  the zpool command returned promptly. On a busy pool the transition can take
+  tens of seconds to land, outliving the command's own wait; the runner keeps
+  checking the pool state for up to two minutes, so a slow pause still counts
+  and its scrub is still resumed when the step finishes.
 
 ## Common Issues
 

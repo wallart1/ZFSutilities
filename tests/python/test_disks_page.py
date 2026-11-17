@@ -546,12 +546,13 @@ class TestDiskInventoryCache(unittest.TestCase):
         self.assertEqual(len(data.disks), 1)
         self.assertEqual(data.disks[0].pools, ["pool1"])
 
-    def test_load_credits_backing_disk_for_partition_member(self):
-        """A pool built on partitions must credit the whole disk row.
+    def test_load_partition_member_names_partition_row_only(self):
+        """A pool built on partitions names the partition row, never the disk row.
 
         Topology leaves for partition-member pools are by-id ``-partN``
-        paths; without backing-disk credit the physical disk row's Pools
-        column stays blank and selecting it takes the no-pool branch.
+        paths; they resolve to the partition's own row. A disk with
+        partitions is never itself a member, so its Pools column stays
+        blank (selecting it takes the no-pool branch).
         """
         dp = _import_disks_page()
         whole = _disk(path="/dev/sda", parent_path=None, by_id="ata-SSD-1234")
@@ -601,11 +602,16 @@ class TestDiskInventoryCache(unittest.TestCase):
             data = cache._load()
 
         by_path = {disk.path: disk for disk in data.disks}
-        self.assertEqual(by_path["/dev/sda"].pools, ["pool1"])
+        self.assertEqual(by_path["/dev/sda"].pools, [])
         self.assertEqual(by_path["/dev/sda2"].pools, ["pool1"])
 
-    def test_load_credits_backing_disk_across_pools(self):
-        """Partitions of one disk in different pools credit the disk with both."""
+    def test_load_partitions_in_distinct_pools_name_their_own_rows(self):
+        """Partitions of one disk in different pools each name their own pool.
+
+        The disk row carries no pool name: partitions on one disk can be
+        members of different pools, and the disk itself is a member of
+        neither.
+        """
         dp = _import_disks_page()
         whole = _disk(path="/dev/sda", parent_path=None, by_id="ata-SSD-1234")
         part1 = _disk(
@@ -655,7 +661,7 @@ class TestDiskInventoryCache(unittest.TestCase):
         data = cache._load()
 
         by_path = {disk.path: disk for disk in data.disks}
-        self.assertEqual(by_path["/dev/sda"].pools, ["pool1", "pool2"])
+        self.assertEqual(by_path["/dev/sda"].pools, [])
         self.assertEqual(by_path["/dev/sda1"].pools, ["pool1"])
         self.assertEqual(by_path["/dev/sda2"].pools, ["pool2"])
 
@@ -1669,6 +1675,61 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
             dp.update_disks_button_sensitivity(app)
             btn.set_sensitive.assert_called_with(expected)
             btn.reset_mock()
+
+    def test_selected_disk_is_wipeable_refuses_disk_hosting_pool_partition(self):
+        """A partitioned disk row with a blank Pools cell is still not wipeable.
+
+        The disk row carries no pool name (partitions name their own pools),
+        so the wipe fence cannot lean on the store cell: the same-disk
+        sibling scan in wipe_block_reason must refuse the wipe.
+        """
+        dp = _import_disks_page()
+        whole = _disk(path="/dev/sdb", name="sdb", by_id="ata-SSD-1234")
+        partition = _disk(
+            path="/dev/sdb2",
+            name="sdb2",
+            disk_type="part",
+            parent_path="/dev/sdb",
+            by_id="ata-SSD-1234-part2",
+            pools=["tank"],
+        )
+        app = _make_app(disks=[whole, partition])
+        # Store rows mirror the new display shape: disk row blank, partition
+        # row names its pool.
+        app.disks_store = FakeListStore(
+            [
+                _disk_row("/dev/sdb", pools=""),
+                _disk_row("/dev/sdb2", pools="tank"),
+            ]
+        )
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [0])
+
+        self.assertFalse(dp._selected_disk_is_wipeable(app))
+
+    def test_selected_disk_is_wipeable_allows_partitioned_disk_in_no_pool(self):
+        """A partitioned disk whose partitions belong to no pool stays wipeable."""
+        dp = _import_disks_page()
+        whole = _disk(path="/dev/sdb", name="sdb", by_id="ata-SSD-1234")
+        partition = _disk(
+            path="/dev/sdb2",
+            name="sdb2",
+            disk_type="part",
+            parent_path="/dev/sdb",
+            by_id="ata-SSD-1234-part2",
+            pools=[],
+        )
+        app = _make_app(disks=[whole, partition])
+        app.disks_store = FakeListStore(
+            [
+                _disk_row("/dev/sdb", pools=""),
+                _disk_row("/dev/sdb2", pools=""),
+            ]
+        )
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [0])
+
+        self.assertTrue(dp._selected_disk_is_wipeable(app))
 
 
 class TestEnclosureCacheAttach(unittest.TestCase):
