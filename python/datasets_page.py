@@ -15,7 +15,7 @@ import zfs_lock_manager as zlm
 
 gi.require_version("Gtk", "3.0")
 from command_builders import BashStep
-from feature_config import get_workload_profiles
+from feature_config import get_managed_pool_names, get_workload_profiles
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     UNMOUNTED_FG,
@@ -284,10 +284,14 @@ def refresh_datasets_page(app, pool_filter=None):
         log_msg(f"WARN: Error listing pools: {e}")
         return
 
+    # Managed pools only: registered AND online. Unregistered pools appear
+    # solely in the Pool Registry (Pools tab).
+    managed = get_managed_pool_names(app.ctx.config, online_pools)
+
     if pool_filter:
-        pools_to_show = [pool_filter] if pool_filter in online_pools else []
+        pools_to_show = [pool_filter] if pool_filter in managed else []
     else:
-        pools_to_show = online_pools
+        pools_to_show = managed
 
     for pool in pools_to_show:
         ds_iter = _append_root_dataset_row(app, pool)

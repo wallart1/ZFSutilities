@@ -33,6 +33,27 @@ import scrub_manager as sm
 import session_log
 from command_builders import BashStep
 
+# Managed-pool scope: profile run gates skip pools that are unregistered or
+# offline. The runner tests treat every fixture pool as managed; dedicated
+# gate tests below patch this set per-case.
+MANAGED_FIXTURE_POOLS = frozenset(
+    {
+        "tank",
+        "fivebays",
+        "threeamigos",
+        "z22tb",
+        "z40tb",
+        "backup",
+        "z1",
+        "z2",
+        "NVME1",
+        "archive",
+        "src",
+        "dst",
+        "data",
+    }
+)
+
 
 class TestComputeRestoreParams(unittest.TestCase):
     def test_common_prefix_removed(self):
@@ -124,6 +145,15 @@ class TestDetectOffsitePool(unittest.TestCase):
 
 
 class TestRunBackupProfile(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Managed-pool scope: profile gates see the fixture pools as managed.
+        patcher = patch.object(
+            profile_runner, "_managed_pools", return_value=set(MANAGED_FIXTURE_POOLS)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_builds_steps_correctly(self):
         with temp_config_dir():
             profile = {
@@ -662,7 +692,78 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertNotIn("sourcefs=tank/off", prune_script)
 
 
+class TestManagedScopeSkipWarn(unittest.TestCase):
+    """Scheduled profiles skip non-managed pools with a WARN, run the rest."""
+
+    def test_backup_profile_skips_unregistered_step(self):
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {"label": "dailybackup"},
+                    "send_receive_steps": [
+                        {"source": "tank/src", "dest": "tank/dst", "active": True},
+                        {"source": "bootpool/src", "dest": "tank/dst2", "active": True},
+                    ],
+                    "post_steps": {"run_retention": False, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                }
+            }
+            with (
+                patch.object(profile_runner, "_managed_pools", return_value={"tank"}),
+                mock_subprocess() as m,
+            ):
+                m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
+                with capture_logs() as logs:
+                    rc = profile_runner.run_backup_profile(profile, {}, "/bin")
+            self.assertEqual(rc, 0)
+            self.assertTrue(any("bootpool" in msg and "step skipped" in msg for msg in logs), logs)
+            self.assertFalse(any("'tank' unregistered" in msg for msg in logs), logs)
+
+    def test_retention_profile_skips_unmanaged_pools(self):
+        with temp_config_dir():
+            profile = {"config": {"prune_pools": ["tank", "bootpool"]}}
+            with (
+                patch.object(profile_runner, "_managed_pools", return_value={"tank"}),
+                mock_subprocess() as m,
+            ):
+                m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
+                with capture_logs() as logs:
+                    rc = profile_runner.run_retention_profile(profile, {}, "/bin")
+            self.assertEqual(rc, 0)
+            self.assertTrue(any("bootpool" in msg and "skipped" in msg for msg in logs), logs)
+            # Only the managed pool produced a prune command.
+            prunes = [c for c in m.calls if c[0] and "zfscleanup" in " ".join(c[0])]
+            self.assertEqual(len(prunes), 1)
+
+    def test_scrub_profile_never_queues_unmanaged_pools(self):
+        with temp_config_dir():
+            profile = {"config": {"pools": ["bootpool"], "simultaneous": 1}}
+            with patch.object(profile_runner, "_managed_pools", return_value={"tank"}):
+                with capture_logs() as logs:
+                    rc = profile_runner.run_scrub_profile(profile, {}, "/bin")
+            self.assertEqual(rc, 1)
+            self.assertTrue(any("bootpool" in msg and "not queued" in msg for msg in logs), logs)
+
+    def test_managed_pools_fail_closed_when_listing_fails(self):
+        """A zpool-listing failure yields no managed pools — never unverified runs."""
+        with patch.object(profile_runner.subprocess, "run", side_effect=FileNotFoundError("zpool")):
+            with capture_logs() as logs:
+                managed = profile_runner._managed_pools({"pools": [{"name": "tank"}]})
+        self.assertEqual(managed, set())
+        self.assertTrue(any("Could not list pools" in msg for msg in logs), logs)
+
+
 class TestRunOffsiteProfile(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Managed-pool scope: profile gates see the fixture pools as managed.
+        patcher = patch.object(
+            profile_runner, "_managed_pools", return_value=set(MANAGED_FIXTURE_POOLS)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_no_pool_returns_error(self):
         with temp_config_dir():
             profile = {
@@ -727,6 +828,15 @@ class TestRunOffsiteProfile(unittest.TestCase):
 
 
 class TestRunRestoreProfile(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Managed-pool scope: profile gates see the fixture pools as managed.
+        patcher = patch.object(
+            profile_runner, "_managed_pools", return_value=set(MANAGED_FIXTURE_POOLS)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_missing_source_dest(self):
         profile = {
             "config": {
@@ -802,6 +912,15 @@ class TestRunRestoreProfile(unittest.TestCase):
 
 
 class TestRunRetentionProfile(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Managed-pool scope: profile gates see the fixture pools as managed.
+        patcher = patch.object(
+            profile_runner, "_managed_pools", return_value=set(MANAGED_FIXTURE_POOLS)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_no_pools_aborts_fatal(self):
         profile = {"config": {"prune_label": "dailybackup", "prune_pools": []}}
         config = {}
@@ -970,6 +1089,15 @@ class TestWriteRawLine(unittest.TestCase):
 
 
 class TestRunScrubProfile(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Managed-pool scope: profile gates see the fixture pools as managed.
+        patcher = patch.object(
+            profile_runner, "_managed_pools", return_value=set(MANAGED_FIXTURE_POOLS)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_no_pools_aborts_fatal(self):
         profile = {"config": {"pools": [], "simultaneous": 1}}
         config = {}
@@ -1345,6 +1473,15 @@ class TestRsyncFailureDiagnosisInProfileRunner(unittest.TestCase):
 
 
 class TestDryRunProfiles(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        # Managed-pool scope: profile gates see the fixture pools as managed.
+        patcher = patch.object(
+            profile_runner, "_managed_pools", return_value=set(MANAGED_FIXTURE_POOLS)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_backup_dry_run_skips_rsync_and_scripts(self):
         with temp_config_dir():
             profile = {
@@ -1908,6 +2045,15 @@ class TestCheckWeekdayOrdinal(unittest.TestCase):
 
 class TestPauseScrubsInProfiles(unittest.TestCase):
     """pause_scrubs option issues zpool scrub -p / scrub around steps."""
+
+    def setUp(self):
+        super().setUp()
+        # Managed-pool scope: profile gates see the fixture pools as managed.
+        patcher = patch.object(
+            profile_runner, "_managed_pools", return_value=set(MANAGED_FIXTURE_POOLS)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _zpool_status_text(self, state):
         if state == "scanning":

@@ -256,5 +256,118 @@ class TestProxmoxButtonSensitivity(unittest.TestCase):
         btn.set_sensitive.assert_called_with(True)
 
 
+class FakeTopologyStore:
+    """TreeStore stand-in mapping path tuples to [name, vdev_type] rows."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def get_iter(self, path):
+        return path
+
+    def get_value(self, it, col):
+        return self.rows[it][col]
+
+    def iter_parent(self, it):
+        return it[:-1] if len(it) > 1 else None
+
+
+def _gate_topology_store():
+    """Three managed pools: a mirror, a raidz1, and a single-disk stripe."""
+    return FakeTopologyStore(
+        {
+            (0,): ["tank-mirror", "pool"],
+            (0, 0): ["mirror-0", "mirror"],
+            (0, 0, 0): ["/dev/sda", "disk"],
+            (0, 0, 1): ["/dev/sdb", "disk"],
+            (1,): ["tank-raidz", "pool"],
+            (1, 0): ["raidz1-0", "raidz1"],
+            (1, 0, 0): ["/dev/sdc", "disk"],
+            (2,): ["tank-stripe", "pool"],
+            (2, 0): ["/dev/sdd", "disk"],
+        }
+    )
+
+
+class TestDetachButtonMirrorGate(unittest.TestCase):
+    """update_disks_button_sensitivity gates Detach on mirror-vdev membership."""
+
+    _ATTR = "_disks_detach_btn"
+    _HOST_TOOLTIP = "Pool maintenance is available only on the storage host"
+    _REASON = "Only mirror members can be detached"
+
+    def _make(self, selected):
+        dp = _import_disks_page()
+        app = _make_app()
+        app.disks_topology_view = FakeTreeView(_gate_topology_store(), selected)
+        return dp, app, getattr(app, self._ATTR)
+
+    def test_enabled_for_mirror_member(self):
+        dp, app, btn = self._make([(0, 0, 0)])
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(True)
+        btn.set_tooltip_text.assert_called_with(btn._action_tooltip)
+
+    def test_enabled_for_mirror_group_row(self):
+        dp, app, btn = self._make([(0, 0)])
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(True)
+        btn.set_tooltip_text.assert_called_with(btn._action_tooltip)
+
+    def test_disabled_for_raidz_member(self):
+        dp, app, btn = self._make([(1, 0, 0)])
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with(self._REASON)
+        # The shared host-only gate is untouched: Replace stays enabled.
+        app._disks_replace_btn.set_sensitive.assert_called_with(True)
+
+    def test_disabled_for_raidz_group_row(self):
+        dp, app, btn = self._make([(1, 0)])
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with(self._REASON)
+
+    def test_disabled_for_stripe_disk(self):
+        dp, app, btn = self._make([(2, 0)])
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with(self._REASON)
+
+    def test_disabled_for_pool_root(self):
+        dp, app, btn = self._make([(0,)])
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with(self._REASON)
+
+    def test_enabled_without_selection(self):
+        dp, app, btn = self._make([])
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(True)
+        btn.set_tooltip_text.assert_called_with(btn._action_tooltip)
+
+    def test_enabled_without_topology_view(self):
+        dp, app, btn = self._make([])
+        app.disks_topology_view = None
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(True)
+        btn.set_tooltip_text.assert_called_with(btn._action_tooltip)
+
+    def test_compute_host_gate_wins(self):
+        dp, app, btn = self._make([(0, 0, 0)])
+        with _compute_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with(self._HOST_TOOLTIP)
+
+
 if __name__ == "__main__":
     unittest.main()

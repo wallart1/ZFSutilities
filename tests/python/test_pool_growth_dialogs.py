@@ -250,7 +250,10 @@ class FakeDatasetRunner:
 def _make_app(disks=None, topologies=None):
     """Return a mocked app object ready for Add-Vdev handler tests."""
     app = MagicMock()
-    app.config = {"pools": []}
+    # Managed-pool scope: the fixture pools are registered so the growth
+    # handlers keep offering them.
+    fixture_pools = list((topologies if topologies is not None else {"pool1": None}).keys())
+    app.config = {"pools": [{"name": name, "offsite_candidate": False} for name in fixture_pools]}
     app.parent_dir = "/tmp/bin"
     app.stack.get_visible_child_name.return_value = "disks"
     app.enable_treeview_copy = MagicMock()
@@ -605,7 +608,22 @@ class TestHandlerGuards(unittest.TestCase):
         ):
             pgd.on_disks_add_vdev(app)
         dialog.assert_not_called()
-        self.assertTrue(any("No imported pools" in line for line in logs), logs)
+        self.assertTrue(any("No managed pools" in line for line in logs), logs)
+
+    def test_unregistered_pool_not_offered(self):
+        """Managed-pool scope: an online-but-unregistered pool is not pickable."""
+        pgd = _import_dialogs()
+        app = _make_app(topologies={"pool1": POOL1_TOPOLOGY, "bootpool": POOL1_TOPOLOGY})
+        app.config = {"pools": [{"name": "pool1", "offsite_candidate": False}]}
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
+        with (
+            patch.object(pgd, "node_config", nc),
+            patch.object(pgd, "show_add_vdev_dialog", return_value=None) as dialog,
+        ):
+            pgd.on_disks_add_vdev(app)
+        dialog.assert_called_once()
+        self.assertEqual(dialog.call_args[0][1], ["pool1"])
 
     def test_no_eligible_disks_shows_info_dialog(self):
         pgd = _import_dialogs()
@@ -1588,7 +1606,7 @@ class TestAttachHandlerGuards(unittest.TestCase):
         ):
             pgd.on_disks_attach_device(app)
         dialog.assert_not_called()
-        self.assertTrue(any("No imported pools" in line for line in logs), logs)
+        self.assertTrue(any("No managed pools" in line for line in logs), logs)
 
     def test_no_eligible_disks_shows_info_dialog(self):
         pgd = _import_dialogs()
@@ -2082,7 +2100,7 @@ class TestReplaceHandlerGuards(unittest.TestCase):
         ):
             pgd.on_disks_replace_device(app)
         dialog.assert_not_called()
-        self.assertTrue(any("No imported pools" in line for line in logs), logs)
+        self.assertTrue(any("No managed pools" in line for line in logs), logs)
 
     def test_no_eligible_disks_shows_info_dialog(self):
         pgd = _import_dialogs()
@@ -2518,7 +2536,7 @@ class TestDetachHandlerGuards(unittest.TestCase):
         ):
             pgd.on_disks_detach_device(app)
         dialog.assert_not_called()
-        self.assertTrue(any("No imported pools" in line for line in logs), logs)
+        self.assertTrue(any("No managed pools" in line for line in logs), logs)
 
     def test_proceeds_when_every_disk_is_a_pool_member(self):
         """Detach frees a disk; the handler must not require eligible disks."""
@@ -2925,7 +2943,7 @@ class TestInfraHandlerGuards(unittest.TestCase):
         ):
             pgd.on_disks_add_infra_vdev(app)
         dialog.assert_not_called()
-        self.assertTrue(any("No imported pools" in line for line in logs), logs)
+        self.assertTrue(any("No managed pools" in line for line in logs), logs)
 
     def test_no_eligible_disks_shows_info_dialog(self):
         pgd = _import_dialogs()

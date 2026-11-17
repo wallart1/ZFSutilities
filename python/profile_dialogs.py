@@ -41,6 +41,7 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
+    refuse_non_managed_pool_endpoints,
     set_action_tooltip,
     set_column_header_tooltip,
     show_error_dialog,
@@ -1194,6 +1195,27 @@ def on_apply_profile(app, datasets, profile, refresh=None):
 # ---------------------------------------------------------------------------
 
 
+def _profile_pool_refs(tab_type, config_dict):
+    """Pool-name references a captured profile config carries, by tab type.
+
+    Pull-style steps (rsync paths) carry no local pool names and are not
+    included. Bare pool lists (scrub pools, retention prune pools) work as
+    endpoint strings; placeholders pass the managed gate.
+    """
+    if tab_type == "backup":
+        steps = config_dict.get("send_receive_steps", [])
+        return [ep for step in steps for ep in (step.get("source"), step.get("dest"))]
+    if tab_type == "offsite":
+        steps = config_dict.get("steps", [])
+        return [ep for step in steps for ep in (step.get("source"), step.get("dest"))]
+    if tab_type == "restore":
+        return [config_dict.get("source", ""), config_dict.get("dest", "")]
+    if tab_type in ("scrub", "retention"):
+        key = "pools" if tab_type == "scrub" else "prune_pools"
+        return list(config_dict.get(key, []))
+    return []
+
+
 def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run=False):
     """Show the Add Profile to Schedule dialog and save a profile if confirmed.
 
@@ -1294,6 +1316,13 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run
     dlg.destroy()
 
     if response != Gtk.ResponseType.OK or not custom_name:
+        return
+
+    # Managed-pool scope, save gate: a profile cannot be created or updated
+    # while it references a pool that is unregistered or offline.
+    if refuse_non_managed_pool_endpoints(
+        app, app.ctx, _profile_pool_refs(tab_type, config_dict), "profile save"
+    ):
         return
 
     import re

@@ -2429,6 +2429,35 @@ class TestProfileDialogStaticTooltips(unittest.TestCase):
         self.assertIn("backup tab", tip)
 
 
+class TestAddProfileManagedScopeGate(unittest.TestCase):
+    """Add Profile to Schedule refuses configs naming non-managed pools."""
+
+    def test_backup_profile_with_unregistered_pool_refused(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        dialog = MagicMock()
+        dialog.run.return_value = pd.Gtk.ResponseType.OK
+
+        cfg = {"send_receive_steps": [{"source": "tank/src", "dest": "tank/dst"}]}
+        pd.Gtk.Entry.return_value.get_text.return_value = "daily"
+        with (
+            patch.object(pd, "create_dialog", return_value=dialog),
+            patch.object(pd, "get_user", return_value="tester"),
+            patch.object(pd, "list_profiles", return_value=[]),
+            patch.object(pd, "create_profile") as mock_create,
+            patch.object(pd, "update_profile") as mock_update,
+            patch.object(pd, "refuse_non_managed_pool_endpoints", return_value=True) as gate,
+        ):
+            pd.show_add_profile_dialog(app, "backup", cfg)
+
+        mock_create.assert_not_called()
+        mock_update.assert_not_called()
+        # The gate ran with the profile's pool references and refused.
+        gate.assert_called_once()
+        self.assertEqual(gate.call_args[0][1], app.ctx)
+        self.assertEqual(gate.call_args[0][3], "profile save")
+
+
 class TestAddProfileDialogExistingList(unittest.TestCase):
     """Add Profile to Schedule lists same-type profiles for overwriting."""
 

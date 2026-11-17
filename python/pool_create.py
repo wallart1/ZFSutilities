@@ -248,8 +248,8 @@ def validate_pool_name(name: str, existing_names: Container[str]) -> tuple[bool,
 
     *error* is "" when *name* is valid. Implements the OpenZFS 2.4.4 libzfs
     rules documented at the module constants, plus the project policy length
-    cap and a collision check against *existing_names* (imported and
-    importable pool names supplied by the caller).
+    cap and a collision check against *existing_names* (imported, importable,
+    and registered pool names supplied by the caller).
     """
     if not name or not name.strip():
         return False, "pool name must not be empty"
@@ -267,7 +267,7 @@ def validate_pool_name(name: str, existing_names: Container[str]) -> tuple[bool,
     if any(name.startswith(prefix) for prefix in _RESERVED_PREFIXES):
         return False, f"'{name}' begins with a reserved word and cannot be used as a pool name"
     if name in existing_names:
-        return False, f"pool '{name}' already exists (or is importable)"
+        return False, f"pool '{name}' already exists, is importable, or is registered"
     return True, ""
 
 

@@ -460,12 +460,13 @@ class TestAlignmentRefreshingIndicator(_PageTestCase):
                 self._target()
 
         idle_captured = []
+        empty_sample = SimpleNamespace(pools=[], datasets=[], dataset_read_failures=[])
         with (
             patch.object(ap.threading, "Thread", _SyncThread),
             patch.object(
                 ap.GLib, "idle_add", side_effect=lambda fn, *a: idle_captured.append((fn, a)) or 1
             ),
-            patch.object(ap, "collect_alignment_sample", return_value=object()),
+            patch.object(ap, "collect_alignment_sample", return_value=empty_sample),
         ):
             ap.refresh_alignment_view(app)
         finish_fn, finish_args = idle_captured[0]
@@ -484,6 +485,54 @@ class TestAlignmentRefreshingIndicator(_PageTestCase):
         thread.assert_not_called()
         app.memory_refreshing_label.show.assert_not_called()
         app.memory_refreshing_label.hide.assert_not_called()
+
+
+class TestRestrictToManagedPools(unittest.TestCase):
+    """Managed-pool scope: unregistered pools never reach the view."""
+
+    @staticmethod
+    def _ap():
+        with mock_gtk(fresh=True):
+            import alignment_page as ap
+
+            return ap
+
+    @staticmethod
+    def _sample():
+        return SimpleNamespace(
+            pools=[
+                SimpleNamespace(name="tank"),  # registered, DEGRADED (any health)
+                SimpleNamespace(name="bootpool"),  # online but unregistered
+            ],
+            datasets=[
+                SimpleNamespace(name="tank/data"),
+                SimpleNamespace(name="bootpool/root"),
+            ],
+            dataset_read_failures=["bootpool"],
+        )
+
+    @staticmethod
+    def _config():
+        return {"pools": [{"name": "tank", "offsite_candidate": False}]}
+
+    def test_unregistered_pool_dropped(self):
+        ap = self._ap()
+        sample = self._sample()
+        ap._restrict_to_managed_pools(sample, self._config())
+        self.assertEqual([p.name for p in sample.pools], ["tank"])
+        self.assertEqual([d.name for d in sample.datasets], ["tank/data"])
+        self.assertEqual(sample.dataset_read_failures, [])
+
+    def test_registered_offline_pool_dropped(self):
+        # The sample's pool list is the online set: a registered pool that
+        # did not import never appears in it, so nothing survives for it.
+        sample = self._sample()
+        ap = self._ap()
+        sample.pools = [SimpleNamespace(name="oldpool")]
+        sample.datasets = [SimpleNamespace(name="oldpool/data")]
+        ap._restrict_to_managed_pools(sample, self._config())
+        self.assertEqual(sample.pools, [])
+        self.assertEqual(sample.datasets, [])
 
 
 class TestApplyAlignmentSample(_PageTestCase):

@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -640,6 +641,88 @@ class _FakeDirtyTracker:
 
     def revert(self, load_fn):
         load_fn(self._saved)
+
+
+class TestOffsiteManagedScopeGates(unittest.TestCase):
+    """Save/run refuse while step endpoints name non-managed pools."""
+
+    def _make_app(self):
+        app = MagicMock()
+        app.backup_runner = MagicMock()
+        app.backup_runner.running = False
+        app.offsite_runner = MagicMock()
+        app.offsite_runner.running = False
+        app.offsite_runner._runner_log = MagicMock()
+        app.restore_runner = MagicMock()
+        app.restore_runner.running = False
+        app._dry_run_active = False
+        app.offsite_nextsnap_entry.get_text.return_value = "@offsite-2026-06-11T12:00-s"
+        # One ACTIVE step naming an unregistered pool (bootpool).
+        app.offsite_step_store = MagicMock(
+            __iter__=lambda _s: iter([[True, "bootpool/src", "fivebays/dst", "", ""]])
+        )
+        app.ctx = MagicMock()
+        app.ctx.config = {"pools": [{"name": "fivebays", "offsite_candidate": False}]}
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name="fivebays", health="ONLINE")
+        ]
+        return app
+
+    def test_run_refuses_unregistered_pool(self):
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = op.Gtk.ResponseType.OK
+
+        app = self._make_app()
+        gate_log = MagicMock()
+        with (
+            patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(op, "do_detect_offsite_pool", return_value="z40tb"),
+            patch.object(op, "collect_offsite_config", return_value={"steps": [], "variables": {}}),
+            patch.object(op, "show_warning_dialog"),
+            patch.dict(op.refuse_non_managed_pool_endpoints.__globals__, {"log_msg": gate_log}),
+        ):
+            op.on_offsite_run(app, app.ctx)
+
+        app.offsite_runner.set_steps.assert_not_called()
+        warning = " ".join(c[0][0] for c in gate_log.call_args_list)
+        self.assertIn("bootpool", warning)
+        self.assertIn("not registered", warning)
+
+    def test_save_refuses_unregistered_pool(self):
+        op = _import_offsite_page()
+        app = self._make_app()
+        gate_log = MagicMock()
+        with (
+            patch.object(
+                op,
+                "collect_offsite_config",
+                return_value={
+                    "steps": [
+                        {
+                            "active": True,
+                            "source": "bootpool/src",
+                            "dest": "fivebays/dst",
+                            "includes": "",
+                            "excludes": "",
+                        }
+                    ],
+                    "variables": {},
+                },
+            ),
+            patch.object(op, "show_warning_dialog"),
+            patch.dict(op.refuse_non_managed_pool_endpoints.__globals__, {"log_msg": gate_log}),
+            patch.object(op, "save_offsite_config") as mock_save,
+        ):
+            op.on_offsite_save(app, app.ctx)
+
+        mock_save.assert_not_called()
+        warning = " ".join(c[0][0] for c in gate_log.call_args_list)
+        self.assertIn("bootpool", warning)
+        self.assertIn("not registered", warning)
 
 
 class TestOffsiteRevert(unittest.TestCase):

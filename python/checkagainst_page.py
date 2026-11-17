@@ -17,6 +17,7 @@ the user guide.
 """
 
 import copy
+import subprocess
 
 import gi
 
@@ -26,8 +27,9 @@ from feature_config import (
     _reverse_checkagainst_row,
     derive_checkagainst_entries,
     get_checkagainst,
-    get_pool_names,
+    get_managed_pool_names,
     merge_checkagainst_entries,
+    non_managed_endpoint_pools,
     save_checkagainst,
 )
 from gi.repository import Gtk
@@ -502,6 +504,19 @@ def _on_ca_remove(btn, app):
         _update_ca_status(app)
 
 
+def _managed_online_pool_names(app):
+    """Imported pool names via the shared repository (managed-scope helper)."""
+    ctx = getattr(app, "ctx", None)
+    repo = getattr(ctx, "zfs_repository", None) if ctx is not None else None
+    if repo is None:
+        return []
+    try:
+        return [row.name for row in repo.list_pools()]
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+        log_msg(f"WARN: Error listing pools: {e}")
+        return []
+
+
 def _on_ca_save(btn, app):
     # Validate before saving
     errors = []
@@ -510,6 +525,22 @@ def _on_ca_save(btn, app):
     errors.extend(_validate_rows(_store_to_entries(app._ca_store), "User"))
     if errors:
         show_error(app, "Cannot save:\n" + "\n".join(errors))
+        return
+    # Managed-pool scope: user entries may only reference managed pools.
+    # Derived rows follow their source configs, gated at their own saves.
+    user_endpoints = []
+    for _label, source_root, dest_root, _comment in _store_to_entries(app._ca_store):
+        user_endpoints.extend([source_root, dest_root])
+    offenders = non_managed_endpoint_pools(
+        user_endpoints, app.config, _managed_online_pool_names(app)
+    )
+    if offenders:
+        names = ", ".join(f"'{name}'" for name in offenders)
+        show_error(
+            app,
+            f"Cannot save: {names} — unregistered or offline.\n"
+            "Register the pool(s) on the Pools tab first.",
+        )
         return
     try:
         data = _full_dict_from_ui(app)
@@ -643,9 +674,10 @@ def _show_add_pair_assistant(app):
     comment_entry.set_activates_default(True)
     grid.attach(comment_entry, 1, 3, 1, 1)
 
-    # Completion using known pool names plus the <offsite> placeholder.
+    # Completion using managed pool names (registered AND online) plus the
+    # <offsite> placeholder.
     completion_store = Gtk.ListStore(str)
-    for name in get_pool_names(app.config):
+    for name in get_managed_pool_names(app.config, _managed_online_pool_names(app)):
         completion_store.append([name])
     completion_store.append(["<offsite>"])
 

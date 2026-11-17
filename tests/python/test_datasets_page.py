@@ -183,6 +183,13 @@ class TestRefreshDatasetsPage(unittest.TestCase):
             _FakePoolRow("tank"),
             _FakePoolRow("backup"),
         ]
+        # Managed-pool scope: both fixture pools are registered.
+        app.ctx.config = {
+            "pools": [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "backup", "offsite_candidate": False},
+            ]
+        }
         app.ctx.zfs_repository.list_datasets.side_effect = self._fake_list_datasets
         app.datasets_store = _FakeStore()
         app.datasets_view = MagicMock()
@@ -254,6 +261,26 @@ class TestRefreshDatasetsPage(unittest.TestCase):
             dp.refresh_datasets_page(app)
 
         self.assertEqual(len(app.datasets_store._rows), 0)
+
+    def test_unregistered_pool_hidden(self):
+        """Managed-pool scope: an online-but-unregistered pool gets no root row."""
+        app = self._make_app()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            _FakePoolRow("tank"),
+            _FakePoolRow("backup"),
+            _FakePoolRow("bootpool"),  # online but not in the registry
+        ]
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
+            dp.refresh_datasets_page(app)
+
+        roots = [row["values"][0] for row in app.datasets_store._rows if row["parent"] is None]
+        self.assertEqual(roots, ["tank", "backup"])
+        app.ctx.zfs_repository.list_datasets.assert_any_call(pool="tank", depth=0)
+        with self.assertRaises(AssertionError):
+            app.ctx.zfs_repository.list_datasets.assert_any_call(pool="bootpool", depth=0)
 
     def test_falls_back_when_root_dataset_unavailable(self):
         app = self._make_app()

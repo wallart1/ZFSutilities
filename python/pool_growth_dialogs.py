@@ -31,7 +31,11 @@ import node_config
 import zfs_lock_manager as zlm
 from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
-from disks_page import refresh_disks_page, update_disks_button_sensitivity
+from disks_page import (
+    managed_display_pool_names,
+    refresh_disks_page,
+    update_disks_button_sensitivity,
+)
 from gi.repository import Gtk
 from gui_helpers import (
     capped_treeview_scroll,
@@ -752,10 +756,11 @@ def _build_disk_picker(
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
-    # Dialog/wizard page: expand stays on so an enlarged page grows the
-    # table; the default height follows the natural row count.
+    # Non-expanding, like every GUI table: the picker is only as tall as
+    # its rows (up to the 20-row cap) and scrolls inside beyond that; the
+    # dialog window carries any page-level overflow.
     scrolled = capped_treeview_scroll(view)
-    page.pack_start(scrolled, True, True, 0)
+    page.pack_start(scrolled, False, False, 0)
     return page
 
 
@@ -941,8 +946,8 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
             "Select the disks for the new data vdev. Disks already in any "
             "pool or otherwise unusable are greyed out.",
         ),
-        True,
-        True,
+        False,
+        False,
         0,
     )
 
@@ -1147,10 +1152,11 @@ def _build_target_tree(
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
-    # Dialog/wizard page: expand stays on so an enlarged page grows the
-    # table; the default height follows the natural row count.
+    # Non-expanding, like every GUI table: the target tree is only as tall
+    # as its rows (up to the 20-row cap) and scrolls inside beyond that;
+    # the dialog window carries any page-level overflow.
     scrolled = capped_treeview_scroll(view)
-    page.pack_start(scrolled, True, True, 0)
+    page.pack_start(scrolled, False, False, 0)
     return page, store, view
 
 
@@ -1213,7 +1219,7 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
         set_action_tooltip(confirm_btn, problems[0] if problems else None)
 
     target_page, target_store, target_view = _build_target_tree(state, _refresh, caps)
-    content.pack_start(target_page, True, True, 0)
+    content.pack_start(target_page, False, False, 0)
 
     def _on_pool_combo_changed(combo):
         state.target = None
@@ -1232,8 +1238,8 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
             "otherwise unusable are greyed out.",
             single=True,
         ),
-        True,
-        True,
+        False,
+        False,
         0,
     )
 
@@ -1344,7 +1350,7 @@ def show_replace_dialog(app, pools, topologies, eligibility, disks, preselected_
     target_page, target_store, target_view = _build_target_tree(
         state, _refresh, caps, gate_raidz=False
     )
-    content.pack_start(target_page, True, True, 0)
+    content.pack_start(target_page, False, False, 0)
 
     def _on_pool_combo_changed(combo):
         state.target = None
@@ -1364,8 +1370,8 @@ def show_replace_dialog(app, pools, topologies, eligibility, disks, preselected_
             "its own replacement.",
             single=True,
         ),
-        True,
-        True,
+        False,
+        False,
         0,
     )
 
@@ -1469,7 +1475,7 @@ def show_detach_dialog(app, pools, topologies, disks, preselected_pool):
         hint_text=_DETACH_HINT,
         detach_targets=True,
     )
-    content.pack_start(target_page, True, True, 0)
+    content.pack_start(target_page, False, False, 0)
 
     def _on_pool_combo_changed(combo):
         state.target = None
@@ -1601,8 +1607,8 @@ def show_add_infra_vdev_dialog(app, pools, eligibility, preselected_pool):
             "any pool or otherwise unusable are greyed out. Two or more disks "
             "form a mirror; one disk is a single (stripe) device.",
         ),
-        True,
-        True,
+        False,
+        False,
         0,
     )
 
@@ -1653,9 +1659,9 @@ def on_disks_add_vdev(app) -> None:
 
     repository = app.ctx.zfs_repository
     data = app._disks_inventory_cache.get()
-    pools = sorted(data.topologies)
+    pools = sorted(managed_display_pool_names(app, data))
     if not pools:
-        log_msg("WARN: No imported pools to grow")
+        log_msg("WARN: No managed pools to grow")
         return
     imported = _leaf_paths_by_pool(data.topologies)
     try:
@@ -1717,9 +1723,9 @@ def on_disks_detach_device(app) -> None:
         return
 
     data = app._disks_inventory_cache.get()
-    pools = sorted(data.topologies)
+    pools = sorted(managed_display_pool_names(app, data))
     if not pools:
-        log_msg("WARN: No imported pools to maintain")
+        log_msg("WARN: No managed pools to maintain")
         return
     if not any(has_mirror_member(root) for root in data.topologies.values()):
         _show_info_dialog(
@@ -1776,9 +1782,9 @@ def on_disks_replace_device(app) -> None:
     repository = app.ctx.zfs_repository
     caps = app.ctx.zfs_caps
     data = app._disks_inventory_cache.get()
-    pools = sorted(data.topologies)
+    pools = sorted(managed_display_pool_names(app, data))
     if not pools:
-        log_msg("WARN: No imported pools to maintain")
+        log_msg("WARN: No managed pools to maintain")
         return
     imported = _leaf_paths_by_pool(data.topologies)
     try:
@@ -1848,9 +1854,9 @@ def on_disks_attach_device(app) -> None:
     repository = app.ctx.zfs_repository
     caps = app.ctx.zfs_caps
     data = app._disks_inventory_cache.get()
-    pools = sorted(data.topologies)
+    pools = sorted(managed_display_pool_names(app, data))
     if not pools:
-        log_msg("WARN: No imported pools to grow")
+        log_msg("WARN: No managed pools to grow")
         return
     imported = _leaf_paths_by_pool(data.topologies)
     try:
@@ -1921,9 +1927,9 @@ def on_disks_add_infra_vdev(app) -> None:
 
     repository = app.ctx.zfs_repository
     data = app._disks_inventory_cache.get()
-    pools = sorted(data.topologies)
+    pools = sorted(managed_display_pool_names(app, data))
     if not pools:
-        log_msg("WARN: No imported pools to grow")
+        log_msg("WARN: No managed pools to grow")
         return
     imported = _leaf_paths_by_pool(data.topologies)
     try:

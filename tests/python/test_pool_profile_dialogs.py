@@ -239,8 +239,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "ListStore", return_value=store),
             patch.object(ppd.Gtk, "TreeView", return_value=view),
@@ -262,8 +265,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "ListStore", return_value=MagicMock()),
             patch.object(ppd.Gtk, "TreeView", return_value=view),
@@ -307,8 +313,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "Button", side_effect=make_button),
             patch.object(ppd.Gtk, "ListStore", return_value=store),
@@ -357,8 +366,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "Button", side_effect=make_button),
             patch.object(
@@ -401,8 +413,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "Button", side_effect=make_button),
             patch.object(ppd.Gtk, "ListStore", return_value=store),
@@ -433,8 +448,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "Button", side_effect=make_button),
             patch.object(ppd.Gtk, "ListStore", return_value=store),
@@ -477,8 +495,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "Button", side_effect=make_button),
             patch.object(ppd.Gtk, "ListStore", return_value=store),
@@ -514,8 +535,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "Button", side_effect=make_button),
             patch.object(ppd.Gtk, "ListStore", return_value=store),
@@ -543,8 +567,11 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         with (
             patch.object(
                 ppd,
-                "create_dialog",
-                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
             ),
             patch.object(ppd.Gtk, "Button", side_effect=make_button),
             patch.object(

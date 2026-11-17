@@ -14,6 +14,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from feature_config import (
+    get_managed_pool_names,
     get_offsite_candidate_names,
     get_pool_names,
     get_pools,
@@ -392,8 +393,12 @@ def create_pools_page(app):
     # inside the window.
     bottom_box.pack_start(scrub_scrolled, False, False, 0)
 
-    # Initialize scrub queue
-    app.scrub_queue = ScrubQueue(target=int(scrub_cfg.get("simultaneous", 1)))
+    # Initialize scrub queue. The registry callable keeps external-scrub
+    # adoption gated to registered pools (managed-pool scope).
+    app.scrub_queue = ScrubQueue(
+        target=int(scrub_cfg.get("simultaneous", 1)),
+        registered_names=lambda: get_pool_names(app.config),
+    )
 
     # --- Paned divider ---
     paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
@@ -847,22 +852,28 @@ def _on_offsite_toggled(renderer, path, app):
 
 
 def refresh_scrub_table(app):
-    """Update the scrub table with current zpool status.
+    """Update the scrub table with current zpool status, managed pools only.
 
     Uses a flicker-free strategy: update existing rows in-place, and only
-    add/remove rows when the pool list changes.
+    add/remove rows when the pool list changes. The table lists registered
+    (managed) pools — the registry table above is the only surface where
+    unregistered pools appear.
     """
     states = get_all_pool_scrub_states()
     queue = app.scrub_queue
 
     # Pick up queue changes made by other processes (e.g., a headless scrub
-    # profile) and reconcile against live states as ONE transaction, so a
-    # concurrent writer's state change cannot be overwritten.
+    # profile) and reconcile against the FULL live states as ONE
+    # transaction, so a concurrent writer's state change cannot be
+    # overwritten; the display is filtered to managed pools below.
     queue.tick_locked(states)
+    managed = set(get_managed_pool_names(app.config, states.keys()))
 
     # Build new data map
     new_data = {}
     for pool_name, info in states.items():
+        if pool_name not in managed:
+            continue
         qstate = queue.state_for_pool(pool_name)
         display_state = qstate.value if qstate != ScrubState.NONE else info.state.value
         if display_state == "scanning":

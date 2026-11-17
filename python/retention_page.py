@@ -14,13 +14,14 @@ from feature_config import (
     DEFAULT_RETENTION,
     MASS_DELETE_DEFAULTS,
     get_all_retention,
-    get_pool_names,
+    get_managed_pool_names,
     get_prune_label,
     get_prune_pools_order,
     get_retention,
     get_retention_mass_delete_config,
     get_retention_verb_messages,
     import_legacy_retention,
+    non_managed_pool_names,
     save_prune_label,
     save_prune_pools_order,
     save_retention,
@@ -99,31 +100,6 @@ def load_retention_profile_config(app, config):
         missing = [p for p in prune_pools if p not in listed]
         if missing:
             log_msg(f"WARN: profile pools missing from prune list: {', '.join(missing)}")
-
-
-# ── Online pool helpers ───────────────────────
-
-
-def _get_online_pool_names():
-    """Return a list of currently-ONLINE pool names from `zpool list`."""
-    try:
-        result = subprocess.run(
-            ["zpool", "list", "-H", "-o", "name,health"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
-    pools = []
-    for line in result.stdout.strip().split("\n"):
-        if not line:
-            continue
-        parts = line.split("\t")
-        if len(parts) >= 2 and parts[1] == "ONLINE":
-            pools.append(parts[0])
-    return pools
 
 
 def _clear_non_default_policies_on_new_install(app, ctx):
@@ -379,7 +355,8 @@ def create_retention_page(app, ctx):
     set_column_header_tooltip(
         cp1,
         "Health",
-        "Pool health from zpool list; offline pools are omitted from the list.",
+        "Pool health from zpool list; unregistered and not-imported pools are "
+        "omitted from the list.",
     )
     pv.append_column(cp1)
 
@@ -541,12 +518,30 @@ def create_retention_page(app, ctx):
     return scrolled
 
 
-def refresh_prune_pools(app):
-    """Refresh the prune list with pools that zfscleanup would prune.
+def _imported_pool_rows(ctx):
+    """Imported pool rows (any health) via the shared repository.
 
-    Candidate pools match the semantics of ``bin/zfscleanup`` when run without
-    a pool argument: use ``config["pools"]`` when configured, otherwise fall
-    back to all currently-online pools. Offline configured pools are omitted.
+    Degrades to an empty list with a WARN when `zpool list` fails, matching
+    the fail-soft behavior of the other pool listings.
+    """
+    repo = getattr(ctx, "zfs_repository", None)
+    if repo is None:
+        return []
+    try:
+        return list(repo.list_pools())
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+        log_msg(f"WARN: Error listing pools: {e}")
+        return []
+
+
+def refresh_prune_pools(app):
+    """Refresh the prune list with managed pools — registered AND online.
+
+    "Online" is the Pools tab's meaning: imported, whatever the health.
+    Unregistered pools never appear here (the Pool Registry is their only
+    surface), and registered pools that are not imported are omitted. The
+    empty registry lists nothing — unlike bin/zfscleanup, which falls back
+    to all online pools when run without a pool argument.
 
     The order is driven by the persisted ``prune_pools_order`` key, then by
     any in-session reorder, and finally by sorted pool name for newcomers.
@@ -559,15 +554,9 @@ def refresh_prune_pools(app):
     """
     if not hasattr(app, "_ret_prune_store") or not hasattr(app, "ctx"):
         return
-    online = set(_get_online_pool_names())
-    configured = set(get_pool_names(app.ctx.config))
-
-    # Match zfscleanup semantics: configured pools when available, otherwise
-    # all online pools. Skip any configured pool that is currently offline.
-    if configured:
-        candidates = configured & online
-    else:
-        candidates = set(online)
+    imported_rows = _imported_pool_rows(app.ctx)
+    health_by_pool = {row.name: row.health for row in imported_rows}
+    candidates = set(get_managed_pool_names(app.ctx.config, health_by_pool))
 
     saved_order = get_prune_pools_order(app.ctx.config)
     current_order = [row[0] for row in app._ret_prune_store if row[0] in candidates]
@@ -604,7 +593,7 @@ def refresh_prune_pools(app):
 
     app._ret_prune_store.clear()
     for pool in new_order:
-        app._ret_prune_store.append([pool, "ONLINE"])
+        app._ret_prune_store.append([pool, health_by_pool.get(pool, "ONLINE")])
 
     # Restore selection for any pools that are still present after the refresh.
     if selected_pools and hasattr(app, "_ret_prune_view"):
@@ -828,6 +817,27 @@ def _on_ret_save(btn, app, ctx):
     saved_pools = []
 
     current_buckets = _store_to_buckets(app)
+
+    # Managed-pool scope, save gate: refuse the save while any pool it would
+    # write is unregistered or offline. Placeholders ("default",
+    # "<offsite>") are config keys, not pools, and pass.
+    pools_to_save = set()
+    if current_buckets != app._ret_original.get(app._ret_pool, []):
+        pools_to_save.add(app._ret_pool)
+    for pool, pending in app._ret_pending.items():
+        if pending != app._ret_original.get(pool, []):
+            pools_to_save.add(pool)
+    imported = [row.name for row in _imported_pool_rows(ctx)]
+    offenders = non_managed_pool_names(pools_to_save, ctx.config, imported)
+    if offenders:
+        names = ", ".join(f"'{pool}'" for pool in offenders)
+        show_error(
+            app,
+            f"Cannot save retention policies for {names}: the pool is "
+            "unregistered or offline. Register it on the Pools tab, or "
+            "remove the policy.",
+        )
+        return
 
     # Save the currently visible pool if it differs from the original.
     if current_buckets != app._ret_original.get(app._ret_pool, []):

@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -35,8 +36,7 @@ class TestOnRetentionPruneLocking(unittest.TestCase):
             [["archive", "ONLINE"], ["tank", "ONLINE"]],
             selected_paths=[0, 1],
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
 
         with (
             patch.object(ra, "show_error") as mock_error,
@@ -62,8 +62,7 @@ class TestOnRetentionPruneLocking(unittest.TestCase):
             [["archive", "ONLINE"], ["tank", "ONLINE"]],
             selected_paths=[0, 1],
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
 
         with (
             patch.object(ra, "show_error") as mock_error,
@@ -104,8 +103,7 @@ class TestOnRetentionPruneLocking(unittest.TestCase):
             [["tank", "ONLINE"]],
             selected_paths=[0],
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
 
         with (
             patch.object(ra, "show_error") as mock_error,
@@ -150,16 +148,23 @@ class TestOnRetentionAddPolicy(unittest.TestCase):
         combo_instance.append_text = MagicMock()
         combo_instance.set_active = MagicMock()
 
+        ctx = MagicMock()
+        ctx.config = {
+            "pools": [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "archive", "offsite_candidate": True},
+            ]
+        }
         with (
             patch.object(ra, "get_all_retention", return_value={"default": []}),
-            patch.object(ra, "_get_online_pool_names", return_value=[]),
+            patch.object(ra, "_imported_pool_rows", return_value=_pool_rows("tank", "archive")),
             patch.object(ra, "save_retention") as mock_save,
             patch.object(ra, "refresh_prune_pools") as mock_refresh,
             patch.object(ra, "log_msg"),
         ):
             ra.Gtk.ComboBoxText = combo_mock
             ra.Gtk.Dialog.return_value.run.return_value = ra.Gtk.ResponseType.OK
-            ra.on_retention_add_policy(app, MagicMock())
+            ra.on_retention_add_policy(app, ctx)
 
         # Combo should be populated with known pool names (strings), not dicts,
         # plus the <offsite> placeholder.
@@ -185,16 +190,23 @@ class TestOnRetentionAddPolicy(unittest.TestCase):
         combo_instance.append_text = MagicMock()
         combo_instance.set_active = MagicMock()
 
+        ctx = MagicMock()
+        ctx.config = {
+            "pools": [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "archive", "offsite_candidate": True},
+            ]
+        }
         with (
             patch.object(ra, "get_all_retention", return_value={"default": [], "tank": []}),
-            patch.object(ra, "_get_online_pool_names", return_value=[]),
+            patch.object(ra, "_imported_pool_rows", return_value=_pool_rows("tank", "archive")),
             patch.object(ra, "save_retention") as mock_save,
             patch.object(ra, "refresh_prune_pools") as mock_refresh,
             patch.object(ra, "log_msg"),
         ):
             ra.Gtk.ComboBoxText = combo_mock
             ra.Gtk.Dialog.return_value.run.return_value = ra.Gtk.ResponseType.OK
-            ra.on_retention_add_policy(app, MagicMock())
+            ra.on_retention_add_policy(app, ctx)
 
         calls = combo_instance.append_text.call_args_list
         names = [c[0][0] for c in calls]
@@ -202,6 +214,21 @@ class TestOnRetentionAddPolicy(unittest.TestCase):
         self.assertIn("archive", names)
         mock_save.assert_called_once()
         mock_refresh.assert_called_once_with(app)
+
+
+def _pool_rows(*names, health="ONLINE"):
+    """Fake repository pool rows (imported, any health) for scope helpers."""
+    return [SimpleNamespace(name=name, health=health) for name in names]
+
+
+def _make_prune_ctx():
+    """Ctx mock whose registry and imported pools satisfy the managed gate."""
+    ctx = MagicMock()
+    ctx.parent_dir = "/bin"
+    pools = ("tank", "archive", "backup")
+    ctx.config = {"pools": [{"name": name, "offsite_candidate": False} for name in pools]}
+    ctx.zfs_repository.list_pools.return_value = _pool_rows(*pools)
+    return ctx
 
 
 class _FakePruneModel:
@@ -269,8 +296,7 @@ class TestOnRetentionPruneVerb(unittest.TestCase):
             selected_paths=[0],
             verb_active=True,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -285,14 +311,37 @@ class TestOnRetentionPruneVerb(unittest.TestCase):
             selected_paths=[0],
             verb_active=False,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
         mock_error.assert_not_called()
         steps = app.retention_runner.set_steps.call_args[0][0]
         self.assertIn('retain_verb="N"; ', steps[0].command[2])
+
+
+class TestOnRetentionPruneManagedScope(unittest.TestCase):
+    """Defense in depth: the prune runner refuses non-managed pools by name."""
+
+    def test_unregistered_selected_pool_skipped_with_warning(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"], ["bootpool", "ONLINE"]],
+            selected_paths=[0, 1],
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        ctx.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+        ctx.zfs_repository.list_pools.return_value = _pool_rows("tank", "bootpool")
+
+        with patch.object(ra, "show_error"), patch.object(ra, "log_msg") as mock_log:
+            ra.on_retention_prune(app, ctx)
+
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        self.assertEqual([step.description for step in steps], ["Prune tank (label=dailybackup)"])
+        warning = " ".join(c[0][0] for c in mock_log.call_args_list if "bootpool" in c[0][0])
+        self.assertIn("bootpool", warning)
+        self.assertIn("unregistered or offline", warning)
 
 
 class TestOnRetentionPruneOrder(unittest.TestCase):
@@ -305,8 +354,7 @@ class TestOnRetentionPruneOrder(unittest.TestCase):
             selected_paths=[1, 2, 0],  # selected in arbitrary order
         )
 
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -332,8 +380,7 @@ class TestOnRetentionPruneIgnoreMode(unittest.TestCase):
             [["tank", "ONLINE"]],
             selected_paths=[0],
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -350,8 +397,7 @@ class TestOnRetentionPruneIgnoreMode(unittest.TestCase):
             selected_paths=[0, 1],
             ignore_retention=True,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -375,8 +421,7 @@ class TestOnRetentionPruneIgnoreMode(unittest.TestCase):
             endwith="pool/z",
             snapshot_has="weekly",
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -396,8 +441,7 @@ class TestOnRetentionPruneIgnoreMode(unittest.TestCase):
             ignore_retention=True,
             releaseholds_active=0,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -414,8 +458,7 @@ class TestOnRetentionPruneIgnoreMode(unittest.TestCase):
             ignore_retention=True,
             releaseholds_active=1,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -431,8 +474,7 @@ class TestOnRetentionPruneIgnoreMode(unittest.TestCase):
             ignore_retention=True,
         )
         app._dry_run_active = True
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -453,7 +495,7 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
         app._ret_combo.set_active = MagicMock()
         return app
 
-    def _run_with_entry_text(self, app, text, retention, online=None):
+    def _run_with_entry_text(self, app, text, retention, registered=(), imported=()):
         ra = _import_retention_actions()
         combo_mock = MagicMock()
         combo_instance = combo_mock.new_with_entry.return_value
@@ -462,11 +504,11 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
         combo_instance.set_active = MagicMock()
 
         ctx = MagicMock()
-        ctx.config = {"pools": []}
+        ctx.config = {"pools": [{"name": name, "offsite_candidate": False} for name in registered]}
 
         with (
             patch.object(ra, "get_all_retention", return_value=retention),
-            patch.object(ra, "_get_online_pool_names", return_value=online or []),
+            patch.object(ra, "_imported_pool_rows", return_value=_pool_rows(*imported)),
             patch.object(ra, "save_retention") as mock_save,
             patch.object(ra, "refresh_prune_pools") as mock_refresh,
             patch.object(ra, "show_error") as mock_error,
@@ -484,7 +526,7 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
             retention={"default": []},
         )
         _ra, mock_save, mock_error, _mock_refresh = self._run_with_entry_text(
-            app, "notapool", {"default": []}
+            app, "notapool", {"default": []}, registered=("tank",), imported=("tank",)
         )
         mock_save.assert_not_called()
         mock_error.assert_called_once()
@@ -527,13 +569,14 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
         mock_save.assert_called_once()
         mock_error.assert_not_called()
 
-    def test_accepts_online_pool(self):
+    def test_accepts_managed_pool(self):
+        """A registered, imported pool passes the candidate validation."""
         app = self._make_app(
             [],
             retention={"default": []},
         )
         _ra, mock_save, mock_error, _mock_refresh = self._run_with_entry_text(
-            app, "archive", {"default": []}, online=["archive"]
+            app, "archive", {"default": []}, registered=("archive",), imported=("archive",)
         )
         mock_save.assert_called_once()
         mock_error.assert_not_called()
@@ -550,8 +593,7 @@ class TestOnRetentionPruneReleaseHolds(unittest.TestCase):
             ignore_retention=False,
             releaseholds_active=0,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -569,8 +611,7 @@ class TestOnRetentionPruneReleaseHolds(unittest.TestCase):
             ignore_retention=False,
             releaseholds_active=1,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -588,8 +629,7 @@ class TestOnRetentionPruneReleaseHolds(unittest.TestCase):
             ignore_retention=True,
             releaseholds_active=0,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 
@@ -608,8 +648,7 @@ class TestOnRetentionPruneReleaseHolds(unittest.TestCase):
             ignore_retention=True,
             releaseholds_active=1,
         )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
+        ctx = _make_prune_ctx()
         with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 

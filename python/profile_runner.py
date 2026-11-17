@@ -58,7 +58,9 @@ from cron_manager import _match_weekday_ordinal, _parse_weekday, converge_schedu
 from feature_config import (
     generate_offsite_snapshot_name,
     generate_snapshot_name,
+    get_managed_pool_names,
     get_offsite_candidate_names,
+    pool_name_from_endpoint,
     remove_snapfile,
 )
 from logging_config import log_msg, session_log_context
@@ -415,6 +417,51 @@ def _log_scope_warnings(profile):
             log_msg(f"WARN: {warning}")
 
 
+def _managed_pools(config):
+    """Managed pool names (registered AND online) for run-time gating.
+
+    "Online" is the Pools tab's meaning: imported, any health. A listing
+    failure degrades to no managed pools — items are then skipped, never
+    run unverified.
+    """
+    online = []
+    try:
+        result = subprocess.run(
+            ["zpool", "list", "-H", "-o", "name"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=True,
+            timeout=30,
+        )
+        online = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except (subprocess.SubprocessError, OSError) as e:
+        log_msg(f"WARN: Could not list pools: {e}")
+    return set(get_managed_pool_names(config, online))
+
+
+def _endpoint_pool_unmanaged(endpoint, managed):
+    """Return the endpoint's pool name when it is NOT managed, else None."""
+    pool = pool_name_from_endpoint(endpoint)
+    if pool and pool not in managed:
+        return pool
+    return None
+
+
+def _skip_non_managed_step(source, dest, managed):
+    """True (after WARN) when either step endpoint names a non-managed pool.
+
+    Scheduled profiles give unregistered-or-offline pools the skip + WARN
+    treatment; the rest of the profile still runs.
+    """
+    for endpoint in (source, dest):
+        pool = _endpoint_pool_unmanaged(endpoint, managed)
+        if pool:
+            log_msg(f"WARN: Pool '{pool}' unregistered or offline — step skipped")
+            return True
+    return False
+
+
 def run_backup_profile(profile, config, parent_dir, session_log_file=None):
     _log_scope_warnings(profile)
     cfg = profile["config"]
@@ -536,8 +583,12 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                 )
 
     pause_scrubs = cfg.get("pause_scrubs", False)
+    managed = _managed_pools(config)
+    ran_sr = []
     for step in cfg.get("send_receive_steps", []):
         if step.get("active"):
+            if _skip_non_managed_step(step["source"], step["dest"], managed):
+                continue
             sr_step = _build_send_receive_command(
                 step["source"],
                 step["dest"],
@@ -554,14 +605,12 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                 dry_run=dryrun,
             )
             steps.append(sr_step)
+            ran_sr.append((step["source"], step["dest"]))
 
     post = cfg.get("post_steps", {})
     if post.get("run_retention", False):
-        active_sr = [
-            (step["source"], step["dest"])
-            for step in cfg.get("send_receive_steps", [])
-            if step.get("active")
-        ]
+        # Prune only the pairs whose send/receive steps actually ran.
+        active_sr = ran_sr
         if active_sr:
             log_msg(
                 f"VERB: Prune step restricted to the {len(active_sr)} send/receive "
@@ -629,8 +678,11 @@ def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
     steps = []
 
     pause_scrubs = cfg.get("pause_scrubs", False)
+    managed = _managed_pools(config)
     for step in cfg.get("steps", []):
         if not step.get("active"):
+            continue
+        if _skip_non_managed_step(step["source"], step["dest"], managed):
             continue
         source = step["source"]
         dest = step["dest"].replace("<offsite>", offsite_pool)
@@ -669,6 +721,12 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
     if not source or not dest:
         log_msg("FATAL: Source and destination must be specified")
         return 1
+    managed = _managed_pools(config)
+    for endpoint in (source, dest):
+        pool = _endpoint_pool_unmanaged(endpoint, managed)
+        if pool:
+            log_msg(f"WARN: Pool '{pool}' unregistered or offline — restore skipped")
+            return 1
     removequalifiers, destfs = compute_restore_params(source, dest)
     restore_step = build_restore_command(
         source,
@@ -727,6 +785,14 @@ def run_retention_profile(profile, config, parent_dir, session_log_file=None):
     if not pools:
         log_msg("FATAL: No pools selected for pruning after resolving <offsite>")
         return 1
+    managed = _managed_pools(config)
+    for pool in list(pools):
+        if pool not in managed:
+            log_msg(f"WARN: Pool '{pool}' unregistered or offline — skipped")
+            pools.remove(pool)
+    if not pools:
+        log_msg("FATAL: No managed pools to prune")
+        return 1
 
     fatal_rc = 0
     for pool in pools:
@@ -768,6 +834,14 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
         if session_log_file:
             session_log.write_raw_line(session_log_file, msg)
 
+    managed = _managed_pools(config)
+    for pool in pool_names:
+        if pool not in managed:
+            _scrub_log(f"WARN: Pool '{pool}' unregistered or offline — not queued")
+    pool_names = [pool for pool in pool_names if pool in managed]
+    if not pool_names:
+        _scrub_log("FATAL: No managed pools to scrub")
+        return 1
     queue = ScrubQueue(target=simultaneous)
     queue.add_pending(pool_names)
     _scrub_log(f"INFO: Scrub profile started on {len(pool_names)} pool(s), target={simultaneous}")

@@ -1091,6 +1091,45 @@ def show_warning_dialog(app, message):
     dlg.destroy()
 
 
+def refuse_non_managed_pool_endpoints(app, ctx, endpoints, action):
+    """Refuse *action* while any dataset endpoint names a non-managed pool.
+
+    Returns True when refused. Managed = registered AND online (the Pools
+    tab's meaning of online: imported, any health). Unregistered pools are
+    never touched and never saved into configs; the Pools tab registers
+    them. Remote endpoints ("host:path") and placeholders ("<offsite>")
+    are not local pools and pass.
+    """
+    from feature_config import get_pool_names, non_managed_endpoint_pools
+
+    if not any(endpoints):
+        return False
+    repo = getattr(ctx, "zfs_repository", None)
+    online = []
+    if repo is not None:
+        try:
+            online = [row.name for row in repo.list_pools()]
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+            log_msg(f"WARN: Error listing pools: {e}")
+    offenders = non_managed_endpoint_pools(endpoints, ctx.config, online)
+    if not offenders:
+        return False
+    registered = set(get_pool_names(ctx.config))
+    for name in offenders:
+        reason = "offline" if name in registered else "not registered"
+        log_msg(f"WARN: Pool '{name}' {reason} — {action} refused")
+    listing = "\n".join(
+        f"Pool '{name}' is {'offline' if name in registered else 'not registered'}."
+        for name in offenders
+    )
+    show_warning_dialog(
+        app,
+        f"{action[0].upper() + action[1:]} refused.\n\n{listing}\n"
+        "Register the pool(s) on the Pools tab first.",
+    )
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Dirty state tracker
 # ---------------------------------------------------------------------------
@@ -1263,6 +1302,15 @@ def create_scrolled_dialog(title, parent, buttons, default_response=None, size=N
     inner.set_margin_top(10)
     inner.set_margin_bottom(10)
     scrolled.add(inner)
+
+    # NATURAL vscroll policy: the section tables' capped windows have tiny
+    # minimums, and the default MINIMUM policy would let a short dialog
+    # crush them toward those floors instead of scrolling (dashboard-page
+    # idiom) — with NATURAL the content keeps its natural height and the
+    # dialog window carries the overflow.
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     return dialog, inner
 

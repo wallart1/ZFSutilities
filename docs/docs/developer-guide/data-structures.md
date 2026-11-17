@@ -263,6 +263,19 @@ Top-level keys:
 All sections default to empty on first run — the user populates them through
 the GUI. Override the path in the environment with `$ZFSCONFIG_PATH`.
 
+### `pools` key (the pool registry)
+
+The `pools` key is the registry, and it sets the GUI's pool scope.
+Everywhere except the Pool Registry table on the Pools page, the GUI
+lists and acts on **managed pools** only — pools that are both
+registered (in this key) and online (imported, any health). Unregistered
+pools appear nowhere else and are never touched. The scope helpers live
+in `feature_config.py`: `get_managed_pool_names(config, online_names)`
+intersects the registry with imported pool names, and
+`non_managed_pool_names(names, config, online_names)` powers the save and
+run gates. Placeholder tokens (`<offsite>`, retention `default`) are not
+pools and pass the gates.
+
 ### `notifications` object
 
 Written by the Settings → **Notifications…** dialog and read by

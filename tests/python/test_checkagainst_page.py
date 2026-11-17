@@ -4,6 +4,7 @@ import copy
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -136,7 +137,13 @@ class TestEntriesFromToConfig(unittest.TestCase):
     def test_save_full_checkagainst(self):
         with temp_config_dir():
             app = MagicMock()
-            app.config = {}
+            # Keep the fixture registry so the managed save gate passes.
+            app.config = {"pools": [{"name": "tank"}, {"name": "backup"}]}
+            app.ctx = MagicMock()
+            app.ctx.zfs_repository = MagicMock()
+            app.ctx.zfs_repository.list_pools.return_value = [
+                SimpleNamespace(name=name, health="ONLINE") for name in ("tank", "backup")
+            ]
             app._ca_backup_store = _FakeStore()
             app._ca_offsite_store = _FakeStore()
             app._ca_store = _FakeStore([("offsite", "tank/a", "backup/a", "")])
@@ -177,6 +184,14 @@ class TestDirtyTracking(unittest.TestCase):
         offsite_active=True,
     ):
         app = MagicMock()
+        # Managed-pool scope: the fixture pools are registered and imported
+        # so the save gate passes; the repository is a mock (no real zpool).
+        app.config = {"pools": [{"name": "tank"}, {"name": "backup"}]}
+        app.ctx = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name=name, health="ONLINE") for name in ("tank", "backup")
+        ]
         app._ca_store = _FakeStore(user_rows)
         app._ca_backup_store = _FakeStore(backup_derived or [])
         app._ca_offsite_store = _FakeStore(offsite_derived or [])
@@ -256,6 +271,35 @@ class TestDirtyTracking(unittest.TestCase):
         self.assertFalse(cap.is_checkagainst_dirty(clean))
 
 
+class TestSaveManagedScopeGate(unittest.TestCase):
+    """_on_ca_save refuses user entries naming non-managed pools."""
+
+    def test_save_refuses_unregistered_pool(self):
+        app = MagicMock()
+        # Managed-pool scope: tank and backup are managed; the user row
+        # names bootpool, which is imported but unregistered.
+        app.config = {"pools": [{"name": "tank"}, {"name": "backup"}]}
+        app.ctx = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name=name, health="ONLINE") for name in ("tank", "backup", "bootpool")
+        ]
+        app._ca_store = _FakeStore([("offsite", "bootpool/a", "backup/b", "")])
+        app._ca_backup_store = _FakeStore()
+        app._ca_offsite_store = _FakeStore()
+
+        with (
+            patch.object(cap, "show_error") as mock_error,
+            patch.object(cap, "save_checkagainst") as mock_save,
+        ):
+            cap._on_ca_save(None, app)
+
+        mock_save.assert_not_called()
+        error = mock_error.call_args[0][1]
+        self.assertIn("bootpool", error)
+        self.assertIn("unregistered or offline", error)
+
+
 class TestLoadNormalization(unittest.TestCase):
     """Loading must not mark the page dirty when defaults are applied."""
 
@@ -293,6 +337,14 @@ class TestStatusUpdate(unittest.TestCase):
 
     def _make_app(self, rows, original_rows):
         app = MagicMock()
+        # Managed-pool scope: the fixture pools are registered and imported
+        # so the save gate passes; the repository is a mock (no real zpool).
+        app.config = {"pools": [{"name": "tank"}, {"name": "backup"}]}
+        app.ctx = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name=name, health="ONLINE") for name in ("tank", "backup")
+        ]
         app._ca_store = _FakeStore(rows)
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
@@ -345,6 +397,14 @@ class TestActionHandlers(unittest.TestCase):
 
     def _make_app(self, user_rows=None, original_user_rows=None):
         app = MagicMock()
+        # Managed-pool scope: the fixture pools are registered and imported
+        # so the save gate passes; the repository is a mock (no real zpool).
+        app.config = {"pools": [{"name": "tank"}, {"name": "backup"}]}
+        app.ctx = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name=name, health="ONLINE") for name in ("tank", "backup")
+        ]
         app._ca_store = _FakeStore(user_rows)
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
@@ -354,7 +414,6 @@ class TestActionHandlers(unittest.TestCase):
         app._ca_status_label = MagicMock()
         app._ca_save_button = MagicMock()
         app._ca_view = MagicMock()
-        app.config = {}
         app._ca_original_full = {
             "backup_derived_active": True,
             "offsite_derived_active": True,
@@ -859,6 +918,14 @@ class TestStatusUpdateEmptyFields(unittest.TestCase):
 
     def _make_app(self, rows, original_rows):
         app = MagicMock()
+        # Managed-pool scope: the fixture pools are registered and imported
+        # so the save gate passes; the repository is a mock (no real zpool).
+        app.config = {"pools": [{"name": "tank"}, {"name": "backup"}]}
+        app.ctx = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name=name, health="ONLINE") for name in ("tank", "backup")
+        ]
         app._ca_store = _FakeStore(rows)
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()

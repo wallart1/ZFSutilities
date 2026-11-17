@@ -4,9 +4,11 @@ import ast
 import contextlib
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from test_support import (
@@ -2458,6 +2460,13 @@ class TestGuiHelpersMisc(unittest.TestCase):
             content.pack_start.assert_called_once()
             scrolled = gui_helpers.Gtk.ScrolledWindow.return_value
             scrolled.add.assert_called_once_with(box)
+            # NATURAL vscroll policy keeps dialog content at its natural
+            # height, so a short window scrolls instead of crushing the
+            # capped tables toward their floors.
+            viewport = scrolled.get_child.return_value
+            viewport.set_vscroll_policy.assert_called_once_with(
+                gui_helpers.Gtk.ScrollablePolicy.NATURAL
+            )
 
     def test_create_scrolled_dialog_caps_size_to_monitor(self):
         with mock_gtk(fresh=True):
@@ -2685,6 +2694,120 @@ class TestGuiHelpersMisc(unittest.TestCase):
             gui_helpers.restore_expanded_rows(store, view, {"tank", "tank/data"})
             self.assertIn(0, view._expanded)
             self.assertIn(1, view._expanded)
+
+
+class TestRefuseNonManagedPoolEndpoints(unittest.TestCase):
+    """The shared managed-pool gate: WARN wording, dialog, fail-safe direction."""
+
+    def _ctx(self, registered=(), online=()):
+        ctx = SimpleNamespace(
+            config={"pools": [{"name": name, "offsite_candidate": False} for name in registered]},
+            zfs_repository=MagicMock(),
+        )
+        ctx.zfs_repository.list_pools.return_value = [
+            SimpleNamespace(name=name, health="ONLINE") for name in online
+        ]
+        return ctx
+
+    def test_no_endpoints_passes_without_listing_pools(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            ctx = self._ctx(registered=("tank",), online=("tank",))
+            with patch.object(gui_helpers, "show_warning_dialog") as warn:
+                refused = gui_helpers.refuse_non_managed_pool_endpoints(
+                    MagicMock(), ctx, [], "save"
+                )
+        self.assertFalse(refused)
+        warn.assert_not_called()
+        ctx.zfs_repository.list_pools.assert_not_called()
+
+    def test_managed_endpoints_pass(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            ctx = self._ctx(registered=("tank",), online=("tank",))
+            with patch.object(gui_helpers, "show_warning_dialog") as warn:
+                refused = gui_helpers.refuse_non_managed_pool_endpoints(
+                    MagicMock(), ctx, ["tank/a", "tank"], "backup run"
+                )
+        self.assertFalse(refused)
+        warn.assert_not_called()
+
+    def test_placeholders_and_remotes_pass(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            ctx = self._ctx()  # empty registry: nothing is managed
+            with patch.object(gui_helpers, "show_warning_dialog") as warn:
+                refused = gui_helpers.refuse_non_managed_pool_endpoints(
+                    MagicMock(),
+                    ctx,
+                    ["<offsite>", "<offsite>/dst", "remote.example:/tank", "default"],
+                    "offsite run",
+                )
+        self.assertFalse(refused)
+        warn.assert_not_called()
+
+    def test_unregistered_pool_refused(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            ctx = self._ctx(registered=("tank",), online=("tank", "bootpool"))
+            with (
+                patch.object(gui_helpers, "log_msg") as mock_log,
+                patch.object(gui_helpers, "show_warning_dialog") as warn,
+            ):
+                refused = gui_helpers.refuse_non_managed_pool_endpoints(
+                    MagicMock(), ctx, ["bootpool/a"], "save"
+                )
+        self.assertTrue(refused)
+        warning = " ".join(c[0][0] for c in mock_log.call_args_list)
+        self.assertIn("bootpool", warning)
+        self.assertIn("not registered", warning)
+        dialog_text = warn.call_args[0][1]
+        self.assertIn("bootpool", dialog_text)
+        self.assertIn("Register the pool(s) on the Pools tab first", dialog_text)
+
+    def test_offline_pool_refused(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            # tank is registered but missing from the live pool list.
+            ctx = self._ctx(registered=("tank",))
+            with (
+                patch.object(gui_helpers, "log_msg") as mock_log,
+                patch.object(gui_helpers, "show_warning_dialog"),
+            ):
+                refused = gui_helpers.refuse_non_managed_pool_endpoints(
+                    MagicMock(), ctx, ["tank/a"], "backup run"
+                )
+        self.assertTrue(refused)
+        warning = " ".join(c[0][0] for c in mock_log.call_args_list)
+        self.assertIn("tank", warning)
+        self.assertIn("offline", warning)
+
+    def test_listing_failure_refuses_registered_pool(self):
+        # A listing failure degrades to no online pools, so a registered
+        # pool reads offline and the action is refused — never run unverified.
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            ctx = self._ctx(registered=("tank",), online=("tank",))
+            ctx.zfs_repository.list_pools.side_effect = subprocess.CalledProcessError(
+                1, "zpool list"
+            )
+            with (
+                patch.object(gui_helpers, "log_msg") as mock_log,
+                patch.object(gui_helpers, "show_warning_dialog"),
+            ):
+                refused = gui_helpers.refuse_non_managed_pool_endpoints(
+                    MagicMock(), ctx, ["tank/a"], "restore"
+                )
+        self.assertTrue(refused)
+        warning = " ".join(c[0][0] for c in mock_log.call_args_list)
+        self.assertIn("tank", warning)
+        self.assertIn("offline", warning)
 
 
 class TestTextViewSearchIcons(unittest.TestCase):

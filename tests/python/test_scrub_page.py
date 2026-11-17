@@ -43,6 +43,37 @@ class TestScrubPageWidgets(unittest.TestCase):
             names = pp.get_selected_pool_names(mock_view)
             self.assertEqual(names, ["tank"])
 
+    def test_unregistered_pool_hidden_from_scrub_table(self):
+        """Managed-pool scope: an unregistered pool gets no scrub row."""
+        with mock_gtk():
+            import pools_page as pp
+
+            app = MagicMock()
+            app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+            app.scrub_store = MagicMock()
+            app.scrub_store.get_iter_first.return_value = None
+            app.scrub_store.append = MagicMock(return_value=MagicMock())
+            app.scrub_queue = MagicMock()
+            # Mirror the real ordered_names: it orders whatever names it is
+            # given (already the managed set), never invents extras.
+            app.scrub_queue.ordered_names.side_effect = lambda names: sorted(names)
+            app.scrub_queue.summary.return_value = {
+                "active": 0,
+                "pending": 0,
+                "paused": 0,
+                "finished": 0,
+                "target": 1,
+            }
+            app.scrub_summary_label = MagicMock()
+
+            scanning = sm.ScrubInfo(state=sm.ScrubState.SCANNING, progress_percent=50.0)
+            states = {"tank": scanning, "bootpool": scanning}
+            with patch("pools_page.get_all_pool_scrub_states", return_value=states):
+                pp.refresh_scrub_table(app)
+
+        appended = [c.args[0][0] for c in app.scrub_store.append.call_args_list]
+        self.assertEqual(appended, ["tank"])
+
     def test_flicker_free_refresh_logic(self):
         with mock_gtk():
             import pools_page as pp
@@ -90,6 +121,13 @@ class TestScrubPageWidgets(unittest.TestCase):
             import pools_page as pp
 
             app = MagicMock()
+            # Managed-pool scope: register both fixture pools so both rows show.
+            app.config = {
+                "pools": [
+                    {"name": "tank", "offsite_candidate": False},
+                    {"name": "other", "offsite_candidate": False},
+                ]
+            }
             app.scrub_store = MagicMock()
             app.scrub_store.get_iter_first.return_value = None
             app.scrub_store.append = MagicMock(return_value=MagicMock())
@@ -130,6 +168,8 @@ class TestScrubPageWidgets(unittest.TestCase):
             import pools_page as pp
 
             app = MagicMock()
+            # Managed-pool scope: register the fixture pool so its scrub row shows.
+            app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
             app.scrub_store = MagicMock()
             app.scrub_store.get_iter_first.return_value = None
             app.scrub_store.append = MagicMock(return_value=MagicMock())
@@ -163,6 +203,8 @@ class TestScrubPageWidgets(unittest.TestCase):
             import pools_page as pp
 
             app = MagicMock()
+            # Managed-pool scope: register the fixture pool so its scrub row shows.
+            app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
             app.scrub_store = MagicMock()
             app.scrub_store.get_iter_first.return_value = None
             app.scrub_store.append = MagicMock(return_value=MagicMock())
@@ -200,6 +242,8 @@ class TestScrubPageWidgets(unittest.TestCase):
             import pools_page as pp
 
             app = MagicMock()
+            # Managed-pool scope: register the fixture pool so its scrub row shows.
+            app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
             app.scrub_store = MagicMock()
             app.scrub_store.get_iter_first.return_value = None
             app.scrub_store.append = MagicMock(return_value=MagicMock())

@@ -14,7 +14,7 @@ import os
 import re
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -1109,8 +1109,17 @@ class ScrubQueue:
 
         # Detect externally-started scrubs on pools not yet in any bucket
         tracked = self.pending | self.active | self.paused | self.finished
+        registered = None
+        if self._registered_names is not None:
+            try:
+                registered = set(self._registered_names() or ())
+            except Exception as exc:  # pragma: no cover - defensive
+                log_msg(f"WARN: Could not read pool registry: {exc}")
         for pool_name, info in states.items():
             if pool_name in tracked:
+                continue
+            if registered is not None and pool_name not in registered:
+                # Unregistered pool: never adopted, never touched.
                 continue
             if info.state == ScrubState.SCANNING:
                 self.active.add(pool_name)
@@ -1250,7 +1259,12 @@ class ScrubQueue:
             self._save()
 
     def __init__(
-        self, target: int | None = None, *, load_locked: bool = True, save_locked: bool = True
+        self,
+        target: int | None = None,
+        *,
+        load_locked: bool = True,
+        save_locked: bool = True,
+        registered_names: Callable[[], Iterable[str]] | None = None,
     ):
         self.pending: set[str] = set()
         self.active: set[str] = set()
@@ -1267,6 +1281,11 @@ class ScrubQueue:
         self._last_saved_state: dict | None = None
         self._load_locked = load_locked
         self._save_locked = save_locked
+        # Managed-pool scope: optional callable returning the currently
+        # registered pool names. When set, externally-started scrubs on
+        # unregistered pools are never adopted into the queue — the Pool
+        # Registry is the only surface for unregistered pools.
+        self._registered_names = registered_names
         had_state = os.path.exists(feature_config.SCRUB_STATE_PATH)
         self._load()
         if target is not None and max(1, target) != self.target:

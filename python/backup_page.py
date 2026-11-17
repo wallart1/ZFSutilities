@@ -34,6 +34,7 @@ from gui_helpers import (
     EditableListView,
     add_var_row,
     bold_label,
+    refuse_non_managed_pool_endpoints,
     show_warning_dialog,
     style_expander_label,
     style_var_widgets_nondefault,
@@ -661,6 +662,11 @@ def on_backup_run(app, ctx):
     app.backup_runner.prepare_session_log()
 
     backup_cfg = collect_backup_config(app)
+    # Managed-pool scope: the run is refused while any ACTIVE send/receive
+    # step names an unregistered or offline pool.
+    active_sr_rows = [row for row in app.backup_sr_store if row[0]]
+    if refuse_non_managed_pool_endpoints(app, ctx, _sr_endpoints(active_sr_rows), "backup run"):
+        return
     variables = backup_cfg["variables"]
     dryrun = getattr(app, "_dry_run_active", False)
 
@@ -844,9 +850,23 @@ def on_backup_cancel(app, ctx):
     app.update_action_buttons("backup")
 
 
+def _sr_endpoints(sr_rows):
+    """Source/dest endpoint strings from send/receive step rows (UI store)."""
+    endpoints = []
+    for row in sr_rows:
+        endpoints.extend([row[1], row[2]])
+    return endpoints
+
+
 def on_backup_save(app, ctx):
     """Save current backup config to JSON."""
     backup_data = collect_backup_config(app)
+    # Collected steps are dicts ({"active", "source", "dest"}), unlike the
+    # UI store rows _sr_endpoints reads on the run path.
+    steps = backup_data.get("send_receive_steps", [])
+    endpoints = [ep for step in steps for ep in (step.get("source"), step.get("dest"))]
+    if refuse_non_managed_pool_endpoints(app, ctx, endpoints, "save"):
+        return
     offsite_cfg = get_offsite_config(ctx.config)
     warnings = validate_gui_settings(backup_data, offsite_cfg)
     if warnings:
