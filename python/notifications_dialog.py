@@ -12,6 +12,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from feature_config import NOTIFICATION_TYPES, get_notifications_config, save_notifications_config
 from gi.repository import Gtk
+from gui_helpers import run_dialog
 from logging_config import log_msg
 from notifications import (
     load_smtp_password,
@@ -309,7 +310,7 @@ class NotificationsDialog:
     def run(self):
         """Show the dialog; persist settings when OK is pressed."""
         self.dialog.show_all()
-        response = self.dialog.run()
+        response = run_dialog(self.dialog)
         if response == Gtk.ResponseType.OK:
             self._save()
         self.dialog.destroy()

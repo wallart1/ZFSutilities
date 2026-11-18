@@ -4,7 +4,7 @@ This section catalogs messages that may be issued by ZFS Utilities scripts
 and GUI modules, organized by functional group and then by the script or
 module that issues them. Each entry is a table whose columns describe:
 
-- **Message prefix** — the message text, with variable parts elided as `...`; the `LEVEL:` token is part of the text
+- **Message prefix** — the message text, with variable parts elided as `...`; the `LEVEL:` token is part of the text. In session log files each line also carries a timestamp and a `[hostname]` tag naming the host that wrote it; the GUI's short-prefix display hides both
 - **Meaning** — what the message indicates and what conditions lead to it
 - **Response** — what happens after the message is issued, and what action (if any) is appropriate
 
@@ -96,7 +96,12 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 | `INFO: Dry-run: Would capture property manifest for ... under ...` | Dry-run replacement for the post-transfer property-manifest capture (`property_manifest='Y'`); nothing is created, mounted, or written | Informational; set `property_manifest='N'` to skip the line |
 | `VERB: Created property-manifest dataset ...` | First capture of a run created the manifest store `<destfs>/<source pool>/zfsutilities-manifests` | Informational |
 | `VERB: Wrote property manifest for ... to ... (... properties).` | The dataset's local properties were recorded next to the backup for later replay (0 properties = nothing was set locally; the header-only manifest still records that) | Informational |
-| `VERB: Snapshot ... holds this generation's property manifests.` | The manifest dataset was snapshotted under the same generation snapname as the data, so existing retention prunes it in lockstep | Informational |
+| `VERB: Snapshot ... holds this generation's property manifests.` | The manifest dataset was snapshotted under the same generation snapname as the data, so snapshot retention prunes it in lockstep | Informational |
+| `VERB: Removed stale property manifest ... from ...` | Retention swept the manifest store: this file's generation snapshot no longer exists, so the file was deleted | Informational |
+| `WARN: Could not remove stale property manifest ... from ...` | The file's deletion was refused — most likely the store is `readonly=on` | The file stays; the next retention run retries the sweep |
+| `INFO: Pruned N stale property manifests from ...` | Summary of the manifest-store file sweep `retain()` runs after pruning a `*/zfsutilities-manifests` dataset's snapshots — files now live exactly as long as their generation snapshots | Informational |
+| `INFO: Would: remove stale property manifest ... from ...` / `INFO: Would: prune N stale property manifests from ...` | Dry-run preview of the manifest-store file sweep | Informational; nothing deleted |
+| `WARN: Cannot list snapshots of ... — property-manifest file prune skipped.` | The manifest store's snapshot listing failed, so the file sweep was skipped (fail-safe: files kept) | Check the named dataset; the next retention run retries the sweep |
 | `VERB: Cleared readonly on ... for manifest writes.` | The manifest store inherited `readonly=on` from its backup root (a guarded offsite pool); capture cleared it under the store's write lock so writes succeed — the pool root's protection for the data datasets is untouched | Informational |
 | `WARN: Could not create property-manifest dataset ... — skipping property manifests for this run (...)` | `zfs create -pu` of the manifest store was refused — most commonly an encrypted parent rejects the unencrypted child; manifests are skipped for the rest of the run (fail open, the backup data still flows) | Restore the ability to create an unencrypted dataset there, or accept backups without property manifests |
 | `WARN: Could not clear readonly on ... — skipping property manifests for this run.` | The manifest store is `readonly=on` and the clear was refused, so every write would fail read-only; manifests are skipped for the rest of the run (fail open) | Check why `zfs set readonly=off` was refused on the manifest dataset |
@@ -2197,7 +2202,7 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Error rolling back to ...` | The rollback command failed | Dataset unchanged |
 | `WARN: Cannot open ...: mountpoint is ...` | The dataset mountpoint property is not a path (legacy/none) | Browse aborted |
 | `WARN: Cannot browse ...: it is not mounted. Mount it first, then browse.` / `WARN: Cannot browse ...@...: parent dataset ... is not mounted. Mount the parent first.` | Browse was refused because the filesystem (or the snapshot's parent dataset) is not mounted | Browse aborted; mount the item, then browse again |
-| `WARN: Cannot browse ...: ... is not reachable even though the dataset is mounted (an orphaned or shadowed mount). Run Repair Mount Order on ..., then browse.` | The dataset reports mounted but its mountpoint path does not exist, so the file manager would open nothing | Browse aborted; run Repair Mount Order, then browse again |
+| `WARN: Cannot browse ...: ... is not reachable even though the dataset is mounted (an orphaned or shadowed mount). Run Repair Mount Order from the Dashboard, then browse.` | The dataset reports mounted but its mountpoint path does not exist, so the file manager would open nothing | Browse aborted; run Repair Mount Order on the Dashboard, then browse again |
 | `WARN: Error opening file manager: ...` / `Error browsing snapshot ...: ...` | Launching the file manager failed (mountpoint resolution or xdg-open) | Browse aborted |
 | `VERB: Opened ...` / `Browsing snapshot ...` | The file manager was launched for the dataset/snapshot path | Browse succeeded |
 | `WARN: Error resolving mountpoint for ...: ...` / `FATAL: Error resolving mountpoint for ...: ...` | The mountpoint lookup raised while browsing (WARN) or while unmounting a dataset, snapshot, or loop partition (FATAL) | That item's browse/unmount aborted |
@@ -2226,7 +2231,7 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Could not unmount ... after remounting its parents: ...` | The retry unmount after recovery still failed | Recovery aborted |
 | `WARN: cannot recover orphaned mount of ...: ...` | Lock conflict during recovery | Recovery aborted |
 | `WARN: Could not list descendants of ...: ...` | Listing children for the child-first unmount order failed | Only the dataset itself is unmounted |
-| `FATAL: cannot unmount ...: its mountpoint ... is unreachable (...) and remounting its unmounted parents did not expose it. Use Repair Mount Order (Dashboard or Datasets page) to remount the whole set parents-first, then retry.` | The unmount failed, the dataset's mountpoint is not a real mountpoint (orphaned mount), remounting its unmounted parents did not help, and no mounted ancestor covers it. The parenthesized text is ZFS's own error | Stop; run Repair Mount Order, then retry the unmount |
+| `FATAL: cannot unmount ...: its mountpoint ... is unreachable (...) and remounting its unmounted parents did not expose it. Use Repair Mount Order on the Dashboard to remount the whole set parents-first, then retry.` | The unmount failed, the dataset's mountpoint is not a real mountpoint (orphaned mount), remounting its unmounted parents did not help, and no mounted ancestor covers it. The parenthesized text is ZFS's own error | Stop; run Repair Mount Order on the Dashboard, then retry the unmount |
 | `VERB: Unmounted ... to expose a shadowed mount` | A mounted ancestor was lifted so the target's mountpoint path resolves | Unmount retried immediately |
 | `WARN: Skipping ... as a lift candidate: mountpoint ... is not a usable path` | A covering ancestor's mountpoint is not an addressable path (e.g. legacy), so it cannot be detached to expose the shadowed mount | The next candidate is tried; unmount may fail if none work |
 | `VERB: Remounted ... after exposing a shadowed mount` | A lifted ancestor was restored after the unmount completed | Informational |
@@ -2237,7 +2242,6 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `FATAL: cannot unmount ...: none of its covering ancestors (...) has a mountpoint path that can be detached. Give the cover a path mountpoint or unmount it by hand, then retry.` | Every mounted ancestor that could cover the dataset has a non-path mountpoint (for example `legacy`), so none can be detached by path | Resolve the cover's mountpoint, then retry |
 | `WARN: Error checking mount state for ...: ...` | A property probe for an ancestor failed during unmount or repair planning | That ancestor is skipped / the plan is refused |
 | `INFO: Mount order is clean; nothing to repair` | The repair action found no unreachable mounts | No-op |
-| `WARN: Select a single filesystem or pool to repair mount order` | The Datasets-page repair action's selection guard | Action aborted |
 | `INFO: Mount-order repair cancelled` | The approval dialog was declined | Nothing changed |
 | `INFO: Set canmount=on on ... (was noauto) so boot mounts it before its children` | The repair applied a canmount correction that keeps the correct order across reboots | Informational; boot behavior change was approved in the dialog |
 | `FATAL: Mount-order repair aborted: ... is busy. Close what is using it and retry.` | The pre-repair busy gate found holders on a dataset to be unmounted (a dialog lists them) | Nothing was changed; close the users and retry |
@@ -2323,16 +2327,18 @@ GUI scrub engine: queue/state machine for start/pause/resume/stop, backup-coordi
 | -------------- | ------- | -------- |
 | `WARN: Could not list pools for scrub status: ...` | Pool listing failed while building all-pool scrub states | Continue with an empty state map |
 | `INFO: Skipping scrub action on '...': current state is ..., allowed states are ...` | State-machine gate — the requested transition is invalid for the live state | Action skipped |
-| `INFO: Starting scrub on pool '...'` / `Pausing scrub on pool '...'` / `Resuming scrub on pool '...'` / `Stopping scrub on pool '...'` | The transition passed its state gate and the command follows | Continue |
+| `INFO: Starting scrub on '...'` / `Pausing scrub on '...'` / `Resuming scrub on '...'` / `Stopping scrub on '...'` | The transition passed its state gate and the command follows | Continue |
 | `INFO: Scrub started on '...'` / `Scrub stopped on '...'` | The corresponding command succeeded | Continue |
 | `INFO: Scrub paused on '...'` / `Scrub resumed on '...'` | Pause/resume confirmed by the pool's live scrub state, whatever the zpool client returned | Continue |
+| `INFO: Scrub started on '...' (external)` / `Scrub paused on '...' (external)` / `Scrub resumed on '...' (external)` | The queue observed a lifecycle transition it did not perform — a scrub started outside the queue (once per episode, including a finished pool scanning again), a pool's scrub paused outside the queue (treated as user-paused), or a paused pool's scrub resumed outside the queue | Adopted into the matching bucket; an external pause is never auto-resumed |
 | `WARN: cannot start/stop scrub on '...': ...` | Subprocess timeout/OSError during the transition | That transition aborted |
 | `WARN: Failed to start/stop scrub on '...'` | The zpool scrub command returned non-zero | Transition aborted; the queue may retry |
 | `VERB: pause/resume command timed out/failed on '...'; state poll confirms paused/scanning` | The pause/resume client was abandoned at its 30 s bound (or exited non-zero), but the state poll confirmed the transition landed anyway — the kernel completes it without the client | Continue; the scrub is paused/resumed as requested |
 | `DEBUG: Pool '...' is not online; skipping scrub pause` / `... scrub resume` | The pool vanished from the live states | That pool skipped |
 | `DEBUG: Scrub on '...' is ...; not pausing` | The pool is online but not SCANNING | Pause skipped |
 | `INFO: Dry-run: would pause scrub on '...'` / `would resume scrub on '...'` | Dry-run mode — no state change | Continue without pausing/resuming |
-| `VERB: Scrub paused on '...'` / `Scrub resumed on '...'` | Backup-coordinated pause/resume confirmed by state poll | Continue |
+| `INFO: Scrub finished on '...'` / `Scrub canceled on '...'` | Active pool reached FINISHED/CANCELED, or state NONE after the grace period | Moved to finished bucket |
+| `INFO: Scrub finished on '...' (was paused)` / `Scrub canceled on '...' (was paused)` / `Scrub ended on '...' (was paused)` | A paused pool shows FINISHED/CANCELED, or its scrub vanished without a completion record | Cleared from paused; added to finished |
 | `WARN: Scrub on '...' did not pause (state: ...); scan line: ...; raw status: ...` / `WARN: Scrub on '...' did not resume (state: ...); ...` | The state did not reach PAUSED/SCANNING within the verification window, whatever the zpool client returned | Pool not counted as paused/resumed; the backup step proceeds |
 | `INFO: Scrubs paused: ...` / `INFO: Scrubs resumed: ...` | Final summary of pools paused/resumed | Informational |
 | `VERB: Scrub on '...' is already running; no resume needed` | Externally resumed or never paused | Cleared from paused buckets |
@@ -2346,12 +2352,6 @@ GUI scrub engine: queue/state machine for start/pause/resume/stop, backup-coordi
 | `WARN: scrub queue busy — <mutation> skipped this cycle` | Another process (GUI or scrub profile) held the scrub-state lock for more than 10 s while this mutator wanted it | The change is skipped, not half-applied; retry or make the change from the other side |
 | `WARN: scrub queue state busy — skipping this tick cycle` | The locked reload+tick could not take the state file's lock within its timeout | State converges from live `zpool status` on the next cycle; no action needed |
 | `WARN: Giving up on scrub for '...' after ... failed start attempts` | Three consecutive failed start/resume attempts | Pool dropped to given-up for this run; investigate |
-| `VERB: External scrub detected on '...'` | The queue observed a scrub it did not start (once per episode) | Pool adopted into the active bucket |
-| `VERB: External pause detected on '...'` | A pool's scrub was paused outside the queue (tracked active pool, or an untracked paused pool adopted) — treated as user-paused | Pool moved to the paused bucket; no auto-resume |
-| `VERB: External resume detected on '...'` | A paused pool's scrub was resumed outside the queue | Pool moved back to the active bucket |
-| `INFO: Scrub finished on '...'` / `Scrub canceled on '...'` / `Scrub completed on '...'` | Active pool reached FINISHED/CANCELED, or state NONE after the grace period | Moved to finished bucket |
-| `INFO: Paused scrub finished on '...'` / `Paused scrub canceled on '...'` | A paused pool shows FINISHED/CANCELED | Cleared from paused; added to finished |
-| `INFO: New scrub detected on '...'` | A finished-bucket pool is SCANNING again | Moved back to active |
 | `WARN: systemctl ... ...@....timer failed: ...` / `error: ...` | Enabling/disabling the systemd scrub timer failed (non-zero rc or timeout/OSError) | Failure returned; check systemctl |
 | `INFO: ...@....timer ...d` | The systemd scrub timer enable/disable succeeded | Informational |
 
@@ -2902,9 +2902,10 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `FATAL: No pools specified for scrub profile` | The scrub profile's pool list is empty | Aborts with rc=1 |
 | `INFO: Scrub profile started on ... pool(s), target=...` | The scrub profile begins with the given concurrency | Informational |
 | `INFO: Scrub queue — active=... pending=... paused=... finished=...` | Queue summary, emitted only when it changes | Informational while polling |
-| `WARN: Scrub profile timed out with paused pools` | Idle with only paused pools remaining (about ten minutes) | Polling loop aborts |
+| `INFO: Waiting on paused scrubs; another profile running` | Only paused pools remain, but another profile (typically a backup's scrub-pause window) holds a profile lock | Idle timeout suspended; logged once per wait episode |
+| `WARN: Scrub profile timed out; still paused: ...` | Only paused pools remain with no other profile running (about ten minutes) | Polling loop aborts with rc=0; the named pools stay paused (resume them from the Pools tab) |
 | `FATAL: Scrub profile gave up on: ...` | The queue gave up on pools after repeated start failures | Profile aborts with rc=1 |
-| `INFO: Scrub profile complete` | All queued scrubs finished | Success, rc=0 |
+| `INFO: Scrub profile complete` | All queued scrubs finished and the queue drained; not logged after a timeout | Success, rc=0 |
 | `FATAL: Profile not found: ...` | The profile JSON could not be loaded | Session trailer rc=1; exit 1 |
 | `WARN: Profile '...' is already running and did not finish within ... seconds; skipping duplicate invocation` | The lock wait timed out (timeout > 0) | Skipped; exit 0 so cron does not retry-fail |
 | `INFO: Profile '...' is already running; skipping duplicate invocation` | Zero-timeout lock contention | Skipped; exit 0 |
@@ -3037,7 +3038,7 @@ Desktop and email delivery for finished runs (scheduled profiles, Run Now, and i
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `INFO: Desktop notification skipped: no logged-in desktop session` | No desktop user with a live session bus was resolvable (no `SUDO_USER`, no X11 socket owner) | Desktop channel silently skipped for this run; email (if enabled) still goes out |
+| `INFO: Desktop notification skipped: no logged-in desktop session` | No desktop user with a live session bus was resolvable (no `ZFSUTILITIES_NOTIFICATION_DESKTOP_USER` override, `PKEXEC_UID`, `SUDO_USER`, active loginctl session, or X11 socket owner) | Desktop channel silently skipped for this run; email (if enabled) still goes out |
 | `WARN: Desktop notification unavailable: neither notify-send nor gdbus is installed` | The host has neither delivery tool on PATH | Install `libnotify-bin` or `libglib2.0-bin`, or rely on the email channel |
 | `WARN: Desktop notification failed: ...` | The delivery command could not be run or timed out | Run continues; the bubble was not shown |
 | `WARN: Desktop notification failed (rc=...): ...` | The delivery tool exited non-zero (e.g. no notification daemon) | Check the named error; the run itself is unaffected |

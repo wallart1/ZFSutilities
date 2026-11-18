@@ -28,12 +28,15 @@ from gui_helpers import (
     configure_treeview_column,
     create_scrolled_dialog,
     dataset_name_cell_func,
+    dimmed_modal,
+    enable_ctrl_click_deselect,
     expand_tree_recursively,
     get_expanded_rows,
     get_mounted_snapshots,
     get_tree_selection_items,
     on_row_expanded,
     restore_expanded_rows,
+    run_dialog,
     set_action_tooltip,
     set_column_header_tooltip,
     set_monospace_font,
@@ -50,7 +53,7 @@ from profile_dialogs import (
 )
 from runner_factory import new_dataset_action_runner
 from workload_profiles import ZFS_GET_PROPERTIES, match_profile
-from zfs_repository import zvol_device_path
+from zfs_repository import find_unreachable_mounts, zvol_device_path
 
 # ---------------------------------------------------------------------------
 # Page builder
@@ -71,6 +74,16 @@ def create_datasets_page(app):
     box.pack_start(title_label, False, False, 0)
 
     box.pack_start(Gtk.Separator(), False, False, 0)
+
+    # Mount-order warning: shown only when the same check the Dashboard runs
+    # finds mounted datasets whose path is unreachable. The Datasets page
+    # only points at the problem — the Dashboard names each dataset and
+    # offers the repair.
+    app._ds_mount_order_warning = Gtk.Label()
+    app._ds_mount_order_warning.set_halign(Gtk.Align.START)
+    app._ds_mount_order_warning.set_line_wrap(True)
+    app._ds_mount_order_warning.set_no_show_all(True)
+    box.pack_start(app._ds_mount_order_warning, False, False, 0)
 
     # Search bar
     search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
@@ -122,6 +135,7 @@ def create_datasets_page(app):
     app.datasets_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.datasets_view.set_enable_tree_lines(True)
     app.datasets_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(app.datasets_view)
 
     app.datasets_search = TreeSearch(
         app.datasets_view,
@@ -316,6 +330,35 @@ def refresh_datasets_page(app, pool_filter=None):
     if app.datasets_search._text:
         app.datasets_search._run_search()
 
+    _update_ds_mount_order_warning(app)
+
+
+def _update_ds_mount_order_warning(app):
+    """Show or hide the mount-order warning banner for the Datasets page.
+
+    Runs the same unreachable-mount check the Dashboard refresh uses. With
+    findings the banner states the problem and points at the Dashboard,
+    which names each dataset and offers the repair; without findings (or
+    when the mount state cannot be queried — the detector returns []) the
+    banner stays hidden.
+    """
+    label = getattr(app, "_ds_mount_order_warning", None)
+    if label is None:
+        return
+    unreachable = find_unreachable_mounts()
+    if not unreachable:
+        label.set_visible(False)
+        return
+    count = len(unreachable)
+    dataset_word = "dataset" if count == 1 else "datasets"
+    label.set_markup(
+        f"<span foreground='#CC0000'>⚠</span> <b>Mount order problem:</b> "
+        f"{count} mounted {dataset_word} cannot be reached through "
+        "their mountpoint paths. Go to the Dashboard — its Warnings list "
+        "names them, and its <b>Repair Mount Order</b> action fixes them."
+    )
+    label.set_visible(True)
+
 
 def _restore_scroll(scrolled, saved_value):
     """Clamp and restore a saved vertical scroll offset."""
@@ -402,18 +445,22 @@ def expand_selected_datasets(app):
         text="Expanding selected rows…",
     )
     dialog.set_deletable(False)
-    dialog.show()
-    while Gtk.events_pending():
-        Gtk.main_iteration_do(False)
 
-    app.datasets_search.freeze()
-    try:
-        for tree_iter in iters_to_expand:
-            expand_tree_recursively(app.datasets_view, model, tree_iter)
-    finally:
-        app.datasets_search.thaw()
-        dialog.destroy()
-        app.datasets_search.handle_expand_collapse()
+    # Shown with show() rather than run(), so the modal dimming rides the
+    # context manager for the dialog's whole on-screen lifetime.
+    with dimmed_modal(dialog):
+        dialog.show()
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+        app.datasets_search.freeze()
+        try:
+            for tree_iter in iters_to_expand:
+                expand_tree_recursively(app.datasets_view, model, tree_iter)
+        finally:
+            app.datasets_search.thaw()
+            dialog.destroy()
+            app.datasets_search.handle_expand_collapse()
 
 
 # ---------------------------------------------------------------------------
@@ -596,12 +643,6 @@ def update_ds_button_sensitivity(app):
         and app.ctx.zfs_caps.supports("zfs_rewrite")
     )
 
-    can_repair_mount_order = (
-        len(items) == 1
-        and items[0]["type"] in ("pool", "dataset")
-        and (items[0].get("zfs_type") or "filesystem") == "filesystem"
-    )
-
     for attr, sensitive in [
         ("_ds_snapshot_btn", can_snapshot),
         ("_ds_delete_btn", can_delete),
@@ -610,7 +651,6 @@ def update_ds_button_sensitivity(app):
         ("_ds_browse_btn", can_browse),
         ("_ds_mount_btn", can_mount),
         ("_ds_unmount_btn", can_unmount),
-        ("_ds_repair_mount_order_btn", can_repair_mount_order),
         ("_ds_apply_profile_btn", can_apply_profile),
         ("_ds_rewrite_data_btn", can_rewrite),
         ("_ds_manage_profiles_btn", True),
@@ -874,7 +914,7 @@ def show_sever_clone_dialog(app, items):
 
     dialog.show_all()
     try:
-        response = dialog.run()
+        response = run_dialog(dialog)
         return (
             response == _RESPONSE_SEVER
             and typed_entry.get_text().strip().lower() == _SEVER_CONFIRM_WORD

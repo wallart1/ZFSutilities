@@ -1,5 +1,101 @@
 # Changelog
 
+## 0.143.0
+
+*Released 2026-11-18*
+
+### Added
+
+- **One-click Ctrl-click deselection.** Every table in the GUI needed two
+  Ctrl-clicks to deselect a row: stock GTK 3 skips the selection toggle
+  when the table does not already hold keyboard focus, and GTK only grabs
+  focus after the first click. Every selectable table is now wired to
+  grab focus on the press itself, so one Ctrl-click deselects
+  immediately — everywhere: Datasets, Dashboard, Schedule, Pools and the
+  Scrub Manager, Disks, Logs (both lists), Retention, Backup, Offsite,
+  Checkagainst, and the picker dialogs. Two audits keep new tables from
+  regressing, and a realized-window check would catch GTK itself
+  changing this behavior.
+- **Modal dialogs dim the rest of the GUI.** While a modal dialog is
+  open, every other window the GUI is showing fades to mark it disabled,
+  returning to normal when the dialog closes — including dialogs stacked
+  on dialogs. The dimming relies on desktop compositing (on by default
+  on most Linux desktops); without it the other windows simply keep
+  their normal appearance and still cannot take input.
+- **A mount-order warning on the Datasets page.** When mounted datasets
+  cannot be reached through their mountpoint paths, the Datasets page
+  now shows a warning banner above the tree stating how many datasets
+  are affected and pointing at the Dashboard, whose Warnings list names
+  each one and whose **Repair Mount Order** action fixes them. The
+  banner re-checks on every refresh and disappears once the repair
+  succeeds.
+- **Every stored log line names the host that wrote it.** Lines in
+  session logs, the cron log, and the rsync pull log now carry a
+  `[hostname]` tag right after the timestamp, so on a two-node site a
+  line read anywhere — GUI viewer, report, or paste — always says which
+  node wrote it. Older log lines without the tag keep working
+  everywhere.
+
+### Fixed
+
+- **Scrub profiles no longer give up while a backup holds its scrub
+  pause window.** A backup pauses scrubs on its pools for the length of
+  a copy step and resumes them afterwards; the scrub profile's
+  ten-minute patience used to expire in the middle of that window and
+  log a confusing timeout. The scrub profile now waits without limit
+  while any other profile is running, and its timeout warning — when
+  nothing else is running — names the pools that stay paused. Scrub
+  profile messages are also no longer written twice into the session
+  log, and a timeout no longer ends with a contradictory "complete"
+  line.
+- **Scrub and retention run logs are reachable from View Log.** Those
+  scheduled runs' session logs were classified into the Logs tab's
+  Miscellaneous list, which the Dashboard's **View Log** (main list
+  only) could not search — the button answered "Log entry not found"
+  although the file existed. Both types now appear in the main list.
+- **Property-manifest stores are pruned like the datasets they
+  describe.** The GUI/scheduler backup prune step never named the
+  manifest store, so its generation snapshots accumulated forever, and
+  nothing anywhere deleted stale manifest *files*. The prune step now
+  adds each step's store to the prune list when it exists, and retention
+  sweeps the store's files so a file lives exactly as long as its
+  generation snapshot. Both self-heal existing backlog on the first run
+  after the upgrade; a store whose snapshots are gone has its files
+  cleaned up on the next retention pass.
+- **Desktop notifications work from the normally-launched GUI and from
+  scheduled runs.** The desktop user resolution only understood
+  `SUDO_USER` (terminal sudo) and the X11 socket owner (dead where the
+  display manager runs Xorg as root). Resolution now also reads
+  `PKEXEC_UID` — set by the GUI's own pkexec launch path — and the
+  active graphical session from `loginctl`, which covers scheduled root
+  runs and Wayland sessions too.
+- **The Alignment view no longer reports PVE as missing where no PVE
+  can exist.** On a single-node site without Proxmox the VM layer is
+  absent by design; the availability note, VM-row details, and findings
+  now stay silent about PVE instead of calling it unavailable. While the
+  (slow) alignment gather runs, the refresh indicator reads
+  **Refreshing — Please be patient.**
+- **The Dashboard pool list sorts alphabetically**, ignoring case, instead
+  of showing `zpool list`'s uppercase-first order.
+
+### Changed
+
+- **The Datasets page no longer has a Repair Mount Order button.** The
+  button asked the operator to decide that a subtree needs mount-order
+  repair from a selection — knowledge the operator does not have — and
+  the unmount/remount churn it caused was disconcerting. The Dashboard
+  detects unreachable mounts itself and offers the repair; the new
+  Datasets-page banner points there.
+- **Scrub logging uses one vocabulary.** All scrub lifecycle lines now
+  follow "Scrub \<verb\> on 'pool'" with a qualifier where needed
+  (`(external)` for transitions the queue observed but did not perform,
+  `(was paused)` for paused pools whose scrub ended), external
+  transitions are logged at INFO instead of VERB so they are visible at
+  the default level, and the stray word "pool" is gone from the
+  queue's action lines.
+- **The GUI's short-prefix log display shows the time only** — no date,
+  host tag, or source location; the long form still shows everything.
+
 ## 0.142.0
 
 *Released 2026-11-17*

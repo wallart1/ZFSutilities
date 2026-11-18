@@ -29,6 +29,8 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
+    enable_ctrl_click_deselect,
+    run_dialog,
     set_action_tooltip,
     set_column_header_tooltip,
     setup_row_scroll,
@@ -345,6 +347,7 @@ def create_disks_page(app):
     app.disks_view = Gtk.TreeView(model=app.disks_store)
     app.disks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.disks_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(app.disks_view)
     app.disks_view.get_selection().connect("changed", _on_disk_selection_changed, app)
 
     disk_cols = [
@@ -443,6 +446,7 @@ def create_disks_page(app):
     app.enclosures_view = Gtk.TreeView(model=app.enclosures_store)
     app.enclosures_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.enclosures_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(app.enclosures_view)
     app.enclosures_view.get_selection().connect("changed", _on_enclosure_selection_changed, app)
 
     enclosure_cols = [
@@ -494,6 +498,7 @@ def create_disks_page(app):
     app.disks_topology_view = Gtk.TreeView(model=app.disks_topology_store)
     app.disks_topology_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.disks_topology_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(app.disks_topology_view)
     app.disks_topology_view.get_selection().connect("changed", _on_topology_selection_changed, app)
 
     topo_cols = [
@@ -941,7 +946,7 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
 
     while True:
         dialog.show_all()
-        response = dialog.run()
+        response = run_dialog(dialog)
         if response != Gtk.ResponseType.OK:
             dialog.destroy()
             return None

@@ -677,7 +677,9 @@ def _vm_findings(sample):
     """VM-layer findings (rule 4)."""
     findings = []
     if not sample.pve_available:
-        if any(
+        # Not-applicable sites (single-node without PVE) have no VM layer
+        # to check — only a failed source on an applicable site is a finding.
+        if sample.pve_applicable and any(
             ds.kind == "volume" and _VM_DISK_SHAPE in ds.name.rsplit("/", 1)[-1]
             for ds in sample.datasets
         ):

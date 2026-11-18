@@ -86,6 +86,16 @@ failed job is normal triage, but the run recorded at a release tag is
 never redone or moved — "the tag run stays red by rule," because tags are
 history.
 
+## compositing
+
+A desktop feature that lets the window manager draw windows with
+transparency. The GUI's modal-dialog dimming fades every other window
+while a dialog is open, and that fade is an opacity effect, so it needs
+a compositing manager — enabled by default on Cinnamon and most Linux
+desktops. Without compositing the dimming silently does nothing: the
+other windows stay at full appearance and the dialog still blocks input
+normally.
+
 ## config version
 
 The saved configuration file (`/var/lib/zfsutilities/config.json`)
@@ -454,6 +464,16 @@ with guest records is a lab that may still exist is exactly what
 teardown deletes records only together with their guests), "the
 distinction is load-bearing" (ACL entry: mapped-LUN grants vs TPG
 mappings). Spotting one is a wrap-up finding in itself.
+
+## loginctl
+
+The `loginctl` command queries systemd-logind, the part of the system
+that tracks who is logged in where. The desktop-notification resolver
+uses it as a fallback: when the process carrying a notification has no
+launch hints about the desktop user (a scheduled root run, or a GUI
+elevated through pkexec), `loginctl list-sessions` / `show-session`
+report the active graphical session (X11 or Wayland) and thereby the
+user whose notification daemon should receive the bubble.
 
 ## loop device
 

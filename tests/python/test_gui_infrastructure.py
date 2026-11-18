@@ -953,6 +953,97 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
                 self.assertFalse(dv["maximized"])
 
 
+class TestEnableCtrlClickDeselect(unittest.TestCase):
+    """Unit tests for gui_helpers.enable_ctrl_click_deselect.
+
+    The handler must grab focus only on a Ctrl-modified left press onto an
+    unfocused view, mirroring GTK's own modifier test ((state & mask) ==
+    mask with the MODIFIER_INTENT_MODIFY_SELECTION mask), and always
+    return False so GTK's own gesture handling still runs.
+    """
+
+    CTRL = 0x4  # Gdk.ModifierType.CONTROL_MASK on every supported platform
+    SHIFT = 0x1
+
+    def _handler_and_view(self):
+        """Wire a mock view; return (handler, view, gdk_mock)."""
+        with mock_gtk():
+            import gui_helpers
+
+            view = MagicMock()
+            gui_helpers.enable_ctrl_click_deselect(view)
+            view.connect.assert_called_once()
+            signal, handler = view.connect.call_args.args
+            self.assertEqual(signal, "button-press-event")
+            # The bound module's Gdk, not the Gtk mock's nested copy.
+            return handler, view, gui_helpers.Gdk
+
+    @staticmethod
+    def _event(button=1, state=CTRL):
+        return SimpleNamespace(button=button, state=state)
+
+    def _invoke(self, mask=CTRL, focused=False, button=1, state=CTRL):
+        handler, view, _gdk = self._handler_and_view()
+        view.has_focus.return_value = focused
+        view.get_modifier_mask.return_value = mask
+        result = handler(view, self._event(button=button, state=state))
+        return result, view
+
+    def test_ctrl_left_press_on_unfocused_view_grabs_focus(self):
+        handler, view, gdk = self._handler_and_view()
+        view.has_focus.return_value = False
+        view.get_modifier_mask.return_value = self.CTRL
+        result = handler(view, self._event())
+        self.assertFalse(result)
+        view.get_modifier_mask.assert_called_once_with(gdk.ModifierIntent.MODIFY_SELECTION)
+        view.grab_focus.assert_called_once_with()
+
+    def test_plain_left_press_never_grabs(self):
+        handler, view, _gdk = self._handler_and_view()
+        view.has_focus.return_value = False
+        view.get_modifier_mask.return_value = self.CTRL
+        result = handler(view, self._event(state=0))
+        self.assertFalse(result)
+        # The modifier mask is queried (GTK does the same on every press);
+        # only the focus grab must not happen without the modifier.
+        view.grab_focus.assert_not_called()
+
+    def test_ctrl_right_press_never_grabs(self):
+        handler, view, _gdk = self._handler_and_view()
+        view.has_focus.return_value = False
+        result = handler(view, self._event(button=3))
+        self.assertFalse(result)
+        view.get_modifier_mask.assert_not_called()
+        view.grab_focus.assert_not_called()
+
+    def test_ctrl_middle_press_never_grabs(self):
+        handler, view, _gdk = self._handler_and_view()
+        view.has_focus.return_value = False
+        result = handler(view, self._event(button=2))
+        self.assertFalse(result)
+        view.get_modifier_mask.assert_not_called()
+        view.grab_focus.assert_not_called()
+
+    def test_focused_view_never_grabs(self):
+        result, view = self._invoke(focused=True)
+        self.assertFalse(result)
+        view.get_modifier_mask.assert_not_called()
+        view.grab_focus.assert_not_called()
+
+    def test_extra_modifiers_still_match_gtk_semantics(self):
+        # GTK's test is (state & mask) == mask: extra modifiers in the
+        # event state do not block the grab.
+        result, view = self._invoke(state=self.CTRL | self.SHIFT)
+        self.assertFalse(result)
+        view.grab_focus.assert_called_once_with()
+
+    def test_partial_mask_match_never_grabs(self):
+        # A compound custom mask must be fully present in the state.
+        result, view = self._invoke(mask=self.CTRL | self.SHIFT, state=self.CTRL)
+        self.assertFalse(result)
+        view.grab_focus.assert_not_called()
+
+
 class TestGtkMocking(unittest.TestCase):
     def test_gi_repository_available(self):
         with mock_gtk():

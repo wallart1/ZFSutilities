@@ -108,6 +108,14 @@ class TestParseLogFilename(unittest.TestCase):
         result = lp._parse_log_filename("2026-06-21_10-00-00_dataset_gui.log")
         self.assertEqual(result, ("2026-06-21 10:00:00", "dataset", "gui"))
 
+    def test_parses_scrub_profile_filename(self):
+        result = lp._parse_log_filename("2026-11-14_00-00-01_scrub_profile-root-scrub-monthly.log")
+        self.assertEqual(result, ("2026-11-14 00:00:01", "scrub", "profile-root-scrub-monthly"))
+
+    def test_parses_retention_profile_filename(self):
+        result = lp._parse_log_filename("2026-11-14_02-00-01_retention_profile-weekly.log")
+        self.assertEqual(result, ("2026-11-14 02:00:01", "retention", "profile-weekly"))
+
     def test_returns_none_for_unsupported_type(self):
         self.assertIsNone(lp._parse_log_filename("2026-06-21_10-00-00_unknown_gui.log"))
 
@@ -118,6 +126,8 @@ class TestSessionLogRouting(unittest.TestCase):
     def _make_sessions(self, tmpdir):
         files = {
             "2026-10-21_06-00-01_backup_profile-daily.log": "INFO: ok\n",
+            "2026-10-21_00-00-01_scrub_profile-monthly.log": "INFO: ok\n",
+            "2026-10-21_02-00-01_retention_profile-weekly.log": "INFO: ok\n",
             "2026-10-21_08-48-17_cli_switch-version.log": "2026-10-21 08:48:17  x:1: WARN: boom\n",
             "2026-10-22_09-00-00_futuretype_some-run.log": "INFO: new writer\n",
             "not-a-session-log.log": "ignored\n",
@@ -138,8 +148,12 @@ class TestSessionLogRouting(unittest.TestCase):
             with _patch_log_dir(tmpdir):
                 rows = lp._scan_logs(_make_scan_app())
             names = sorted(row[lp.COL_NAME] for row in rows)
-            self.assertEqual(names, ["profile-daily"])
-            self.assertEqual(rows[0][lp.COL_TYPE], "backup")
+            # Every profile tab type is core — a scrub or retention run log
+            # buried in the Miscellaneous list would be unreachable from
+            # Dashboard "View Log", which searches the main list only.
+            self.assertEqual(names, ["profile-daily", "profile-monthly", "profile-weekly"])
+            types = {row[lp.COL_TYPE] for row in rows}
+            self.assertEqual(types, {"backup", "scrub", "retention"})
 
     def test_misc_list_gets_cli_and_unknown_types(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -226,6 +240,19 @@ class TestSelectLogByPath(unittest.TestCase):
         selection.select_iter.assert_called_once()
         selected = selection.select_iter.call_args[0][0]
         self.assertEqual(selected["idx"], 1)
+
+    @patch("logs_page._sync_log_list")
+    def test_selects_scrub_profile_row(self, mock_sync):
+        """A scrub profile session log (a main-list core row) is selectable."""
+        scrub_path = "/var/log/zfsutilities/sessions/2026-11-14_00-00-01_scrub_profile-m.log"
+        rows = [
+            ("dt", "backup", "profile-daily", "Done", "1 MB", "", "", "/a.log"),
+            ("dt", "scrub", "profile-m", "Running", "1 MB", "", "", scrub_path),
+        ]
+        app, selection = self._make_app(rows)
+        result = lp.select_log_by_path(app, scrub_path)
+        self.assertTrue(result)
+        selection.select_iter.assert_called_once()
 
     @patch("logs_page._sync_log_list")
     def test_returns_false_when_not_found(self, mock_sync):
@@ -1017,6 +1044,22 @@ class TestLogsShortPrefix(unittest.TestCase):
             inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
             self.assertIn("INFO: hello", inserted)
             self.assertNotIn("/a:1:", inserted)
+
+    def test_short_mode_drops_date_and_host_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.log")
+            with open(path, "w") as fh:
+                fh.write("2026-06-21 10:00:00 [stewie]  /a:1: INFO: hello\n")
+                fh.write("[tweety] rsync: sent 12 bytes\n")
+            app, buf = self._make_app(path)
+            lp._load_next_chunk(app)
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("10:00:00  INFO: hello", inserted)
+            self.assertNotIn("2026-06-21", inserted)
+            self.assertNotIn("[stewie]", inserted)
+            # Untimestamped rsync lines keep their host tag — it is the only
+            # location data they carry.
+            self.assertIn("[tweety] rsync: sent 12 bytes", inserted)
 
     def test_load_next_chunk_keeps_prefix_in_long_mode(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -41,7 +41,9 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
+    enable_ctrl_click_deselect,
     refuse_non_managed_pool_endpoints,
+    run_dialog,
     set_action_tooltip,
     set_column_header_tooltip,
     show_error_dialog,
@@ -376,7 +378,7 @@ def on_rewrite_data(app, datasets, refresh=None):
     if len(datasets) > 1:
         secondary += "\n\n" + "\n".join(ds["name"] for ds in datasets)
     dialog.format_secondary_text(secondary)
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     if response != Gtk.ResponseType.YES:
         return
@@ -469,6 +471,7 @@ def show_manage_profiles_dialog(app):
     view = Gtk.TreeView(model=store)
     view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(view)
 
     cols = [
         (0, "Name", 180, "Profile name as used by the Apply Profile and survey pickers"),
@@ -596,7 +599,7 @@ def show_manage_profiles_dialog(app):
             text=f"Delete profile {name}?",
         )
         confirm.format_secondary_text("This cannot be undone.")
-        response = confirm.run()
+        response = run_dialog(confirm)
         confirm.destroy()
         if response == Gtk.ResponseType.YES:
             delete_workload_profile(app.config, name)
@@ -613,7 +616,7 @@ def show_manage_profiles_dialog(app):
         confirm.format_secondary_text(
             "All custom profiles will be discarded and the seeded defaults will be restored."
         )
-        response = confirm.run()
+        response = run_dialog(confirm)
         confirm.destroy()
         if response == Gtk.ResponseType.YES:
             reset_workload_profiles(app.config)
@@ -628,7 +631,7 @@ def show_manage_profiles_dialog(app):
     _refresh_list()
     _on_selection_changed(view.get_selection())
     dialog.show_all()
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 
@@ -798,7 +801,7 @@ def show_profile_editor_dialog(app, name=None):
 
     dialog.show_all()
     while True:
-        response = dialog.run()
+        response = run_dialog(dialog)
         if response != Gtk.ResponseType.OK:
             dialog.destroy()
             return
@@ -830,7 +833,7 @@ def show_profile_editor_dialog(app, name=None):
                     text=f"Profile '{overwrite_name}' already exists.",
                 )
                 confirm.format_secondary_text("Overwrite it with these settings?")
-                response = confirm.run()
+                response = run_dialog(confirm)
                 confirm.destroy()
                 if response != Gtk.ResponseType.YES:
                     continue
@@ -890,7 +893,7 @@ def _show_validation_error(parent, message):
         buttons=Gtk.ButtonsType.OK,
         text=message,
     )
-    error.run()
+    run_dialog(error)
     error.destroy()
 
 
@@ -967,6 +970,7 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
     picker_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     picker_selection = picker_view.get_selection()
     picker_selection.set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(picker_view)
 
     name_renderer = Gtk.CellRendererText()
     name_col = Gtk.TreeViewColumn("Profile", name_renderer, text=0)
@@ -1087,7 +1091,7 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
 
     dialog.show_all()
     while True:
-        response = dialog.run()
+        response = run_dialog(dialog)
         if response != Gtk.ResponseType.OK:
             dialog.destroy()
             return Gtk.ResponseType.CANCEL, None, None
@@ -1143,7 +1147,7 @@ def on_apply_profile(app, datasets, profile, refresh=None):
             text="No changes to apply",
         )
         dialog.format_secondary_text("All selected datasets already match the chosen profile.")
-        dialog.run()
+        run_dialog(dialog)
         dialog.destroy()
         return
 
@@ -1286,6 +1290,7 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run
 
         view = Gtk.TreeView(model=store)
         view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+        enable_ctrl_click_deselect(view)
 
         r0 = Gtk.CellRendererText()
         c0 = Gtk.TreeViewColumn("Profile", r0, text=0)
@@ -1311,7 +1316,7 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run
         content.add(scroll)
 
     dlg.show_all()
-    response = dlg.run()
+    response = run_dialog(dlg)
     custom_name = name_entry.get_text().strip()
     dlg.destroy()
 
@@ -1348,7 +1353,7 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run
             text=f"Profile '{full_name}' already exists.",
         )
         dlg.format_secondary_text("Overwrite it with the current tab settings?")
-        response = dlg.run()
+        response = run_dialog(dlg)
         dlg.destroy()
         if response != Gtk.ResponseType.YES:
             return
@@ -1425,6 +1430,7 @@ def show_recall_profile_dialog(app, tab_type, on_select):
 
     view = Gtk.TreeView(model=store)
     view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    enable_ctrl_click_deselect(view)
 
     r0 = Gtk.CellRendererText()
     c0 = Gtk.TreeViewColumn("Profile", r0, text=0)
@@ -1443,7 +1449,7 @@ def show_recall_profile_dialog(app, tab_type, on_select):
     content.add(scroll)
 
     dlg.show_all()
-    response = dlg.run()
+    response = run_dialog(dlg)
 
     selected = None
     if response == Gtk.ResponseType.OK:

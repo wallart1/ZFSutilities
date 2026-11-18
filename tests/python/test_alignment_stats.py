@@ -841,6 +841,9 @@ class TestCollectAlignmentSample(unittest.TestCase):
         self.assertTrue(sample.prefetch_available)
         self.assertTrue(sample.objset_available)
         self.assertFalse(sample.pve_available)
+        # Single-node fixture with no PVE dir: the VM layer is absent by
+        # design, not a failed probe.
+        self.assertFalse(sample.pve_applicable)
         pool = sample.pools[0]
         self.assertEqual(pool.name, "fivebays")
         self.assertEqual(pool.ashift_effective, 12)
@@ -991,7 +994,62 @@ class TestCollectAlignmentSample(unittest.TestCase):
                 node_config_data=two_node,
             )
         self.assertFalse(sample.pve_available)
+        # The two-node site HAS a compute source; the fetch failed.
+        self.assertTrue(sample.pve_applicable)
         self.assertIn("rc=255", sample.pve_failure)
+
+    def test_pve_applicability_follows_site_shape(self):
+        """The VM layer applies only where a PVE source can exist.
+
+        A single-node host with no local PVE install has no VM layer by
+        design — not a probe failure. An existing conf dir (PVE
+        installed) or a two-node compute fetch target keeps the source
+        applicable; the GUI running on the compute host itself reads
+        locally, so it has no fetch target either.
+        """
+        arc_path, prefetch_path, kstat_root = self._kstats_dir()
+
+        def collect(conf_dir, config):
+            return als.collect_alignment_sample(
+                zfs_repo=_FakeZfsRepo(),
+                disk_repo=_FakeDiskRepo(),
+                arcstats_path=arc_path,
+                zfetchstats_path=prefetch_path,
+                pve_conf_dir=conf_dir,
+                kstat_dir=kstat_root,
+                node_config_data=config,
+            )
+
+        # Single-node, no PVE anywhere: absent by design.
+        sample = collect("/nonexistent-pve-dir", SINGLE_NODE_CONFIG)
+        self.assertFalse(sample.pve_applicable)
+        self.assertFalse(sample.pve_available)
+
+        # Same site shape, but the conf dir exists (PVE installed, zero
+        # VM configs): the source exists, so it stays applicable.
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = collect(tmp, SINGLE_NODE_CONFIG)
+        self.assertTrue(sample.pve_applicable)
+        self.assertFalse(sample.pve_available)
+
+        # GUI on the compute host of a two-node pair: local read only,
+        # no fetch target.
+        on_compute = dict(SINGLE_NODE_CONFIG, mode="two-node", compute_host="testhost")
+        sample = collect("/nonexistent-pve-dir", on_compute)
+        self.assertFalse(sample.pve_applicable)
+
+        # Storage host of a two-node pair: the compute node is a source.
+        two_node = {
+            "mode": "two-node",
+            "this_host": "stewie",
+            "storage_host": "stewie",
+            "compute_host": "tweety",
+            "pools": set(),
+        }
+        with patch("alignment_stats.fetch_pve_vm_options", return_value={}) as fetch:
+            sample = collect("/nonexistent-pve-dir", two_node)
+        self.assertTrue(sample.pve_applicable)
+        fetch.assert_called_once()
 
     def test_bypath_drops_recorded_in_sample(self):
         """By-path disk lines the local LIO map cannot resolve are recorded
@@ -1011,6 +1069,9 @@ class TestCollectAlignmentSample(unittest.TestCase):
                     node_config_data=SINGLE_NODE_CONFIG,
                 )
         self.assertFalse(sample.pve_available)
+        # The conf dir exists (PVE installed): applicable even though
+        # nothing parsed.
+        self.assertTrue(sample.pve_applicable)
         self.assertEqual(sample.pve_bypath_dropped, [TestPveParsing.BY_PATH_DEVICE])
 
     def test_guest_probe_targets_carry_serial_and_signatures(self):

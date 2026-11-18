@@ -21,7 +21,7 @@ gi.require_version("Gtk", "3.0")
 from disk_repository import classify_selftest_status
 from file_locking import surface_state_lock_read, surface_state_lock_write
 from gi.repository import Gtk
-from gui_helpers import bold_label, create_dialog, show_error_dialog
+from gui_helpers import bold_label, create_dialog, run_dialog, show_error_dialog
 from logging_config import log_msg
 from paths import get_surface_test_state_path
 
@@ -294,7 +294,7 @@ def show_surface_test_dialog(app, disk, entry, repo):
         )
         content.pack_start(status, False, False, 0)
         dialog.show_all()
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response == _RESPONSE_CANCEL_TEST:
             return "abort"
@@ -343,7 +343,7 @@ def show_surface_test_dialog(app, disk, entry, repo):
     )
     content.pack_start(warning, False, False, 0)
     dialog.show_all()
-    response = dialog.run()
+    response = run_dialog(dialog)
     selected = None
     for mode, radio in radio_by_mode.items():
         if radio.get_active():

@@ -442,6 +442,7 @@ class TestAlignmentRefreshingIndicator(_PageTestCase):
         with patch.object(ap.threading, "Thread"):
             ap.refresh_alignment_view(app)
         app.memory_refreshing_label.show.assert_called_once_with()
+        app.memory_refreshing_label.set_text.assert_called_with("Refreshing — Please be patient.")
         self.assertTrue(app._alignment_refresh_pending)
 
     def test_finish_hides_indicator(self):
@@ -613,6 +614,17 @@ class TestApplyAlignmentSample(_PageTestCase):
             vm_rows[-1][4],
             "PVE configs unreadable (local directory and compute-node fetch both failed)",
         )
+
+        # A site with no PVE at all: the honest detail names the absence,
+        # not a failed read.
+        sample = _sample(vm_disks={}, pve_available=False, pve_applicable=False)
+        ap._apply_alignment_sample(app, sample)
+        vm_rows = [
+            row.args[1]
+            for row in app._alignment_chain_store.insert.call_args_list
+            if row.args[1][1] == "VM"
+        ]
+        self.assertEqual(vm_rows[-1][4], "no PVE at this site")
 
     def test_chain_reconcile_removes_vanished_rows(self):
         _mp, ap, app = self._prepared()
@@ -794,6 +806,23 @@ class TestApplyAlignmentSample(_PageTestCase):
         self.assertIn("PVE VM configs", markup)
         self.assertNotIn("ARC kstats", markup)
         app._alignment_note.hide.assert_not_called()
+
+        # A site with no PVE at all: the VM layer is not a missing source.
+        sample = _sample(iostat_r_available=False, pve_available=False, pve_applicable=False)
+        ap._apply_alignment_sample(app, sample)
+        markup = app._alignment_note.set_markup.call_args[0][0]
+        self.assertIn("request-size histograms", markup)
+        self.assertNotIn("PVE VM configs", markup)
+
+    def test_no_pve_site_hides_note_entirely(self):
+        """Single-node site without PVE, all real sources healthy: the VM
+        layer is absent by design, so no note shows at all."""
+        _mp, ap, app = self._prepared()
+        # note_label() hides itself at construction; clear that history.
+        app._alignment_note.hide.reset_mock()
+        ap._apply_alignment_sample(app, _sample(pve_available=False, pve_applicable=False))
+        app._alignment_note.set_markup.assert_not_called()
+        app._alignment_note.hide.assert_called_once_with()
 
     def test_degrade_note_names_pools_with_dataset_read_failures(self):
         """Per-pool dataset failures are named, not treated as source-down."""

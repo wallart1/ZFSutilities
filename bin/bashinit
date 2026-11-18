@@ -196,7 +196,10 @@ function log_verb {
 # By default, when stderr is a terminal the message is emitted without the
 # file:line prefix for readability. Pass --long-prefix as the first argument
 # to force the file:line prefix even on a terminal. Non-terminal output and
-# session log files always use the long file:line prefix.
+# session log files always use the long file:line prefix. Session log lines
+# carry this host in a [hostname] tag right after the timestamp, so every
+# stored line names the host that wrote it; the GUI short-prefix display
+# strips the tag.
 # When the caller has no source file (e.g. a payload shipped over ssh as a
 # "bash -s" stdin script, whose top-level frames carry no BASH_SOURCE
 # entry), the long prefix falls back to "zfsutilities:" instead of aborting
@@ -244,16 +247,22 @@ function log_msg {
     fi
 
     # Append to session log file if one is configured and we own it.
-    # The log file always keeps the long file:line prefix.
+    # The log file always keeps the long file:line prefix, and every line
+    # carries this host in a [hostname] tag right after the timestamp so a
+    # line read anywhere names the host that wrote it.
     if [[ -n "${ZFSUTILITIES_LOG_FILE:-}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
         local _ts
         _ts=$(date '+%Y-%m-%d %H:%M:%S')
+        local _log_host="${HOSTNAME:-}"
+        if [[ -z "$_log_host" ]]; then
+            _log_host="$(hostname 2>/dev/null || printf 'localhost')"
+        fi
         local long_full="${long_prefix_str} $*"
         # stderr must be redirected BEFORE the append redirection is
         # evaluated: if the log file vanished (e.g. the uninstaller just
         # removed the log dir), bash reports the failed >> open to the
         # then-current stderr, escaping a trailing 2>/dev/null.
-        echo -e "${_ts}  ${long_full}" 2>/dev/null >> "${ZFSUTILITIES_LOG_FILE}" || true
+        echo -e "${_ts} [${_log_host}]  ${long_full}" 2>/dev/null >> "${ZFSUTILITIES_LOG_FILE}" || true
     fi
 }
 

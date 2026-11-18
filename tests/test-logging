@@ -213,6 +213,29 @@ test_log_msg_log_file_always_long_prefix() {
     unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
 }
 
+test_log_msg_log_file_carries_host_tag() {
+    test_start "log_msg session log lines carry the hostname in a bracket tag"
+    local logfile
+    logfile="$(mktemp)"
+    (
+        # Source the repo copy — ~/bashinit may point at another lane's tree.
+        source "$mydir/bin/bashinit"
+        export ZFSUTILITIES_LOG_INHERIT="Y"
+        bashinit
+        export ZFSUTILITIES_LOG_FILE="$logfile"
+        export ZFSUTILITIES_LOG_INHERIT="N"
+        __log_msg_terminal_p() { return 0; }
+        log_msg "INFO: tagged message"
+    ) >/dev/null 2>&1
+    local content
+    content="$(cat "$logfile")"
+    assert_contains "$content" "[${HOSTNAME}]"
+    assert_contains "$content" " [${HOSTNAME}]  "
+    assert_contains "$content" "INFO: tagged message"
+    rm -f "$logfile"
+    unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
+}
+
 test_log_msg_msg_level_gate_hides_below_gate() {
     test_start "ZFSUTILITIES_MSG_LEVEL gate hides below-gate messages on stderr"
     local stderr
@@ -373,6 +396,7 @@ test_log_msg_short_prefix_on_terminal
 test_log_msg_long_prefix_with_flag_on_terminal
 test_log_msg_long_prefix_off_terminal
 test_log_msg_log_file_always_long_prefix
+test_log_msg_log_file_carries_host_tag
 test_log_msg_msg_level_gate_hides_below_gate
 test_log_msg_msg_level_gate_invalid_is_noop
 test_log_msg_msg_level_gate_keeps_session_log

@@ -2163,3 +2163,55 @@ class TestOnDatasetsSeverClone(unittest.TestCase):
         logs = _complete(cancelled=False, rc=2)
         self.assertTrue(any("WARN: Sever clone failed (rc=2)" in line for line in logs))
         self.assertTrue(any("state file" in line for line in logs))
+
+
+# ---------------------------------------------------------------------------
+# Mount-order warning banner
+# ---------------------------------------------------------------------------
+
+
+class TestMountOrderWarning(unittest.TestCase):
+    """_update_ds_mount_order_warning shows the Dashboard pointer only with findings."""
+
+    def _app(self):
+        return SimpleNamespace(_ds_mount_order_warning=MagicMock())
+
+    def test_hidden_when_no_unreachable_mounts(self):
+        app = self._app()
+        with patch.object(dp, "find_unreachable_mounts", return_value=[]):
+            dp._update_ds_mount_order_warning(app)
+        app._ds_mount_order_warning.set_markup.assert_not_called()
+        app._ds_mount_order_warning.set_visible.assert_called_once_with(False)
+
+    def test_shown_with_count_and_dashboard_pointer(self):
+        app = self._app()
+        findings = [
+            {"name": "tank/a", "mountpoint": "/tank/a"},
+            {"name": "tank/b", "mountpoint": "/tank/b"},
+        ]
+        with patch.object(dp, "find_unreachable_mounts", return_value=findings):
+            dp._update_ds_mount_order_warning(app)
+        label = app._ds_mount_order_warning
+        markup = label.set_markup.call_args.args[0]
+        self.assertIn("2 mounted datasets", markup)
+        self.assertIn("Dashboard", markup)
+        self.assertIn("Repair Mount Order", markup)
+        label.set_visible.assert_called_once_with(True)
+
+    def test_singular_count_wording(self):
+        app = self._app()
+        with patch.object(
+            dp,
+            "find_unreachable_mounts",
+            return_value=[{"name": "tank/a", "mountpoint": "/tank/a"}],
+        ):
+            dp._update_ds_mount_order_warning(app)
+        markup = app._ds_mount_order_warning.set_markup.call_args.args[0]
+        self.assertIn("1 mounted dataset cannot", markup)
+        self.assertNotIn("datasets", markup)
+
+    def test_noop_without_label(self):
+        app = SimpleNamespace()
+        with patch.object(dp, "find_unreachable_mounts") as detector:
+            dp._update_ds_mount_order_warning(app)
+        detector.assert_not_called()

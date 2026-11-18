@@ -20,6 +20,7 @@ from logging_config import (
     NONE_LEVEL,
     format_log_line_short,
     format_log_text_short,
+    get_log_hostname,
     get_log_sink,
     log_msg,
     parse_msg_level,
@@ -128,6 +129,24 @@ class TestLogMsg(unittest.TestCase):
                 content = fh.read()
             self.assertIn("should appear", content)
             self.assertIn("logging_config.py:", content)
+            self.assertIn(f"[{get_log_hostname()}]", content)
+        finally:
+            os.unlink(path)
+
+    def test_log_msg_session_line_grammar(self):
+        """Stored lines are '{ts} [{host}]  {file}:{line}: {msg}'."""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+        try:
+            os.environ["ZFSUTILITIES_LOG_FILE"] = path
+            log_msg("INFO: grammar check")
+            with open(path) as fh:
+                content = fh.read()
+            self.assertRegex(
+                content,
+                r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} "
+                r"\[\S+\]  \S*test_logging_config\.py:\d+: INFO: grammar check\n$",
+            )
         finally:
             os.unlink(path)
 
@@ -202,6 +221,7 @@ class TestLogMsg(unittest.TestCase):
                 content = fh.read()
             self.assertIn("remote message", content)
             self.assertIn("/other/module.py:42:", content)
+            self.assertIn(f"[{get_log_hostname()}]", content)
             self.assertNotIn("logging_config.py", content)
         finally:
             os.unlink(path)
@@ -266,6 +286,7 @@ class TestLogMsg(unittest.TestCase):
                 content = fh.read()
             self.assertIn("INFO: logged message", content)
             self.assertIn(": INFO: logged message", content)
+            self.assertIn(f"[{get_log_hostname()}]", content)
         finally:
             os.unlink(path)
 
@@ -337,6 +358,14 @@ class TestParseMsgLevel(unittest.TestCase):
         line = "2026-06-21 13:00:00  /path/file:10: WARN: something"
         self.assertEqual(parse_msg_level(line), "WARN")
 
+    def test_parses_host_tagged_line(self):
+        line = "2026-06-21 13:00:00 [stewie]  /path/file:10: WARN: something"
+        self.assertEqual(parse_msg_level(line), "WARN")
+
+    def test_parses_host_tagged_line_without_location(self):
+        line = "2026-06-21 06:00:00 [tweety] INFO: Scheduled run started (cron)"
+        self.assertEqual(parse_msg_level(line), "INFO")
+
     def test_parses_non_timestamped_line(self):
         line = "/path/file:10: DEBUG: details"
         self.assertEqual(parse_msg_level(line), "DEBUG")
@@ -361,11 +390,19 @@ class TestParseMsgLevel(unittest.TestCase):
         )
         self.assertEqual(parse_msg_level(line), "VERB")
 
+    def test_parses_nested_prefixes_behind_host_tag(self):
+        line = (
+            "2026-07-03 10:48:33 [stewie] /usr/local/lib/zfsutilities/versions/0.59.4/"
+            "python/backup_runner.py:208: /usr/local/lib/zfsutilities/"
+            "versions/0.59.4/bin/zfs-send-receive:477: VERB: zfs send -cw -i ..."
+        )
+        self.assertEqual(parse_msg_level(line), "VERB")
+
 
 class TestFormatLogLineShort(unittest.TestCase):
     def test_strips_single_file_line_prefix(self):
         result = format_log_line_short("2026-06-21 13:00:00", "/path/file:10: INFO: hello")
-        self.assertEqual(result, "2026-06-21 13:00:00  INFO: hello")
+        self.assertEqual(result, "13:00:00  INFO: hello")
 
     def test_strips_nested_file_line_prefixes(self):
         message = (
@@ -374,36 +411,48 @@ class TestFormatLogLineShort(unittest.TestCase):
             "bin/zfs-send-receive:477: VERB: details"
         )
         result = format_log_line_short("2026-06-21 13:00:00", message)
-        self.assertEqual(result, "2026-06-21 13:00:00  VERB: details")
+        self.assertEqual(result, "13:00:00  VERB: details")
+
+    def test_strips_host_tag(self):
+        result = format_log_line_short("2026-06-21 13:00:00", "[stewie] /path/file:10: INFO: hi")
+        self.assertEqual(result, "13:00:00  INFO: hi")
 
     def test_leaves_raw_messages_unchanged(self):
         result = format_log_line_short("2026-06-21 13:00:00", "raw subprocess output")
-        self.assertEqual(result, "2026-06-21 13:00:00  raw subprocess output")
+        self.assertEqual(result, "13:00:00  raw subprocess output")
 
     def test_leaves_zfsutilities_prefix_unchanged(self):
         result = format_log_line_short("2026-06-21 13:00:00", "zfsutilities: marker text")
-        self.assertEqual(result, "2026-06-21 13:00:00  zfsutilities: marker text")
+        self.assertEqual(result, "13:00:00  zfsutilities: marker text")
 
 
 class TestFormatLogTextShort(unittest.TestCase):
     def test_strips_prefixes_from_timestamped_lines(self):
         text = "2026-06-21 10:00:00  /a:1: INFO: one\n2026-06-21 10:00:01  /b:2: WARN: two\n"
         result = format_log_text_short(text)
-        self.assertEqual(
-            result,
-            "2026-06-21 10:00:00  INFO: one\n2026-06-21 10:00:01  WARN: two\n",
-        )
+        self.assertEqual(result, "10:00:00  INFO: one\n10:00:01  WARN: two\n")
+
+    def test_drops_date_and_host_tag(self):
+        text = "2026-06-21 10:00:00 [stewie]  /a:1: INFO: one\n"
+        result = format_log_text_short(text)
+        self.assertEqual(result, "10:00:00  INFO: one\n")
+
+    def test_preserves_untimestamped_host_tagged_lines(self):
+        """rsync's own [host] lines keep their tag — it is the only location data."""
+        text = "[tweety] rsync: sent 12 bytes\n"
+        result = format_log_text_short(text)
+        self.assertEqual(result, "[tweety] rsync: sent 12 bytes\n")
 
     def test_preserves_raw_lines_without_prefix(self):
         text = "2026-06-21 10:00:00  /a:1: INFO: one\n2026-06-21 10:00:01  raw subprocess output\n"
         result = format_log_text_short(text)
-        self.assertIn("2026-06-21 10:00:01  raw subprocess output", result)
-        self.assertIn("2026-06-21 10:00:00  INFO: one", result)
+        self.assertIn("10:00:01  raw subprocess output", result)
+        self.assertIn("10:00:00  INFO: one", result)
 
     def test_preserves_end_trailer(self):
         text = "2026-06-21 10:00:00  /a:1: INFO: one\n# END: rc=0, duration=1.0s\n"
         result = format_log_text_short(text)
-        self.assertIn("2026-06-21 10:00:00  INFO: one", result)
+        self.assertIn("10:00:00  INFO: one", result)
         self.assertIn("# END: rc=0, duration=1.0s", result)
 
 
@@ -453,6 +502,7 @@ class TestTruncateSessionLog(unittest.TestCase):
             self.assertIn("START", content)
             self.assertIn("TAIL", content)
             self.assertIn("bytes omitted by log size cap", content)
+            self.assertIn(f"[{get_log_hostname()}]  zfsutilities:", content)
         finally:
             os.unlink(path)
 

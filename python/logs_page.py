@@ -42,7 +42,9 @@ from gui_helpers import (
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     restore_log_font_scale,
+    run_dialog,
     set_monospace_font,
 )
 from log_index import LogIndex
@@ -129,15 +131,21 @@ def _update_logs_path_label(app, path):
 # Supports both new format (type first) and legacy format (gui first).
 # Group 1: ISO date   e.g. "2026-05-11"
 # Group 2: Time       e.g. "16-42-30"
-# Group 3: Log type   e.g. "backup", "offsite", "gui"
+# Group 3: Log type   e.g. "backup", "offsite", "gui", "scrub"
 # Group 4: Base name  e.g. "gui", "profile-Daily", "offsite_backup"
 # Examples:
 #   "2026-05-11_16-42-30_backup_gui.log"              -> type=backup, name=gui
 #   "2026-05-11_16-42-30_offsite_profile-Weekly.log"  -> type=offsite, name=profile-Weekly
 #   "2026-05-11_16-42-30_gui_offsite_backup.log"      -> type=gui, name=offsite_backup (legacy)
+#   "2026-11-14_00-00-01_scrub_profile-monthly.log"   -> type=scrub, name=profile-monthly
+# Every profile tab type is core: the scheduled runners produce backup,
+# offsite, restore, retention, and scrub logs, and the GUI/BackupRunner
+# paths produce backup/offsite/restore/prune/dataset/gui logs.  A missing
+# type here would bury that tab's run logs in the Miscellaneous list, where
+# Dashboard "View Log" (main-list lookup only) cannot find them.
 _LOG_FILENAME_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_"
-    r"(backup|offsite|restore|prune|dataset|gui)_(.+)\.log$"
+    r"(backup|offsite|restore|prune|retention|scrub|dataset|gui)_(.+)\.log$"
 )
 
 # Regex: ^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_([A-Za-z0-9-]+)_(.+)\.log$
@@ -442,6 +450,7 @@ def create_logs_page(app):
     app.logs_view = Gtk.TreeView(model=app.logs_store)
     app.logs_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.logs_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(app.logs_view)
 
     _make_log_view_columns(
         app.logs_view,
@@ -468,6 +477,7 @@ def create_logs_page(app):
     app.logs_misc_view = Gtk.TreeView(model=app.logs_misc_store)
     app.logs_misc_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.logs_misc_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(app.logs_misc_view)
 
     _make_log_view_columns(
         app.logs_misc_view,
@@ -518,7 +528,7 @@ def create_logs_page(app):
     app.logs_short_prefix = True
     app._logs_short_prefix_toggle = Gtk.ToggleButton(label="Short prefix")
     app._logs_short_prefix_toggle.set_active(True)
-    app._logs_short_prefix_toggle.set_tooltip_text("Show only date and time in the log viewer")
+    app._logs_short_prefix_toggle.set_tooltip_text("Show only the time in the log viewer")
     app._logs_short_prefix_toggle.connect("toggled", _on_logs_short_prefix_toggled, app)
 
     viewer_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1054,7 +1064,7 @@ def _on_load_full_log_clicked(app):
                 f"may be slow or use a lot of memory. Continue?"
             ),
         )
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response != Gtk.ResponseType.YES:
             return
@@ -1269,7 +1279,7 @@ def _on_delete_selected(app):
         text=f"Delete {count} selected log files?",
     )
     dlg.format_secondary_text(f"{preview}\nThis cannot be undone.")
-    response = dlg.run()
+    response = run_dialog(dlg)
     dlg.destroy()
     if response != Gtk.ResponseType.YES:
         return

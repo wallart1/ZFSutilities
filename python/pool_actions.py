@@ -20,6 +20,8 @@ from gui_helpers import (
     configure_treeview_column,
     create_dialog,
     diagnose_dataset_busy,
+    enable_ctrl_click_deselect,
+    run_dialog,
     set_button_markup_red,
     set_page_tab_attention,
 )
@@ -181,7 +183,7 @@ def on_pools_add(app):
     content.add(entry)
 
     dialog.show_all()
-    response = dialog.run()
+    response = run_dialog(dialog)
     pool_name = entry.get_text().strip()
     dialog.destroy()
 
@@ -248,7 +250,7 @@ def _show_pool_import_details(app, pool_name, details):
     )
     add_scrolled_text_view(dialog.get_content_area(), details)
     dialog.show_all()
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 
@@ -281,7 +283,7 @@ def on_pools_import(app):
             buttons=Gtk.ButtonsType.YES_NO,
             text=f"Import {len(importable_selected)} selected pool(s)?",
         )
-        response = dlg.run()
+        response = run_dialog(dlg)
         dlg.destroy()
         if response == Gtk.ResponseType.YES:
             for pool_name in importable_selected:
@@ -310,7 +312,7 @@ def on_pools_import(app):
             buttons=Gtk.ButtonsType.OK,
             text=msg,
         )
-        dialog.run()
+        run_dialog(dialog)
         dialog.destroy()
         return
 
@@ -337,6 +339,7 @@ def on_pools_import(app):
 
     tree_view = Gtk.TreeView(model=list_store)
     tree_view.set_headers_visible(False)
+    enable_ctrl_click_deselect(tree_view)
     renderer = Gtk.CellRendererText()
     col = Gtk.TreeViewColumn("Pool", renderer, text=0)
     configure_treeview_column(col, width=150)
@@ -355,7 +358,7 @@ def on_pools_import(app):
 
     selected_pool = None
     while True:
-        response = dialog.run()
+        response = run_dialog(dialog)
         selection = tree_view.get_selection()
         model, tree_iter = selection.get_selected()
         if tree_iter:
@@ -398,7 +401,7 @@ def on_pools_export(app):
         "This will unload the pool(s). Any datasets or VMs using them will lose access. "
         "The pool(s) can be re-imported later."
     )
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
 
     if response != Gtk.ResponseType.YES:
@@ -448,7 +451,7 @@ def on_pools_remove(app):
         f"Pools: {names_str}\n"
         "This only removes them from the known pools list. It does not destroy the pools."
     )
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
 
     if response != Gtk.ResponseType.YES:
@@ -699,7 +702,7 @@ def _approve_and_stop_vms(app, blockers):
             f"VM {vmid} is running and preventing the pool export. "
             "Stopping it will shut the VM down."
         )
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response != Gtk.ResponseType.YES:
             return False
@@ -732,7 +735,7 @@ def _approve_and_remove_iscsi(app, blockers):
         dialog.format_secondary_text(
             f"{reason.detail} Removing it will disconnect any initiator using this LUN."
         )
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response != Gtk.ResponseType.YES:
             return False
@@ -800,7 +803,7 @@ def _approve_and_unshare(app, blockers, repo):
         dialog.format_secondary_text(
             f"{reason.detail} Disabling the share will disconnect any client using it."
         )
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response != Gtk.ResponseType.YES:
             return False
@@ -833,7 +836,7 @@ def _approve_and_terminate_processes(app, blockers):
             f"The following processes are using {mountpoint}:\n\n{proc_list}\n\n"
             "Terminating them may lose unsaved work in those applications."
         )
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response != Gtk.ResponseType.YES:
             return False
@@ -856,7 +859,7 @@ def _approve_and_terminate_processes(app, blockers):
             dialog2.format_secondary_text(
                 f"PIDs {', '.join(str(p) for p in survivors)} did not respond to SIGTERM."
             )
-            response2 = dialog2.run()
+            response2 = run_dialog(dialog2)
             dialog2.destroy()
             if response2 != Gtk.ResponseType.YES:
                 return False
@@ -895,7 +898,7 @@ def _show_export_blockers_dialog(app, pool, blockers):
         text="Pool export blocked",
     )
     dialog.format_secondary_text("\n".join(lines))
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 

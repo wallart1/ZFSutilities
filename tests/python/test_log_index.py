@@ -39,6 +39,21 @@ class TestScanFile(unittest.TestCase):
         self.assertEqual(entry["highest_level"], "WARN")
         self.assertTrue(entry["has_trailer"])
 
+    def test_parses_level_behind_host_tag(self):
+        """Host-tagged lines (post-hostname-law grammar) still level-parse."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "2026-06-22_07-00-00_backup_x.log",
+                "2026-06-22 07:00:00 [stewie]  /a:1: INFO: ok\n"
+                "2026-06-22 07:00:01 [stewie]  /a:1: WARN: host down\n"
+                "# END: rc=0, duration=1.0s\n",
+            )
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                entry = li.scan_file(path)
+        self.assertEqual(entry["highest_level"], "WARN")
+        self.assertEqual(entry["status"], "Done")
+
     def test_fatal_stops_level_scan_but_keeps_trailer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write(

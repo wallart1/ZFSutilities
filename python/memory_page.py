@@ -59,6 +59,7 @@ from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     note_label,
     reconcile_rows,
     section_header,
@@ -349,6 +350,7 @@ def _device_table(app, store_attr, columns, state_key, expand_index=None, header
     store = Gtk.ListStore(*([str] * len(columns)))
     view = Gtk.TreeView(model=store)
     view.set_headers_visible(True)
+    enable_ctrl_click_deselect(view)
     for index, (title, width) in enumerate(columns):
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title, renderer, text=index)
@@ -719,6 +721,11 @@ def _on_memory_refresh_changed(spin, app):
 _STALL_MULTIPLE = 3.0
 _STALL_MIN_SECONDS = 60.0
 
+# The shared indicator's two texts: plain for the fast charts sampling,
+# patient while the (slow) alignment gather is the in-flight refresh.
+_REFRESHING_TEXT = "Refreshing"
+_REFRESHING_PATIENT_TEXT = "Refreshing — Please be patient."
+
 
 def _show_memory_refreshing(app):
     """Mark one more in-flight refresh; show the 'Refreshing' indicator.
@@ -730,11 +737,22 @@ def _show_memory_refreshing(app):
     unconditional hide would let the quick charts sample drop it while
     the alignment gather is still running (Dashboard's single refresh
     path needs no such counting).
+
+    The text carries a patience suffix exactly while the alignment gather
+    is in flight (its pending flag is set before this helper runs on that
+    path); it is re-derived on every call so an overlapping charts show
+    cannot drop the suffix mid-gather.
     """
     count = getattr(app, "_memory_refresh_inflight", 0) + 1
     app._memory_refresh_inflight = count
-    if count == 1 and hasattr(app, "memory_refreshing_label"):
-        app.memory_refreshing_label.show()
+    if hasattr(app, "memory_refreshing_label"):
+        label = app.memory_refreshing_label
+        if getattr(app, "_alignment_refresh_pending", False):
+            set_text_if_changed(label, _REFRESHING_PATIENT_TEXT)
+        else:
+            set_text_if_changed(label, _REFRESHING_TEXT)
+        if count == 1:
+            label.show()
 
 
 def _hide_memory_refreshing(app):

@@ -1130,6 +1130,8 @@ class TestRunScrubProfile(unittest.TestCase):
                                 rc = profile_runner.run_scrub_profile(profile, config, "/bin")
                             self.assertEqual(rc, 0)
                             self.assertTrue(any("Scrub profile started" in msg for msg in logs))
+                            # A drained queue closes with "complete".
+                            self.assertTrue(any("Scrub profile complete" in msg for msg in logs))
             finally:
                 feature_config.SCRUB_STATE_PATH = orig_path
 
@@ -1240,11 +1242,14 @@ class TestRunScrubProfile(unittest.TestCase):
 
         Decided behavior (2026-10-04): the paused pools were never scrubbed,
         but a stop-waiting timeout is not a failed run — only the queue
-        giving up on pools produces FATAL/rc=1.
+        giving up on pools produces FATAL/rc=1. The WARN names the pools
+        that stay paused, and the idle clock only runs when no other
+        profile holds a lock (an empty lock dir here).
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             orig_path = feature_config.SCRUB_STATE_PATH
             feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            lock_dir = os.path.join(tmpdir, "profile_locks")
             try:
                 profile = {"config": {"pools": ["tank"], "simultaneous": 1}}
                 config = {}
@@ -1265,16 +1270,194 @@ class TestRunScrubProfile(unittest.TestCase):
                     mock_states.side_effect = fake_states
                     with patch.object(sm, "start_scrub", return_value=True):
                         with patch("profile_runner.time.sleep"):
-                            with capture_logs() as logs:
-                                rc = profile_runner.run_scrub_profile(profile, config, "/bin")
+                            with patch.object(profile_runner, "PROFILE_LOCK_DIR", lock_dir):
+                                with capture_logs() as logs:
+                                    rc = profile_runner.run_scrub_profile(profile, config, "/bin")
                 self.assertEqual(rc, 0)
                 self.assertTrue(
-                    any("WARN: Scrub profile timed out with paused pools" in msg for msg in logs)
+                    any("WARN: Scrub profile timed out; still paused: tank" in msg for msg in logs)
                 )
                 self.assertFalse(any("FATAL:" in msg for msg in logs))
-                self.assertTrue(any("Scrub profile complete" in msg for msg in logs))
+                # The timeout WARN is the closer: a "complete" line right
+                # after it would contradict itself (scrubs remain paused).
+                self.assertFalse(any("Scrub profile complete" in msg for msg in logs))
             finally:
                 feature_config.SCRUB_STATE_PATH = orig_path
+
+    def test_paused_wait_deferred_while_other_profile_runs(self):
+        """A held profile lock defers the paused-only timeout.
+
+        The 06:00 backup pauses scrubs for its own step window and resumes
+        them afterwards; while its profile lock is held the scrub profile
+        must NOT spend its idle budget (production 2026-11-15: the WARN
+        fired mid-window). Once the lock is released the ordinary timeout
+        applies.
+        """
+        import fcntl
+        import json as json_mod
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_path = feature_config.SCRUB_STATE_PATH
+            feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            lock_dir = os.path.join(tmpdir, "profile_locks")
+            os.makedirs(lock_dir)
+            lock_path = os.path.join(lock_dir, "root_backup_daily.lock")
+            with open(lock_path, "w") as fh:
+                fh.write(json_mod.dumps({"profile": "root-backup-daily", "pid": 999999}) + "\n")
+            holder = os.open(lock_path, os.O_RDWR)
+            try:
+                fcntl.flock(holder, fcntl.LOCK_EX)
+            except OSError:
+                os.close(holder)
+                holder = None
+            try:
+                profile = {"config": {"pools": ["tank"], "simultaneous": 1}}
+                config = {}
+                none = sm.ScrubInfo(state=sm.ScrubState.NONE)
+                scanning = sm.ScrubInfo(state=sm.ScrubState.SCANNING)
+                paused = sm.ScrubInfo(state=sm.ScrubState.PAUSED)
+                calls = {"n": 0}
+
+                def fake_states():
+                    calls["n"] += 1
+                    if calls["n"] == 1:
+                        return {"tank": none}
+                    if calls["n"] == 2:
+                        return {"tank": scanning}
+                    return {"tank": paused}
+
+                sleeps = {"n": 0}
+
+                def fake_sleep(_seconds):
+                    sleeps["n"] += 1
+                    # Release the backup's lock well past the 60-tick budget;
+                    # only the deferral keeps the loop alive to see it.
+                    if sleeps["n"] == 70 and holder is not None:
+                        fcntl.flock(holder, fcntl.LOCK_UN)
+
+                with patch("profile_runner.get_all_pool_scrub_states") as mock_states:
+                    mock_states.side_effect = fake_states
+                    with patch.object(sm, "start_scrub", return_value=True):
+                        with patch("profile_runner.time.sleep", side_effect=fake_sleep):
+                            with patch.object(profile_runner, "PROFILE_LOCK_DIR", lock_dir):
+                                with capture_logs() as logs:
+                                    rc = profile_runner.run_scrub_profile(profile, config, "/bin")
+                self.assertEqual(rc, 0)
+                self.assertTrue(
+                    any(
+                        "INFO: Waiting on paused scrubs; another profile running" in msg
+                        for msg in logs
+                    )
+                )
+                self.assertTrue(
+                    any("WARN: Scrub profile timed out; still paused: tank" in msg for msg in logs)
+                )
+                # The lock was held for 70 ticks — a counting loop would have
+                # bailed at 60. The WARN only exists because the deferral ran.
+                self.assertGreaterEqual(sleeps["n"], 70)
+            finally:
+                if holder is not None:
+                    try:
+                        fcntl.flock(holder, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                    os.close(holder)
+                feature_config.SCRUB_STATE_PATH = orig_path
+
+    def test_scrub_messages_written_once_to_session_log(self):
+        """Scrub-profile messages land in the session log exactly once.
+
+        Regression: _scrub_log used to add a second raw line (no file:line
+        prefix) on top of log_msg's context-managed write, so every
+        message appeared twice in the session log.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_path = feature_config.SCRUB_STATE_PATH
+            feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            log_path = os.path.join(tmpdir, "session.log")
+            try:
+                profile = {"config": {"pools": ["tank"], "simultaneous": 1}}
+                config = {}
+                none = sm.ScrubInfo(state=sm.ScrubState.NONE)
+                finished = sm.ScrubInfo(state=sm.ScrubState.FINISHED)
+                calls = {"n": 0}
+
+                def fake_states():
+                    calls["n"] += 1
+                    if calls["n"] == 1:
+                        return {"tank": none}
+                    if calls["n"] == 2:
+                        return {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+                    return {"tank": finished}
+
+                env = {
+                    "ZFSUTILITIES_LOG_FILE": log_path,
+                }
+                with patch("profile_runner.get_all_pool_scrub_states") as mock_states:
+                    mock_states.side_effect = fake_states
+                    with patch.object(sm, "start_scrub", return_value=True):
+                        with patch("profile_runner.time.sleep"):
+                            with patch.dict(os.environ, env):
+                                with capture_logs():
+                                    rc = profile_runner.run_scrub_profile(
+                                        profile, config, "/bin", session_log_file=log_path
+                                    )
+                self.assertEqual(rc, 0)
+                with open(log_path) as fh:
+                    lines = fh.read().splitlines()
+                for needle in ("Scrub profile started on", "Scrub profile complete"):
+                    hits = [line for line in lines if needle in line]
+                    self.assertEqual(len(hits), 1, f"{needle!r} written {len(hits)}x: {hits}")
+                    self.assertIn("profile_runner.py:", hits[0])
+            finally:
+                feature_config.SCRUB_STATE_PATH = orig_path
+
+    def test_other_profile_locks_held_truth_table(self):
+        """_other_profile_locks_held: held / free / stale / self."""
+        import fcntl
+        import json as json_mod
+
+        with tempfile.TemporaryDirectory() as lock_dir:
+            with patch.object(profile_runner, "PROFILE_LOCK_DIR", lock_dir):
+                # Empty (or missing) directory: nothing held.
+                self.assertFalse(profile_runner._other_profile_locks_held())
+
+                # Foreign lock file, unlocked: not held.
+                free_path = os.path.join(lock_dir, "free.lock")
+                with open(free_path, "w") as fh:
+                    fh.write(json_mod.dumps({"pid": 999999}) + "\n")
+                self.assertFalse(profile_runner._other_profile_locks_held())
+
+                # Held by a foreign holder (this test process holds the lock
+                # on its own fd; the probe's fresh fd must fail against it).
+                held_path = os.path.join(lock_dir, "held.lock")
+                with open(held_path, "w") as fh:
+                    fh.write(json_mod.dumps({"pid": 999999}) + "\n")
+                fd = os.open(held_path, os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    self.assertTrue(profile_runner._other_profile_locks_held())
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+
+                # Metadata naming THIS pid is skipped even when locked.
+                self_path = os.path.join(lock_dir, "self.lock")
+                with open(self_path, "w") as fh:
+                    fh.write(json_mod.dumps({"pid": os.getpid()}) + "\n")
+                fd = os.open(self_path, os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    self.assertFalse(profile_runner._other_profile_locks_held())
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+
+                # Unparseable metadata, unlocked: not held.
+                stale_path = os.path.join(lock_dir, "stale.lock")
+                with open(stale_path, "w") as fh:
+                    fh.write("not json\n")
+                self.assertFalse(profile_runner._other_profile_locks_held())
 
 
 class TestRunStepList(unittest.TestCase):
@@ -2464,9 +2647,10 @@ class TestCronBreadcrumbs(unittest.TestCase):
     )
 
     # A breadcrumb is a stamped INFO line: the format the log viewers'
-    # timestamp and level parsing already understand.
+    # timestamp and level parsing already understand. The bracketed host tag
+    # names the host that wrote the breadcrumb.
     _BREADCRUMB_RE = re.compile(
-        r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO: Scheduled run (started|finished) \(cron\): "
+        r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[\S+\] INFO: Scheduled run (started|finished) \(cron\): "
     )
 
     def _run_main_subprocess(self, tmp, from_cron):

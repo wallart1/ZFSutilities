@@ -555,6 +555,18 @@ class TestVMFindings(unittest.TestCase):
         self.assertIn("could not be read", rows[0].message)
         self.assertIn("compute-node fetch", rows[0].message)
 
+    def test_pve_not_applicable_site_stays_silent(self):
+        """A single-node site without PVE has no VM layer to check — no
+        unreadable finding, even for vm-shaped volumes."""
+        sample = _sample(
+            pools=[_pool(ashift=12)],
+            datasets=[_vol("fivebays/vm-201-disk-0")],
+            pve=False,
+        )
+        sample.pve_applicable = False
+        rows = _findings_for(sample, layer="VM")
+        self.assertEqual(rows, [])
+
     def test_guest_fs_below_volblock_warns(self):
         sample = _sample(
             pools=[_pool(ashift=12)],

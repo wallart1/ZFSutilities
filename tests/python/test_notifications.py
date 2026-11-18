@@ -3,6 +3,7 @@
 import os
 import smtplib
 import stat
+import subprocess
 import sys
 import threading
 import unittest
@@ -321,7 +322,7 @@ class TestDesktopCommand(unittest.TestCase):
 
 
 class TestResolveDesktopUser(unittest.TestCase):
-    """User resolution prefers the override/SUDO_USER, then the X11 socket."""
+    """User resolution: override, PKEXEC_UID, SUDO_USER, loginctl, X11 socket."""
 
     def test_sudo_user_with_live_bus_wins(self):
         pw = MagicMock()
@@ -329,15 +330,142 @@ class TestResolveDesktopUser(unittest.TestCase):
         pw.pw_name = "dan"
         with (
             patch_environ(
-                SUDO_USER="dan", DISPLAY=":0", ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None
+                SUDO_USER="dan",
+                DISPLAY=":0",
+                PKEXEC_UID=None,
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
             ),
             patch("notifications.pwd.getpwnam", return_value=pw) as mock_pwnam,
             patch("notifications.os.path.exists", return_value=True),
+            patch("notifications._loginctl_graphical_user", return_value=None),
         ):
             self.assertEqual(
                 notifications._resolve_desktop_user(), ("dan", "/run/user/1000/bus", ":0")
             )
         mock_pwnam.assert_called_once_with("dan")
+
+    def test_pkexec_uid_with_live_bus_wins(self):
+        pw = MagicMock()
+        pw.pw_uid = 1000
+        pw.pw_name = "dan"
+        with (
+            patch_environ(
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID="1000",
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
+            ),
+            patch("notifications.pwd.getpwuid", return_value=pw) as mock_pwuid,
+            patch("notifications.os.path.exists", return_value=True),
+            patch("notifications._loginctl_graphical_user", return_value=None),
+        ):
+            self.assertEqual(
+                notifications._resolve_desktop_user(), ("dan", "/run/user/1000/bus", ":0")
+            )
+        mock_pwuid.assert_called_once_with(1000)
+
+    def test_root_pkexec_uid_is_ignored(self):
+        # pkexec launched by root sets PKEXEC_UID=0; that is not a desktop user.
+        pw = MagicMock()
+        pw.pw_uid = 0
+        pw.pw_name = "root"
+        with (
+            patch_environ(
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID="0",
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
+            ),
+            patch("notifications.pwd.getpwuid", return_value=pw) as mock_pwuid,
+            patch("notifications.os.path.exists", return_value=True),
+            patch("notifications._loginctl_graphical_user", return_value=None),
+            patch("notifications.os.stat", side_effect=OSError("no socket")),
+        ):
+            self.assertIsNone(notifications._resolve_desktop_user())
+        mock_pwuid.assert_not_called()
+
+    def test_pkexec_uid_without_bus_falls_through_to_loginctl(self):
+        pkexec_pw = MagicMock()
+        pkexec_pw.pw_uid = 1000
+        pkexec_pw.pw_name = "dan"
+        loginctl_pw = MagicMock()
+        loginctl_pw.pw_uid = 1001
+        loginctl_pw.pw_name = "desk"
+
+        def exists(path):
+            return path == "/run/user/1001/bus"
+
+        with (
+            patch_environ(
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID="1000",
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
+            ),
+            patch("notifications.pwd.getpwuid", return_value=pkexec_pw) as mock_pwuid,
+            patch("notifications.pwd.getpwnam", return_value=loginctl_pw),
+            patch("notifications.os.path.exists", side_effect=exists),
+            patch(
+                "notifications._loginctl_graphical_user", return_value=("desk", 1001)
+            ) as mock_loginctl,
+            patch("notifications.os.stat", side_effect=OSError("no socket")),
+        ):
+            self.assertEqual(
+                notifications._resolve_desktop_user(), ("desk", "/run/user/1001/bus", ":0")
+            )
+        mock_pwuid.assert_called_once_with(1000)
+        mock_loginctl.assert_called_once_with()
+
+    def test_loginctl_session_used_when_no_launch_hints(self):
+        pw = MagicMock()
+        pw.pw_uid = 1000
+        pw.pw_name = "dan"
+        with (
+            patch_environ(
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID=None,
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
+            ),
+            patch("notifications.pwd.getpwnam", return_value=pw) as mock_pwnam,
+            patch("notifications.os.path.exists", return_value=True),
+            patch(
+                "notifications._loginctl_graphical_user", return_value=("dan", 1000)
+            ) as mock_loginctl,
+            patch("notifications.os.stat", side_effect=OSError("no socket")),
+        ):
+            self.assertEqual(
+                notifications._resolve_desktop_user(), ("dan", "/run/user/1000/bus", ":0")
+            )
+        mock_pwnam.assert_called_once_with("dan")
+        mock_loginctl.assert_called_once_with()
+
+    def test_override_beats_pkexec_uid_and_loginctl(self):
+        override_pw = MagicMock()
+        override_pw.pw_uid = 1000
+        override_pw.pw_name = "dan"
+        other_pw = MagicMock()
+        other_pw.pw_uid = 1001
+        other_pw.pw_name = "desk"
+        with (
+            patch_environ(
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID="1001",
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER="dan",
+            ),
+            patch("notifications.pwd.getpwnam", return_value=override_pw) as mock_pwnam,
+            patch("notifications.pwd.getpwuid", return_value=other_pw),
+            patch("notifications.os.path.exists", return_value=True),
+            patch(
+                "notifications._loginctl_graphical_user", return_value=("desk", 1001)
+            ) as mock_loginctl,
+        ):
+            self.assertEqual(
+                notifications._resolve_desktop_user(), ("dan", "/run/user/1000/bus", ":0")
+            )
+        mock_pwnam.assert_called_once_with("dan")
+        mock_loginctl.assert_not_called()
 
     def test_sudo_user_without_bus_falls_through_to_socket(self):
         sudo_pw = MagicMock()
@@ -354,12 +482,46 @@ class TestResolveDesktopUser(unittest.TestCase):
         stat_result.st_uid = 1001
         with (
             patch_environ(
-                SUDO_USER="dan", DISPLAY=":0", ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None
+                SUDO_USER="dan",
+                DISPLAY=":0",
+                PKEXEC_UID=None,
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
             ),
             patch("notifications.pwd.getpwnam", return_value=sudo_pw),
             patch("notifications.os.path.exists", side_effect=exists),
             patch("notifications.os.stat", return_value=stat_result),
             patch("notifications.pwd.getpwuid", return_value=owner_pw),
+            patch("notifications._loginctl_graphical_user", return_value=None),
+        ):
+            self.assertEqual(
+                notifications._resolve_desktop_user(), ("desk", "/run/user/1001/bus", ":0")
+            )
+
+    def test_loginctl_candidate_without_bus_falls_to_socket(self):
+        loginctl_pw = MagicMock()
+        loginctl_pw.pw_uid = 1000
+        loginctl_pw.pw_name = "dan"
+        owner_pw = MagicMock()
+        owner_pw.pw_uid = 1001
+        owner_pw.pw_name = "desk"
+
+        def exists(path):
+            return path == "/run/user/1001/bus"
+
+        stat_result = MagicMock()
+        stat_result.st_uid = 1001
+        with (
+            patch_environ(
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID=None,
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
+            ),
+            patch("notifications.pwd.getpwnam", return_value=loginctl_pw),
+            patch("notifications.os.path.exists", side_effect=exists),
+            patch("notifications.os.stat", return_value=stat_result),
+            patch("notifications.pwd.getpwuid", return_value=owner_pw),
+            patch("notifications._loginctl_graphical_user", return_value=("dan", 1000)),
         ):
             self.assertEqual(
                 notifications._resolve_desktop_user(), ("desk", "/run/user/1001/bus", ":0")
@@ -368,8 +530,12 @@ class TestResolveDesktopUser(unittest.TestCase):
     def test_no_socket_means_no_session(self):
         with (
             patch_environ(
-                SUDO_USER=None, DISPLAY=":0", ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID=None,
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
             ),
+            patch("notifications._loginctl_graphical_user", return_value=None),
             patch("notifications.os.stat", side_effect=OSError("no socket")),
         ):
             self.assertIsNone(notifications._resolve_desktop_user())
@@ -379,11 +545,113 @@ class TestResolveDesktopUser(unittest.TestCase):
         stat_result.st_uid = 0
         with (
             patch_environ(
-                SUDO_USER=None, DISPLAY=":0", ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None
+                SUDO_USER=None,
+                DISPLAY=":0",
+                PKEXEC_UID=None,
+                ZFSUTILITIES_NOTIFICATION_DESKTOP_USER=None,
             ),
+            patch("notifications._loginctl_graphical_user", return_value=None),
             patch("notifications.os.stat", return_value=stat_result),
         ):
             self.assertIsNone(notifications._resolve_desktop_user())
+
+
+class TestLoginctlGraphicalUser(unittest.TestCase):
+    """_loginctl_graphical_user picks the active graphical loginctl session."""
+
+    @staticmethod
+    def _proc(stdout="", returncode=0):
+        proc = MagicMock()
+        proc.stdout = stdout
+        proc.returncode = returncode
+        return proc
+
+    @staticmethod
+    def _loginctl_run(listing, shows=None, errors=None):
+        """subprocess.run side_effect keyed on the exact loginctl argv."""
+        shows = shows or {}
+        errors = errors or {}
+
+        def run(command, **_kwargs):
+            if command[:3] == ["loginctl", "list-sessions", "--no-legend"]:
+                if "list" in errors:
+                    raise errors["list"]
+                return TestLoginctlGraphicalUser._proc(listing)
+            if command[:2] == ["loginctl", "show-session"]:
+                session_id = command[2]
+                if session_id in errors:
+                    raise errors[session_id]
+                return TestLoginctlGraphicalUser._proc(shows.get(session_id, ""))
+            raise AssertionError(f"unexpected command: {command}")
+
+        return run
+
+    def test_active_graphical_session_found(self):
+        listing = "3 0 root seat0 - ...\nc2 1000 dan seat0 tty7 ...\n"
+        shows = {
+            "3": "Class=user\nState=online\nType=x11\n",
+            "c2": "Class=user\nState=active\nType=x11\n",
+        }
+        with patch(
+            "notifications.subprocess.run",
+            side_effect=self._loginctl_run(listing, shows),
+        ) as mock_run:
+            self.assertEqual(notifications._loginctl_graphical_user(), ("dan", 1000))
+        list_calls = [
+            c
+            for c in mock_run.call_args_list
+            if c.args[0][:3] == ["loginctl", "list-sessions", "--no-legend"]
+        ]
+        self.assertEqual(len(list_calls), 1)
+
+    def test_wayland_session_accepted(self):
+        listing = "c2 1000 dan seat0 - ...\n"
+        shows = {"c2": "Class=user\nState=active\nType=wayland\n"}
+        with patch(
+            "notifications.subprocess.run",
+            side_effect=self._loginctl_run(listing, shows),
+        ):
+            self.assertEqual(notifications._loginctl_graphical_user(), ("dan", 1000))
+
+    def test_non_graphical_or_inactive_sessions_skipped(self):
+        listing = "a 1000 dan - tty1 ...\nb 1001 eve seat0 tty7 ...\nc 1002 mal seat0 tty8 ...\n"
+        shows = {
+            "a": "Class=user\nState=active\nType=tty\n",
+            "b": "Class=user\nState=online\nType=x11\n",
+            "c": "Class=greeter\nState=active\nType=x11\n",
+        }
+        with patch(
+            "notifications.subprocess.run",
+            side_effect=self._loginctl_run(listing, shows),
+        ):
+            self.assertIsNone(notifications._loginctl_graphical_user())
+
+    def test_root_session_skipped(self):
+        listing = "3 0 root seat0 tty7 ...\n"
+        shows = {"3": "Class=user\nState=active\nType=x11\n"}
+        with patch(
+            "notifications.subprocess.run",
+            side_effect=self._loginctl_run(listing, shows),
+        ) as mock_run:
+            self.assertIsNone(notifications._loginctl_graphical_user())
+        self.assertEqual(len(mock_run.call_args_list), 1)
+
+    def test_show_session_failure_skips_to_next_session(self):
+        listing = "a 1000 dan seat0 tty7 ...\nb 1001 eve seat0 tty8 ...\n"
+        shows = {"b": "Class=user\nState=active\nType=wayland\n"}
+        errors = {"a": subprocess.TimeoutExpired(cmd="loginctl", timeout=5)}
+        with patch(
+            "notifications.subprocess.run",
+            side_effect=self._loginctl_run(listing, shows, errors),
+        ):
+            self.assertEqual(notifications._loginctl_graphical_user(), ("eve", 1001))
+
+    def test_missing_loginctl_binary_degrades_to_none(self):
+        with patch(
+            "notifications.subprocess.run",
+            side_effect=OSError("no loginctl"),
+        ):
+            self.assertIsNone(notifications._loginctl_graphical_user())
 
 
 class TestDesktopDelivery(unittest.TestCase):

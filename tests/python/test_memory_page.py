@@ -1040,6 +1040,30 @@ class TestRefreshingIndicator(unittest.TestCase):
         mp._hide_memory_refreshing(app)
         app.memory_refreshing_label.hide.assert_called_once_with()
 
+    def test_patient_suffix_follows_alignment_gather(self):
+        """The indicator reads 'Refreshing — Please be patient.' exactly
+        while the alignment gather is in flight; charts-only refreshes
+        keep the plain 'Refreshing'."""
+        mp = self._module()
+        app = _make_app()
+        app._memory_refresh_inflight = 0
+
+        # The alignment gather sets its pending flag before showing, so
+        # its own show call already carries the patience suffix.
+        app._alignment_refresh_pending = True
+        mp._show_memory_refreshing(app)
+        app.memory_refreshing_label.set_text.assert_called_with("Refreshing — Please be patient.")
+
+        # An overlapping charts show must not drop the suffix mid-gather.
+        app.memory_refreshing_label.get_text.return_value = "Refreshing — Please be patient."
+        mp._show_memory_refreshing(app)
+        app.memory_refreshing_label.set_text.assert_called_with("Refreshing — Please be patient.")
+
+        # The gather finishes; a charts-only show reverts to plain text.
+        app._alignment_refresh_pending = False
+        mp._show_memory_refreshing(app)
+        app.memory_refreshing_label.set_text.assert_called_with("Refreshing")
+
     def test_overlapping_refreshes_keep_indicator_up(self):
         """Two in-flight refreshes share the label: whichever finishes
         first must not drop it while the other is still running."""

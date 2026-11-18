@@ -82,6 +82,16 @@ zfslock_release() { true; }
 zfslock_release_all() { true; }
 EOF
 
+# retain() sources the real property-manifest-lib.sh for the store sweep;
+# stub it so the hook is observable without the library's own mocks (the
+# lib's behavior is covered by test-property-manifest-lib).
+cat > "$mock_mydir/property-manifest-lib.sh" << 'EOF'
+propmanifest_prune_files() {
+    _mock_propmanifest_prunes+=("$1")
+    printf 'sweep:%s\n' "$1" >> "$_mock_op_seq_file"
+}
+EOF
+
 source "$old_mydir/bin/zfsretain"
 
 # Wrap test-lib's zfs mock to record snapshot enumerations in the shared
@@ -106,10 +116,12 @@ zfs() {
 # Reset mocks between tests
 declare -A _mock_preview_gate_keep_snaps=()
 declare -a _mock_op_seq=()
+_mock_propmanifest_prunes=()
 reset_mocks() {
     _mock_delsnap_calls=()
     _mock_delsnap_minages=()
     _mock_delsnap_tags=()
+    _mock_propmanifest_prunes=()
     _mock_preview_gate_calls=()
     _mock_preview_gate_keep_snaps=()
     _mock_preview_gate_reason=""
@@ -977,6 +989,53 @@ test_verb_messages_disabled() {
 # Main
 # =============================================================================
 
+test_manifest_store_swept_under_lock() {
+    echo "=== Manifest store: file sweep runs under the write lock ==="
+    reset_mocks
+    mock_retention_policy() {
+        echo "bktname[0]='d'; bktretain[0]=7; minage[0]=0"
+    }
+    mock_zfs_snap_list_creation ""
+    mock_zfs_snap_list ""
+    retain "backup/tank/zfsutilities-manifests" "dailybackup"
+    test_start "Sweeps a manifest store's files"
+    if [[ "${_mock_propmanifest_prunes[*]}" == *"backup/tank/zfsutilities-manifests"* ]]; then
+        test_pass
+    else
+        test_fail "Expected store sweep, got: ${_mock_propmanifest_prunes[*]}"
+    fi
+
+    test_start "Sweep runs after lock acquisition"
+    local _seq _lock_line _sweep_line
+    _seq=$(cat "$_mock_op_seq_file")
+    _lock_line=$(printf '%s\n' "$_seq" \
+        | grep -n "^lock:backup/tank/zfsutilities-manifests$" | head -1 | cut -d: -f1)
+    _sweep_line=$(printf '%s\n' "$_seq" \
+        | grep -n "^sweep:backup/tank/zfsutilities-manifests$" | head -1 | cut -d: -f1)
+    if [[ -n "$_lock_line" && -n "$_sweep_line" && "$_sweep_line" -gt "$_lock_line" ]]; then
+        test_pass
+    else
+        test_fail "Expected lock (line $_lock_line) before sweep (line $_sweep_line)"
+    fi
+}
+
+test_non_store_dataset_not_swept() {
+    echo "=== Manifest store: ordinary datasets are not swept ==="
+    reset_mocks
+    mock_retention_policy() {
+        echo "bktname[0]='d'; bktretain[0]=7; minage[0]=0"
+    }
+    mock_zfs_snap_list_creation ""
+    mock_zfs_snap_list ""
+    retain "pool/fs" "dailybackup"
+    test_start "No sweep for a non-store dataset"
+    if [[ ${#_mock_propmanifest_prunes[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Unexpected store sweep: ${_mock_propmanifest_prunes[*]}"
+    fi
+}
+
 main() {
     test_phase1_same_day
     test_phase1_same_day_interleaved
@@ -1006,6 +1065,8 @@ main() {
     test_releaseholds_tags_default
     test_verb_messages_enabled
     test_verb_messages_disabled
+    test_manifest_store_swept_under_lock
+    test_non_store_dataset_not_swept
     mydir="$old_mydir"
     rm -rf "$mock_mydir"
     teardown_test_env

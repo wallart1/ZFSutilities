@@ -221,8 +221,8 @@ class TestLogMessageDisplayFilter(unittest.TestCase):
         window, buf = self._make_window()
         window.log_message(self._prefix("INFO: one"))
         inserted = buf.insert.call_args[0][1]
-        self.assertIn("2026-", inserted)
-        self.assertIn("INFO: one", inserted)
+        # Short prefix shows time only — no date, no host tag, no location.
+        self.assertRegex(inserted, r"^\d{2}:\d{2}:\d{2}  INFO: one")
         self.assertNotIn("/path/file:10:", inserted)
 
     def test_long_prefix_shows_file_line(self):

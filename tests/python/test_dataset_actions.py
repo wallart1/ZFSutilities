@@ -2687,7 +2687,7 @@ class TestBrowse(unittest.TestCase):
             warning = "".join(str(c) for c in mock_log.call_args_list if "WARN" in str(c))
             self.assertIn("Cannot browse tank/vm-100: /tank/vm-100 is not reachable", warning)
             self.assertIn("orphaned or shadowed mount", warning)
-            self.assertIn("Run Repair Mount Order on tank/vm-100", warning)
+            self.assertIn("Run Repair Mount Order from the Dashboard", warning)
 
     def test_refuses_snapshot_with_unmounted_parent(self):
         da = self._import_under_mock()
@@ -2738,7 +2738,7 @@ class TestBrowse(unittest.TestCase):
             mock_subprocess.Popen.assert_not_called()
             warning = "".join(str(c) for c in mock_log.call_args_list if "WARN" in str(c))
             self.assertIn("Cannot browse tank/vm-100@snap1", warning)
-            self.assertIn("Run Repair Mount Order on tank/vm-100", warning)
+            self.assertIn("Run Repair Mount Order from the Dashboard", warning)
 
 
 class TestDeleteSnapshots(unittest.TestCase):
@@ -4766,45 +4766,6 @@ class TestMountRepair(unittest.TestCase):
             mock_dialog.return_value.run.return_value = da.Gtk.ResponseType.YES
             approved = da._confirm_mount_repair(app, self._plan())
         self.assertTrue(approved)
-
-    def test_on_datasets_repair_mount_order_is_selection_scoped(self):
-        da = self._import_under_mock()
-        app = self._make_app()
-        with (
-            patch.object(
-                da,
-                "get_tree_selection_items",
-                return_value=[
-                    {
-                        "type": "dataset",
-                        "name": "tank/proxmox",
-                        "zfs_type": "filesystem",
-                        "mounted": True,
-                    }
-                ],
-            ),
-            patch.object(da, "run_mount_repair", return_value=True) as mock_run,
-            patch.object(da, "refresh_datasets_page") as mock_refresh,
-        ):
-            da.on_datasets_repair_mount_order(app)
-        mock_run.assert_called_once_with(app, scope="tank/proxmox")
-        mock_refresh.assert_called_once_with(app)
-
-    def test_on_datasets_repair_mount_order_requires_single_filesystem(self):
-        da = self._import_under_mock()
-        app = self._make_app()
-        items = [
-            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
-            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem", "mounted": True},
-        ]
-        with (
-            patch.object(da, "get_tree_selection_items", return_value=items),
-            patch.object(da, "run_mount_repair") as mock_run,
-            patch.object(da, "log_msg") as mock_log,
-        ):
-            da.on_datasets_repair_mount_order(app)
-        mock_run.assert_not_called()
-        self.assertTrue(any("single filesystem" in c.args[0] for c in mock_log.call_args_list))
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ from gui_helpers import (
     get_snapshot_mountpoint,
     get_tree_selection_items,
     reload_row_children,
+    run_dialog,
 )
 from runner_factory import new_dataset_action_runner
 from zfs_repository import (
@@ -86,7 +87,7 @@ def _input_dialog(parent, title, widgets, default="", tooltip=None):
         entry.set_tooltip_text(tooltip)
     content.add(entry)
     dialog.show_all()
-    response = dialog.run()
+    response = run_dialog(dialog)
     text = entry.get_text().strip()
     dialog.destroy()
     return response, text
@@ -102,7 +103,7 @@ def _confirm_yes_no(parent, primary, secondary):
         text=primary,
     )
     dialog.format_secondary_text(secondary)
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     return response == Gtk.ResponseType.YES
 
@@ -326,7 +327,7 @@ def _delete_datasets(app, datasets):
     add_scrolled_text_view(content, body, min_height=250)
 
     dialog.show_all()
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     if response != Gtk.ResponseType.OK:
         return
@@ -553,17 +554,18 @@ def on_datasets_show_big_stuff(app):
     runner.start()
 
 
-def _warn_browse_unreachable(target, repair_dataset, path):
+def _warn_browse_unreachable(target, path):
     """Refuse a browse whose *path* does not exist despite mounted=yes.
 
     The kernel still lists the dataset as mounted, but its mountpoint cannot
     be reached — an orphaned or shadowed mount. Launching the file manager
-    would open nothing while logging success, so point at the repair action.
+    would open nothing while logging success, so point at the Dashboard's
+    repair action.
     """
     log_msg(
         f"WARN: Cannot browse {target}: {path} is not reachable even though "
         "the dataset is mounted (an orphaned or shadowed mount). "
-        f"Run Repair Mount Order on {repair_dataset}, then browse."
+        "Run Repair Mount Order from the Dashboard, then browse."
     )
 
 
@@ -591,7 +593,7 @@ def on_datasets_browse(app):
                 )
                 return
             if not os.path.isdir(mountpoint):
-                _warn_browse_unreachable(dataset, dataset, mountpoint)
+                _warn_browse_unreachable(dataset, mountpoint)
                 return
             subprocess.Popen(["xdg-open", mountpoint])
             log_msg(f"VERB: Opened {mountpoint}")
@@ -610,7 +612,7 @@ def on_datasets_browse(app):
                 return
             path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
             if not os.path.isdir(path):
-                _warn_browse_unreachable(full_snap, item["dataset"], path)
+                _warn_browse_unreachable(full_snap, path)
                 return
             subprocess.Popen(["xdg-open", path])
             log_msg(f"VERB: Browsing snapshot {full_snap}")
@@ -856,7 +858,7 @@ def _offer_snapshot_parent_mounts(snap_items, repo, app):
     add_scrolled_text_view(content, "\n".join(lines), min_height=150)
 
     dialog.show_all()
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     if response != Gtk.ResponseType.OK:
         return
@@ -1302,7 +1304,7 @@ def _unmount_one_dataset(item, repo, app):
             text="Dataset is busy",
         )
         dialog.format_secondary_text(detail)
-        dialog.run()
+        run_dialog(dialog)
         dialog.destroy()
         log_msg(f"FATAL: Dataset {dataset} is busy; unmount aborted")
         return False
@@ -1404,9 +1406,9 @@ def _unmount_one_dataset(item, repo, app):
                                 f"FATAL: cannot unmount {target}: its mountpoint "
                                 f"{_path_mountpoint(target, repo)} is unreachable "
                                 f"({stderr}) and remounting its unmounted parents "
-                                "did not expose it. Use Repair Mount Order (Dashboard "
-                                "or Datasets page) to remount the whole set "
-                                "parents-first, then retry."
+                                "did not expose it. Use Repair Mount Order on the "
+                                "Dashboard to remount the whole set parents-first, "
+                                "then retry."
                             )
                     elif "busy" in stderr.lower():
                         log_msg(
@@ -1518,7 +1520,7 @@ def _confirm_mount_repair(app, plan):
     )
     dialog.format_secondary_text(_format_repair_plan(plan))
     dialog.set_default_response(Gtk.ResponseType.NO)
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     return response == Gtk.ResponseType.YES
 
@@ -1775,22 +1777,6 @@ def run_mount_repair(app, scope=None):
     return execute_mount_repair(app, plan)
 
 
-def on_datasets_repair_mount_order(app):
-    """Repair the mount order of the selected subtree (approval-gated)."""
-    items = get_tree_selection_items(app.datasets_view)
-    repairable = [
-        i
-        for i in items
-        if i["type"] in ("pool", "dataset") and (i.get("zfs_type") or "filesystem") == "filesystem"
-    ]
-    if len(repairable) != 1 or len(items) != 1:
-        log_msg("WARN: Select a single filesystem or pool to repair mount order")
-        return
-    result = run_mount_repair(app, scope=repairable[0]["name"])
-    if result is not None:
-        refresh_datasets_page(app)
-
-
 def _unmount_one_snapshot(item, repo, app):
     """Unmount a single snapshot; return True on success."""
     full_snap = f"{item['dataset']}@{item['name']}"
@@ -1815,7 +1801,7 @@ def _unmount_one_snapshot(item, repo, app):
             text="Snapshot is busy",
         )
         dialog.format_secondary_text(detail)
-        dialog.run()
+        run_dialog(dialog)
         dialog.destroy()
         log_msg(f"FATAL: Snapshot {full_snap} is busy; unmount aborted")
         return False
@@ -1862,7 +1848,7 @@ def _warn_busy(app, title, detail):
         text=title,
     )
     dialog.format_secondary_text(detail)
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 

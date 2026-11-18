@@ -17,7 +17,7 @@ from feature_config import (
     save_alignment_survey,
 )
 from gi.repository import Gtk
-from gui_helpers import create_dialog
+from gui_helpers import create_dialog, run_dialog
 
 NOT_SURVEYED = "(not surveyed)"
 
@@ -28,7 +28,7 @@ def _info_dialog(app, message):
     label.set_line_wrap(True)
     dialog.get_content_area().pack_start(label, False, False, 0)
     dialog.show_all()
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 
@@ -146,7 +146,7 @@ def open_alignment_survey(app):
     grid.attach(hint, 0, 2, 2, 1)
 
     dialog.show_all()
-    response = dialog.run()
+    response = run_dialog(dialog)
     saved = False
     if response == Gtk.ResponseType.OK:
         dataset = dataset_combo.get_active_text()

@@ -23,7 +23,7 @@ gi.require_version("Gtk", "3.0")
 
 from disk_repository import DiskInfo
 from gi.repository import Gtk
-from gui_helpers import create_scrolled_dialog, set_action_tooltip
+from gui_helpers import create_scrolled_dialog, run_dialog, set_action_tooltip
 from path_utils import resolve_local_bin
 
 # Custom dialog response id for the Wipe button. Distinct from
@@ -214,7 +214,7 @@ def show_wipe_dialog(app, disk: DiskInfo, warnings: list[str]) -> bool:
 
     dialog.show_all()
     try:
-        response = dialog.run()
+        response = run_dialog(dialog)
         return response == _RESPONSE_WIPE and typed_entry.get_text().strip() == target
     finally:
         dialog.destroy()

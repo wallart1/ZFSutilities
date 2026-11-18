@@ -117,7 +117,9 @@ Python `log_msg` routes to the info panel instead of stderr.
 
 When the `ZFSUTILITIES_LOG_FILE` environment variable is set, both bash and
 Python `log_msg` append the formatted message to that file. All messages are
-written to the file regardless of priority. `ZFSUTILITIES_LOG_INHERIT` is
+written to the file regardless of priority, and every stored line carries a
+`[hostname]` tag right after its timestamp so a line read anywhere names the
+host that wrote it. `ZFSUTILITIES_LOG_INHERIT` is
 honored **only** by bash subprocesses so they do not create a competing log.
 
 In the GTK GUI, `BackupRunner.prepare_session_log()` creates the session file

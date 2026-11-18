@@ -314,6 +314,11 @@ class AlignmentSample:
     prefetch_available: bool = False
     objset_available: bool = False
     pve_available: bool = False
+    # False when no PVE source can exist at this site (single-node host
+    # with no local PVE install and no compute node): the VM layer is
+    # absent by design, not a probe failure, and consumers must not
+    # report it as unavailable.
+    pve_applicable: bool = True
     # Why the PVE read came back empty (ssh exit/stderr, timeout, nothing
     # parsed, or no applicable source) — empty when configs were read.
     pve_failure: str = ""
@@ -1009,11 +1014,24 @@ def collect_alignment_sample(
     if objset:
         sample.objset = objset
         sample.objset_available = True
+    # One node-config load serves both the PVE read and the applicability
+    # verdict below (read_pve_vm_configs would otherwise load it again).
+    node_cfg = load_node_config() if node_config_data is None else node_config_data
     pve_errors: dict[str, str] = {}
-    vm_disks = read_pve_vm_configs(pve_conf_dir, config=node_config_data, errors=pve_errors)
+    vm_disks = read_pve_vm_configs(pve_conf_dir, config=node_cfg, errors=pve_errors)
     if vm_disks:
         sample.vm_disks = vm_disks
         sample.pve_available = True
+    # A PVE source exists where this host runs PVE (the conf dir is
+    # present) or a two-node site has a compute node to fetch from.
+    # Everywhere else — a single-node host without PVE — the VM layer is
+    # absent by design and must not read as a probe failure.
+    fetch_host = node_cfg.get("compute_host") or ""
+    sample.pve_applicable = os.path.isdir(pve_conf_dir) or (
+        node_cfg.get("mode") == "two-node"
+        and bool(fetch_host)
+        and node_cfg.get("this_host") != fetch_host
+    )
     sample.pve_failure = pve_errors.get("pve", "")
     if pve_errors.get("pve_bypath_dropped"):
         sample.pve_bypath_dropped = [

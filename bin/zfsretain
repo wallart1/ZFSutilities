@@ -25,6 +25,7 @@ function retain {
     source_helper zfsconfig
     source_helper zfsdelsnap
     source_helper zfslockmanager
+    source_helper property-manifest-lib.sh
 
     if [[ "$skipbusy" = '' ]]; then skipbusy='Y'; fi
 
@@ -434,6 +435,14 @@ function retain {
             done
         fi
     done
+
+    # A property-manifest store rides snapshot retention like any dataset;
+    # its FILES must follow its snapshots (a file outliving its generation
+    # snapshot is dead weight). Sweep under the write lock this call
+    # already holds, before releasing it.
+    if [[ "$retainfs" == */zfsutilities-manifests ]]; then
+        propmanifest_prune_files "$retainfs"
+    fi
 
     if [[ -n "$retain_lock" ]]; then
         zfslock_release "$retain_lock" 2>/dev/null || true

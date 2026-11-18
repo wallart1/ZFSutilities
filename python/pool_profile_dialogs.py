@@ -28,6 +28,8 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_scrolled_dialog,
+    enable_ctrl_click_deselect,
+    run_dialog,
     set_action_tooltip,
     set_column_header_tooltip,
 )
@@ -191,7 +193,7 @@ def _show_validation_error(parent, message: str) -> None:
         buttons=Gtk.ButtonsType.OK,
         text=message,
     )
-    error.run()
+    run_dialog(error)
     error.destroy()
 
 
@@ -217,6 +219,7 @@ def show_manage_pool_profiles_dialog(app):
     view = Gtk.TreeView(model=store)
     view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(view)
 
     cols = [
         (0, "Name", 180, "Profile name offered by the pool-create wizard and Migrate Pool"),
@@ -345,7 +348,7 @@ def show_manage_pool_profiles_dialog(app):
             text=f"Delete pool profile {name}?",
         )
         confirm.format_secondary_text("This cannot be undone.")
-        response = confirm.run()
+        response = run_dialog(confirm)
         confirm.destroy()
         if response == Gtk.ResponseType.YES:
             delete_pool_profile(app.config, name)
@@ -362,7 +365,7 @@ def show_manage_pool_profiles_dialog(app):
         confirm.format_secondary_text(
             "All custom pool profiles will be discarded and the seeded defaults will be restored."
         )
-        response = confirm.run()
+        response = run_dialog(confirm)
         confirm.destroy()
         if response == Gtk.ResponseType.YES:
             reset_pool_profiles(app.config)
@@ -377,7 +380,7 @@ def show_manage_pool_profiles_dialog(app):
     _refresh_list()
     _on_selection_changed(view.get_selection())
     dialog.show_all()
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 
@@ -518,7 +521,7 @@ def show_pool_profile_editor_dialog(app, name=None):
 
     dialog.show_all()
     while True:
-        response = dialog.run()
+        response = run_dialog(dialog)
         if response != Gtk.ResponseType.OK:
             dialog.destroy()
             return
@@ -550,7 +553,7 @@ def show_pool_profile_editor_dialog(app, name=None):
                     text=f"Pool profile '{overwrite_name}' already exists.",
                 )
                 confirm.format_secondary_text("Overwrite it with these settings?")
-                response = confirm.run()
+                response = run_dialog(confirm)
                 confirm.destroy()
                 if response != Gtk.ResponseType.YES:
                     continue

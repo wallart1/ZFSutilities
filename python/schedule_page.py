@@ -29,7 +29,9 @@ from gui_helpers import (
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     enable_textview_copy,
+    run_dialog,
     set_button_markup_red,
     set_column_header_tooltip,
     set_monospace_font,
@@ -117,6 +119,7 @@ def create_schedule_page(app):
     app.schedule_view = Gtk.TreeView(model=app.schedule_store)
     app.schedule_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.schedule_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(app.schedule_view)
 
     toggle_r = Gtk.CellRendererToggle()
     toggle_r.connect("toggled", _on_active_toggled, app)
@@ -1127,7 +1130,7 @@ def on_schedule_delete(app):
     dlg.format_secondary_text(
         "This will remove the profile and its cron entry. This cannot be undone."
     )
-    response = dlg.run()
+    response = run_dialog(dlg)
     dlg.destroy()
     if response != Gtk.ResponseType.YES:
         return

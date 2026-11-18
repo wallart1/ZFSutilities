@@ -76,6 +76,7 @@ from gui_helpers import (
     create_info_panel,
     create_menu_bar,
     get_log_font_controller,
+    run_dialog,
 )
 from input_requests import (
     InputRequestRegistry,
@@ -520,10 +521,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         """Add a message to the info panel, colorizing WARN/FATAL lines.
 
         All messages are stored; the main level selector controls which lines
-        are visible in the panel.  The Short prefix toggle controls whether
-        the source file:line location is shown.  Numbered input prompts
-        ([Input N][label] questions) are tinted bright blue so operator
-        questions stand out.
+        are visible in the panel.  The Short prefix toggle shows the time and
+        message only — no date, host tag, or file:line location.  Numbered
+        input prompts ([Input N][label] questions) are tinted bright blue so
+        operator questions stand out.
         """
         if not hasattr(self, "info_text"):
             return
@@ -951,7 +952,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             text=text,
         )
         dialog.format_secondary_text(secondary + "\n\nDo you really want to quit?")
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         return response == Gtk.ResponseType.YES
 
@@ -1030,13 +1031,13 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         dialog.set_version(self._version)
         dialog.set_comments("A GTK frontend for ZFS backup and snapshot management")
         dialog.set_license_type(Gtk.License.GPL_3_0)
-        dialog.run()
+        run_dialog(dialog)
         dialog.destroy()
 
     def on_notifications(self, widget):
         """Open the desktop/email notifications configuration dialog."""
         dialog = NotificationsDialog(self, self.config)
-        dialog.run()
+        run_dialog(dialog)
 
     def on_set_docs_editor(self, widget):
         """Show a dialog to configure the external markdown editor."""
@@ -1069,7 +1070,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         box.pack_start(entry, False, False, 0)
 
         box.show_all()
-        response = dialog.run()
+        response = run_dialog(dialog)
         if response == Gtk.ResponseType.OK:
             command = entry.get_text().strip()
             save_docs_editor(self.config, command)

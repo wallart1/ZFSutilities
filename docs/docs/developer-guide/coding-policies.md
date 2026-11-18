@@ -418,7 +418,9 @@ log_msg("DEBUG: variable =", value)
 - Default threshold is `INFO` (controlled by the `msg_level` environment
   variable)
 - When `ZFSUTILITIES_LOG_FILE` is set, both bash and Python `log_msg` append
-  the formatted message to that file
+  the formatted message to that file as
+  `{timestamp} [{hostname}]  {file}:{line}: {message}` — every stored line
+  names the host that wrote it
 - `ZFSUTILITIES_LOG_INHERIT=Y` is passed to bash subprocesses so they do not
   create a competing session log; the Python runner remains the single writer
 - In the GUI, messages route to the info panel; in CLI mode they go to `stderr`
@@ -451,6 +453,29 @@ log_msg("DEBUG: variable =", value)
   calling sites. Small readability helpers or functions created for direct unit
   testing may have a single call site; avoid splitting out a helper when it
   only wraps a single expression used once.
+- **GTK TreeView Ctrl-click toggling is focus-gated**: GTK 3 skips the
+  ctrl-click selection toggle when the tree view does not already hold
+  keyboard focus (the toggle helper returns early on `!has_focus`, and GTK
+  grabs focus only at the end of its own gesture handler — one click too
+  late), so an unfocused view needed two Ctrl-clicks to deselect a row.
+  Every selectable TreeView must be wired through
+  `gui_helpers.enable_ctrl_click_deselect` at creation; it grabs focus on
+  the press, before the view's bubble-phase gesture, so one Ctrl-click
+  toggles immediately. Views with selection mode NONE are exempt.
+  `test_ctrl_click_wiring.py` enforces the wiring for new tables, and the
+  unwired control view in `ctrl_click_realized_check.py` acts as a
+  sentinel for GTK itself changing this behavior.
+- **Modal dialogs are displayed through `gui_helpers.run_dialog`**: a modal
+  dialog must never be shown by calling `.run()` at the call site.
+  `run_dialog` wraps the call and dims every other toplevel window (to
+  `gui_helpers.MODAL_DIM_OPACITY`) for as long as the dialog blocks input,
+  restoring each window's previous opacity on close; nested dialogs dim
+  their parent dialog the same way. `gui_helpers.dimmed_modal` covers the
+  rare modal that is shown with `show()` instead of `run()` (the
+  datasets-page expand-rows progress dialog). `test_modal_dim_wiring.py`
+  audits `python/` so a new dialog cannot bypass the dimming: apart from
+  `subprocess.run` and the application's own `app.run(None)`, the only
+  `.run()` left is the single passthrough inside `run_dialog`.
 
 ### Linting
 

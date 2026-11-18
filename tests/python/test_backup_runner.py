@@ -1740,5 +1740,46 @@ class TestInputHoldProtocol(unittest.TestCase):
         self.assertEqual(mock_log_msg.call_args.args[0], "VERB: > 3 y")
 
 
+class TestWriteRsyncLogChunk(unittest.TestCase):
+    """The persistent rsync log tags every line with this host."""
+
+    def _make_runner(self, tmpdir):
+        runner = br.BackupRunner.__new__(br.BackupRunner)
+        path = os.path.join(tmpdir, "rsync-pull.log")
+        # Persistent handle by design: the runner owns it for the run's
+        # lifetime (mirrors BackupRunner's own noqa'd open).
+        runner._rsync_log_fh = open(path, "a")  # noqa: SIM115
+        runner._rsync_log_carry = ""
+        return runner, path
+
+    def test_tags_every_line_across_chunk_splits(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner, path = self._make_runner(tmpdir)
+            runner._write_rsync_log_chunk("line one\nline tw")
+            runner._write_rsync_log_chunk("o\nline three\n")
+            runner._rsync_log_fh.close()
+            with open(path) as fh:
+                content = fh.read()
+            host = br.get_log_hostname()
+            self.assertEqual(
+                content,
+                f"[{host}] line one\n[{host}] line two\n[{host}] line three\n",
+            )
+            self.assertEqual(runner._rsync_log_carry, "")
+
+    def test_close_flushes_carried_partial_line_with_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner, path = self._make_runner(tmpdir)
+            runner._write_rsync_log_chunk("partial line without newline")
+            runner._rsync_log_lock_fd = None
+            br._close_rsync_log_handle(runner)
+            with open(path) as fh:
+                content = fh.read()
+            host = br.get_log_hostname()
+            self.assertEqual(content, f"[{host}] partial line without newline\n")
+            self.assertEqual(runner._rsync_log_carry, "")
+            self.assertIsNone(runner._rsync_log_fh)
+
+
 if __name__ == "__main__":
     unittest.main()

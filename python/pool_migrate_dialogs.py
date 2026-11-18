@@ -53,7 +53,7 @@ from disks_page import (
 )
 from feature_config import get_pool_profiles
 from gi.repository import Gtk
-from gui_helpers import create_dialog, create_scrolled_dialog, set_action_tooltip
+from gui_helpers import create_dialog, create_scrolled_dialog, run_dialog, set_action_tooltip
 from iscsi_enroll import is_iscsi_managed_pool, log_manual_enrollment_steps
 from logging_config import log_msg
 from path_utils import resolve_local_bin
@@ -1581,7 +1581,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     try:
         while True:
             _refresh()
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,
@@ -1650,7 +1650,7 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
     try:
         while True:
             ok_btn.set_sensitive(_entry_text() == request.source_pool)
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,
@@ -1696,7 +1696,7 @@ def _show_running_vms_warning(app, source_pool: str, running: dict[str, list[str
     content.pack_start(text, False, False, 0)
     dialog.show_all()
     try:
-        response = dialog.run()
+        response = run_dialog(dialog)
     finally:
         dialog.destroy()
     return response == Gtk.ResponseType.YES

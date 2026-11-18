@@ -818,3 +818,279 @@ twice over (final: 115 suites, 6711/0; python 4834 + 22 skip).
   testing.md's freshness guidance names both fences and the cyclic-
   graph trap; GLOSSARY +D-state, +sticky binding, +xdg-desktop-portal.
   Docs integrity 23/23; mkdocs build green.
+
+## 2026-11-17 (pub3) — One-click Ctrl-click deselect across every tree
+
+- User report: every treeview needed TWO Ctrl-clicks to deselect a row.
+  Verified against GTK 3.24.41 source + synthesized-event probes: GTK's
+  ctrl-click toggle is focus-gated (real_toggle_cursor_row returns on
+  !has_focus; GTK grabs focus at handler END) — the first click just
+  takes focus. Stock GTK behavior, not an app bug.
+- Fix: gui_helpers.enable_ctrl_click_deselect(view) — grabs focus on a
+  Ctrl+left press (button-press-event runs before the view's bubble-phase
+  gesture; modifier test mirrors GTK's MODIFIER_INTENT_MODIFY_SELECTION).
+  Wired at all 27 selectable sites in 17 modules; SelectionMode.NONE
+  sites (wizard disk list, growth read-only list) exempt by design.
+- Tests: unit tests in test_gui_infrastructure; wiring sweep
+  test_ctrl_click_wiring (runtime builds where mocks allow + an AST audit
+  of every Gtk.TreeView site — pools/retention/offsite/logs/checkagainst
+  builds trip the pre-existing set_button_markup isinstance-on-mock wall,
+  so the audit covers them); realized check test_ctrl_click_realized
+  (private Xvfb, ONE synthesized Ctrl+click per view; the unwired control
+  view is the GTK-behavior sentinel). FakePickerTreeView in
+  test_profile_dialogs grew connect() recording (product wires every
+  view now). requirements.manifest: gi row for the realized suite.
+- Docs: gtk-gui.md deselect clauses at the five multi-select spots;
+  coding-policies.md focus-gate law; testing.md two suite rows.
+- ruff clean; affected suites green. (Full-suite line recorded in the
+  turn report, not here.)
+
+## 2026-11-17 (pub3) — Scrub-profile pause-window wait + single-write logs
+
+- User report (stewie session log, 2026-11-15 06:11): doubled WARN lines and
+  an unknown scrub-profile timeout. Root cause chain, node-verified: the
+  06:00 root-backup-dailybackup pauses scrubs on its pools per step
+  (attach_step_scrub_callbacks) and resumes them ~47 min later; the scrub
+  profile's 60×10 s paused-only give-up clock expired mid-window (06:01:30 →
+  06:11:22). Backup resumed both scrubs at 06:48; fivebays finished 11-15
+  13:44; threeamigos still scrubbing legitimately. No operator action.
+- run_scrub_profile now suspends the idle clock while
+  _other_profile_locks_held() (flock probe of PROFILE_LOCK_DIR *.lock,
+  self-pid metadata skipped, fail-open), logging once per wait episode
+  "INFO: Waiting on paused scrubs; another profile running". WARN reworded
+  to name the pools: "Scrub profile timed out; still paused: <pools>".
+- Double logging fixed: _scrub_log's write_raw_line duplicated every line
+  (log_msg's session_log_context write carries the file:line prefix; the
+  raw line had none). Now log_msg(msg, session_log_file=...) only — one
+  target, one write, prefixed.
+- Tests: timeout test reworded + hermetic PROFILE_LOCK_DIR; new wait-
+  deferral test (in-process flock holder released at tick 70), single-write
+  session-log regression, _other_profile_locks_held truth table.
+- Docs: messages manual rows (waiting INFO + reworded WARN), gtk-gui.md
+  Scrub profiles behavior paragraph, testing.md row extended.
+
+## 2026-11-17 (pub3) — Modal-dialog dimming of every other GUI window
+
+- User request: while a modal dialog is open, dim the GUI's other windows
+  to show they are disabled.
+- gui_helpers grew the display choke point: run_dialog(dialog) wraps
+  dialog.run() and dims every other toplevel (Gtk.Window.list_toplevels,
+  set_opacity to MODAL_DIM_OPACITY 0.6) with a per-window recorded prior;
+  dimmed_modal() is the context-manager form for the one show()-without-
+  run() modal (datasets-page expand-rows progress). Nested dialogs dim the
+  parent dialog too; pop restores in stack order. Unlistable toplevels
+  (headless/mock_gtk) degrade to a pure passthrough — that is why every
+  existing dialog suite stayed green with no mock changes.
+- Sweep: all 81 call-site .run() display sites across 24 modules now go
+  through run_dialog (gui_helpers' own show_error/show_error_dialog/
+  show_warning_dialog/confirm_and_minimize_width converted internally;
+  iscsi_enroll/notifications_dialog/proxmox_enroll gained the import).
+  main.py's _show_wait_dialog deliberately NOT converted: transient_for
+  None during single-instance replace, no in-process siblings to dim.
+  subprocess.run and app.run(None) untouched.
+- Tests: test_modal_dim (state machine under fake toplevels: restore
+  fidelity, nested order, exception safety, destroyed-window guard, stray
+  pop, mock passthrough) + test_modal_dim_wiring (AST audit: outside
+  run_dialog's single passthrough, only subprocess.run and app.run(None)
+  may call .run(; callers must import run_dialog) — red-proofed with a
+  planted violation. No requirements.manifest rows needed (no module-level
+  gi guards).
+- Docs: gtk-gui.md "Modal Dialog Dimming" section; coding-policies.md
+  run_dialog law; testing.md two suite rows; GLOSSARY compositing entry.
+- ruff clean; affected suites green; full tests/run-tests green.
+
+## 2026-11-17 (pub3) — Scrub logging: View Log classification + lifecycle wording
+
+- User report (stewie, 0.141.0, three parts): (1) Dashboard → Tasks → View
+  Log on a scrub-profile row WARNs "Log entry not found" though the file
+  exists; (2) scrub start/finish/pause/resume log entries "inconsistent at
+  best"; (3) every _scrub_log line doubled (with/without file:line prefix).
+  Part (3) was already fixed earlier this lane (see the pause-window entry
+  above) — only re-verified this turn.
+- (1) root cause: _LOG_FILENAME_RE's core type set
+  (backup|offsite|restore|prune|dataset|gui) omitted scrub AND retention —
+  those profile session logs matched the misc regex and landed in the
+  Miscellaneous list, which select_log_by_path (main list only) never
+  searches. Fixed by adding both types to the core alternation; existing
+  files re-classify on the next scan (index is path-keyed). Verified
+  against stewie: 3 scrub session logs existed, all misc-buried.
+- (2) vocabulary unified in scrub_manager.py to one template
+  "Scrub <verb> on 'X'" + qualifier: external transitions now INFO with
+  "(external)" (was three VERB "External … detected" wordings);
+  "Scrub completed on X" → "Scrub finished on X"; "Paused scrub
+  finished/canceled on X" → "… (was paused)"; silent paused→NONE now logs
+  "Scrub ended on 'X' (was paused)"; "New scrub detected on X" → "Scrub
+  started on 'X' (external)"; dropped the stray word "pool" from
+  Starting/Pausing/Resuming/Stopping lines; backup-window per-pool lines
+  (pause/resume_scrubs_for_pools) raised VERB→INFO to match the queue
+  paths (plural summaries unchanged). Production evidence: the Nov-14
+  scrub session log showed the same pause as VERB-detection (scrub log),
+  VERB action + INFO summary (backup log), invisible at default level.
+- run_scrub_profile: "INFO: Scrub profile complete" no longer logged on
+  the timeout path (the naming WARN is the closer; rc stays 0 — messaging
+  fix only, history/notifications semantics unchanged).
+- Tests: test_logs_page (scrub/retention classify core; _parse_log_filename
+  new types; select_log_by_path scrub row), test_scrub_manager (reworded
+  assertions + 5 new transition tests), test_profile_runner (timeout path
+  asserts NO "complete"; drained path asserts it). ruff clean; affected
+  suites 345 green; full run 115 suites / 6744 passed / 0 failed.
+- Docs: messages manual scrub_manager section rewritten to the new
+  vocabulary (external trio merged into one row), scrub-profile "complete"
+  row notes the gating, gtk-gui.md Type column gains scrub/retention.
+  mkdocs --strict green (only the standing MkDocs-2.0 banner).
+- PREEXISTING: 0 found, 0 addressed this turn; 4 entries remain.
+
+## 2026-11-17 (pub3) — Desktop-notification resolver: PKEXEC_UID + loginctl
+
+- Symptom: Settings → Notifications → Show test notification logged
+  "Desktop notification skipped: no logged-in desktop session" on the
+  deployed GUI. Root cause chain: the GUI's normal launch path elevates
+  via pkexec (main.py re-exec), which never sets SUDO_USER (it sets
+  PKEXEC_UID instead), and the last-resort probe — owner of
+  /tmp/.X11-unix/X0 — is dead on both the dev host and stewie because
+  LightDM runs Xorg as root (socket uid 0 → rejected). Only
+  sudo-from-terminal launches ever resolved; root-cron scheduled runs
+  never did.
+- Fix in notifications.py: resolution is now override → PKEXEC_UID
+  (uid 0 ignored) → SUDO_USER → active graphical loginctl session
+  (Class=user, State=active, Type x11|wayland; covers cron and is
+  Wayland-ready) → X11 socket owner, each candidate still requiring a
+  live /run/user/<uid>/bus. New helpers _loginctl_graphical_user() and
+  _user_session(); the skip INFO wording is unchanged (still true when
+  nothing resolves).
+- Verified live on the dev host in both previously-dead contexts
+  (PKEXEC_UID=1000 and no-hints cron): both resolve to
+  ('dan', '/run/user/1000/bus', ':0').
+- Tests: TestResolveDesktopUser rewritten for the cascade (16 red
+  pre-fix, green post) + new TestLoginctlGraphicalUser (session
+  selection, wayland, root/greeter/tty/online rejects, per-session
+  failure skip, missing-binary degrade). Full suite green; ruff clean;
+  mkdocs --strict green (standing MkDocs-2.0 banner only).
+- Docs: messages-manual skip-row cause column updated; python-modules.md
+  notifications narrative updated; GLOSSARY gains "loginctl".
+- PREEXISTING: 1 found (stewie .desktop Exec points at nonexistent
+  /usr/local/bin/zfsutilities-gui — site state, repo doesn't manage
+  .desktop files), 0 addressed; 1 entry now in the file.
+
+## 2026-11-17 (pub3) — Manifest-store retention: store in prune_datasets + file sweep in retain
+
+- Reported: fivebays/threeamigos/zfsutilities-manifests snapshots never
+  pruned (30 since Nov 4); asked how the store's FILES are pruned.
+  Answer to the second question: they weren't — nothing anywhere deleted
+  manifest files; they accumulate one per dataset per generation (556 in
+  two weeks). ZFS snapshot destroy never removes live files.
+- Snapshot gap root cause: the lib's "existing cleanup prunes it in
+  lockstep — no new pruning code" claim holds for pool-mode cleanup
+  (zfsdailybackup template, zfsoffsiteretain — verified live: @offsite
+  snaps on the store ARE pruned) but NOT for the GUI/scheduler prune
+  step: build_backup_prune_command builds an explicit prune_datasets
+  list of source+dest pairs, and the store is neither (it is created at
+  the destination by capture). Verified in the Nov-16 run log's dataset
+  list. Sibling zfsutilities IS pruned because it rides the chain as a
+  real source dataset.
+- Fix 1 (python/command_builders.py): each step's prune script now
+  derives the store via propmanifest_dataset "$destfs" "$sourcefs"
+  (sources ../lib/property-manifest-lib.sh mydir-relative, matching the
+  script's existing source style), existence-guards it, and adds it to
+  prune_datasets through _prune_seen. Goldens regenerated (6) and
+  reviewed; 2 new red-proofed builder tests.
+- Fix 2 (lib/property-manifest-lib.sh + bin/zfsretain): new
+  propmanifest_prune_files <mds> — deletes manifest files whose
+  generation snapshot no longer exists (one zfs list of the store's
+  snapshots; a failed listing WARNs and skips the sweep, fail-safe).
+  Hooked at the end of retain() for */zfsutilities-manifests datasets,
+  under the write lock retain already holds — covers GUI prune mode,
+  pool mode, zfsoffsiteretain, AND the offsite-pool replica stores that
+  never see captures. Fix rule: files live exactly as long as their
+  snapshots; no new knobs.
+- Tests: 6 new propmanifest_prune_files cases in test-property-manifest-lib
+  (mock zfs extended with the snapshot-listing form); retain-hook tests
+  in test-zfsretain (stub lib in mock mydir; sweep-after-lock proven via
+  op_seq; non-store not swept). Affected suites green; full bash suite
+  green; full Python suite green; ruff clean; shellcheck clean on new
+  code (one pre-existing SC2016 info in zfsretain untouched); mkdocs
+  --strict green.
+- Docs: modules.md function row + corrected lockstep claim,
+  python-modules.md prune row, messages manual gains 4 sweep rows +
+  reworded snapshot row.
+- Self-heals on first profile run after deploy: store joins the prune
+  list (backlog snapshots go per policy), then the sweep drops the
+  stale files. PREEXISTING: 0 found this turn; 1 entry remains (stewie
+  .desktop).
+
+## 2026-11-18 (pub3) — Datasets page: Repair Mount Order button → Dashboard-pointing warning banner
+
+- Rationale: the button asked the user to decide a subtree needs
+  mount-order repair from a selection — knowledge he does not have; all
+  he would see is disconcerting unmount/remount churn. The Dashboard
+  already detects unreachable mounts and offers the repair.
+- Removed: the Datasets-page button (action_dispatch button tuple +
+  import + dispatch-map entry), its sensitivity gating
+  (can_repair_mount_order in update_ds_button_sensitivity), and the
+  handler on_datasets_repair_mount_order + its selection-guard WARN.
+  Shared repair machinery (plan/_confirm/execute/run_mount_repair) is
+  untouched — the Dashboard handler is its only caller now (scope=None).
+- Added: _update_ds_mount_order_warning in datasets_page — runs the same
+  find_unreachable_mounts the Dashboard uses, on every
+  refresh_datasets_page; shows a red ⚠ banner under the page title with
+  the affected count and a pointer to Dashboard Warnings + Repair Mount
+  Order; hidden when clean or the mount state is unverifiable (detector
+  returns []). Banner label: app._ds_mount_order_warning,
+  no-show-all, packed above the search bar.
+- Message rewording (Datasets-page variant is gone, pointers now name
+  the Dashboard only): _warn_browse_unreachable lost its repair_dataset
+  arg ("Run Repair Mount Order from the Dashboard, then browse.") and
+  the unmount FATAL says "(Dashboard)" not "(Dashboard or Datasets
+  page)".
+- Tests: removed the two on_datasets_repair_mount_order handler tests;
+  updated the two Browse-refusal assertions; new TestMountOrderWarning
+  class (hidden-clean, shown-with-count+pointer, singular wording,
+  no-op without the label). Refresh tests deliberately do NOT fence
+  find_unreachable_mounts — matches the Dashboard refresh-test
+  convention (detector degrades to [] off-ZFS).
+- Docs: gtk-gui.md (Datasets intro paragraph gains the banner
+  description; button row removed; Dashboard row drops the
+  subtree-variant parenthetical; unreachable-mounts note re-angled),
+  messages/index.md (selection-guard row deleted; two rows reworded),
+  python-modules.md (handler row removed; banner helper + zfs_repository
+  import documented; run_mount_repair row notes its Dashboard caller).
+- Realized check: datasets_banner_realized_check.py +
+  test_datasets_banner_realized.py (new, following the disks-dialogs
+  realized pattern — private Xvfb, child process, REALIZED-DISPLAY
+  fence). Builds the real Datasets page in a realized window and proves
+  the banner contract: hidden through show_all (no-show-all), hidden
+  when the detector is clean, visible with count + Dashboard pointer on
+  findings, hidden again once clean. Listed in requirements.manifest
+  (gi).
+- Verification: affected suites green; full Python suite green
+  (started before the two new realized files were written — those ran
+  separately green immediately after; no product code changed in
+  between); ruff clean; mkdocs --strict green (known MkDocs 2/Material
+  warning only). PREEXISTING: 0 found this turn; 2 entries remain.
+
+## 2026-11-18 (pub3) — 0.143.0 release-gate wrap-up
+
+- Version number corrected with the user before bumping: the wrap-up
+  instructions named 0.142.0, but VERSION already read 0.142.0
+  (published/tagged 2026-11-17); the user chose 0.143.0. Steps 1 and 4
+  (PREEXISTING resolution) skipped by instruction — pub-main-only.
+- Review fixes (all in this cycle's new code): `# noqa: SIM115` on
+  TestWriteRsyncLogChunk's persistent handle (mirrors BackupRunner's
+  own); `propmanifest_prune_files` now WARNs on a refused `rm` (the
+  lib's every-failure-WARNs contract; new test case + messages-manual
+  row); `(end_lineno or end_lineno)` no-op cleaned in
+  test_modal_dim_wiring. Doc gap-fills: rsync misc-row + builder row +
+  write_raw_line row + get_log_hostname import row + BackupRunner
+  tagging paragraph (rsync-pull host tags were undocumented).
+- Pre-existing filed: ruff format nits in the 0.142.0 export-stall
+  recovery code (python/pool_actions.py three hunks,
+  tests/test_pool_actions.py two) — PREEXISTING.md now 3 entries. The
+  zfsretain SC2016 info stays (below the project's `-S warning` gate,
+  documented since the retention turn).
+- Gates: ruff check clean tree-wide; shellcheck clean on changed files;
+  docs integrity 23/23; mkdocs build clean (standing MkDocs-2.0 banner
+  only); full no-soak run green (log /tmp/zfs-run-0143-nosoak.log);
+  with-soak gate line recorded in the turn report. Changelog 0.143.0
+  section written; GLOSSARY needed nothing further (compositing +
+  loginctl rode their campaigns).
+

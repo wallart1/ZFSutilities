@@ -34,7 +34,9 @@ from gui_helpers import (
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     handle_editing_key_press,
+    run_dialog,
     set_button_markup_red,
     set_column_header_tooltip,
     set_page_tab_attention,
@@ -135,7 +137,7 @@ def _clear_non_default_policies_on_new_install(app, ctx):
     dlg.add_button("Keep", Gtk.ResponseType.CANCEL)
     dlg.add_button("Clear", Gtk.ResponseType.YES)
     dlg.set_default_response(Gtk.ResponseType.CANCEL)
-    response = dlg.run()
+    response = run_dialog(dlg)
     dlg.destroy()
 
     if response != Gtk.ResponseType.YES:
@@ -240,6 +242,7 @@ def create_retention_page(app, ctx):
     tv = Gtk.TreeView(model=app._ret_store)
     tv.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     tv.set_reorderable(True)
+    enable_ctrl_click_deselect(tv)
     app._ret_view = tv
     app._ui_state.bind_treeview(app._ret_view, "retention_buckets_view")
 
@@ -334,6 +337,7 @@ def create_retention_page(app, ctx):
     app._ret_prune_store = Gtk.ListStore(str, str)
     pv = Gtk.TreeView(model=app._ret_prune_store)
     pv.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(pv)
     pv.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     pv.set_reorderable(True)
     app._ret_prune_view = pv
@@ -769,7 +773,7 @@ def _ask_create_policy(app, pool):
     dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
     dlg.add_button("Add Now", Gtk.ResponseType.YES)
     dlg.set_default_response(Gtk.ResponseType.YES)
-    response = dlg.run()
+    response = run_dialog(dlg)
     dlg.destroy()
     return response
 

@@ -28,11 +28,13 @@ from gui_helpers import (
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     handle_editing_key_press,
     on_cell_edited,
     on_row_activated,
     on_toggle,
     refuse_non_managed_pool_endpoints,
+    run_dialog,
     set_column_header_tooltip,
     setup_row_scroll,
     show_warning_dialog,
@@ -224,6 +226,7 @@ def create_offsite_page(app, ctx):
     app.offsite_step_store = Gtk.ListStore(bool, str, str, str, str)
     step_view = Gtk.TreeView(model=app.offsite_step_store)
     step_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    enable_ctrl_click_deselect(step_view)
 
     toggle_r = Gtk.CellRendererToggle()
     toggle_r.connect("toggled", on_toggle, app.offsite_step_store)
@@ -556,7 +559,7 @@ def on_offsite_run(app, ctx):
         dialog.add_button("Generate", Gtk.ResponseType.APPLY)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("OK", Gtk.ResponseType.OK)
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response == Gtk.ResponseType.OK:
             break

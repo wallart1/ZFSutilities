@@ -273,8 +273,12 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
                 f"{setup_cmd} && "
                 f'{rsync_cmd} 2>&1 | tee "$_t" | '
                 # The remote append holds the shared half of the log's file
-                # lock so the remote daily truncate waits for it.
-                f'ssh -q root@$_rh "( flock -s 9 || exit 1; cat >> $_rl )'
+                # lock so the remote daily truncate waits for it. sed tags
+                # every line with the pull source host — the host rsync ran
+                # on and the log lives on — baked in at build time because
+                # quote nesting would otherwise expand $(hostname) locally.
+                f'ssh -q root@$_rh "( flock -s 9 || exit 1; '
+                f"sed -u 's/^/[{src_host}] /' >> $_rl )"
                 f' 9>> $_rl.lock"; '
                 f"{_rsync_failure_tail_script()}"
             )
@@ -292,11 +296,15 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
                 f"{_rsync_log_setup_script(remote_log_path)}; _t=$(mktemp); "
                 # The append pipeline holds the shared half of the log's
                 # file lock; the subshell keeps PIPESTATUS visible to the
-                # rc-capture snippet.
+                # rc-capture snippet. sed tags every line with this host
+                # (double quotes so the shell expands $(hostname) at run
+                # time) so rsync-pull.log lines name the host that produced
+                # them.
                 f"( flock -s 9 || exit 1; "
                 f"{shlex.join(rsync_opts)} "
                 f"{shlex.quote(src_path)} {shlex.quote(dst_path)} "
-                f'2>&1 | tee "$_t" >> {shlex.quote(remote_log_path)}; '
+                f'2>&1 | tee "$_t" | '
+                f'sed -u "s/^/[$(hostname)] /" >> {shlex.quote(remote_log_path)}; '
                 f"{_rsync_failure_tail_script()} "
                 f") 9>>{shlex.quote(remote_log_path + '.lock')}"
             )
@@ -441,8 +449,12 @@ def build_backup_prune_command(
     every step: each source dataset ``$_fs`` and its mapped destination name
     ``${destfs}${_restorefs}`` (via ``remove_leading_qualifiers``) are added
     to the deduplicated ``prune_datasets`` list consumed by ``zfscleanup``'s
-    explicit ``prune_datasets`` mode. When no dataset survives the mapping,
-    the step logs a warning and exits successfully (pruning stays non-fatal).
+    explicit ``prune_datasets`` mode. Each step's property-manifest store
+    (``propmanifest_dataset`` — the store the backup's captures wrote) joins
+    the list too when it exists, so the store's generation snapshots ride
+    the same retention as the data they describe. When no dataset survives
+    the mapping, the step logs a warning and exits successfully (pruning
+    stays non-fatal).
     """
     label_quoted = shlex.quote(label)
 
@@ -491,12 +503,24 @@ def build_backup_prune_command(
             "fi; "
             "done; "
             "fi; "
+            # The step's property-manifest store joins the prune list when
+            # it exists, so its generation snapshots ride the same
+            # retention as the data they describe (pool-mode cleanup always
+            # covered it; the explicit list must name it).
+            '_mds=$(propmanifest_dataset "$destfs" "$sourcefs"); '
+            'if zfs list -H -o name "$_mds" >/dev/null 2>&1; then '
+            'if [[ -z ${_prune_seen["$_mds"]+x} ]]; then '
+            '_prune_seen["$_mds"]=1; '
+            'prune_datasets+=("$_mds"); '
+            "fi; "
+            "fi; "
         )
 
     bash_script = (
         f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
         f'source "$mydir/zfsbuildfsarray"; '
         f'source "$mydir/zfsremoveleadingqualifiers"; '
+        f'source "$mydir/../lib/property-manifest-lib.sh"; '
         f'source "$mydir/zfscleanup"; '
         f"{_dryrun_assignments(dryrun)}"
         f'autoproceed="Y"; '

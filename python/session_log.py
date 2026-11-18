@@ -13,7 +13,7 @@ from datetime import datetime
 
 from config_core import SESSION_LOG_DIR
 from log_index import LogIndex
-from logging_config import log_msg, truncate_session_log
+from logging_config import get_log_hostname, log_msg, truncate_session_log
 
 # How often to check the session log size while a runner is active.
 _LOG_SIZE_CHECK_INTERVAL = 5  # seconds
@@ -54,13 +54,17 @@ def create_session_log_file(
 
 
 def write_raw_line(session_log_file: str | None, line: str) -> None:
-    """Append a raw subprocess line to the session log file with a timestamp."""
+    """Append a raw subprocess line to the session log file with a timestamp.
+
+    Every line carries this host in a ``[hostname]`` tag right after the
+    timestamp, matching log_msg's stored-line grammar.
+    """
     if not session_log_file:
         return
     try:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(session_log_file, "a") as fh:
-            fh.write(f"{ts}  {line}\n")
+            fh.write(f"{ts} [{get_log_hostname()}]  {line}\n")
     except OSError:
         pass
 

@@ -32,6 +32,7 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_scrolled_dialog,
+    run_dialog,
     set_action_tooltip,
     set_column_header_tooltip,
 )
@@ -798,7 +799,7 @@ def _show_validation_error(parent, message: str) -> None:
         buttons=Gtk.ButtonsType.OK,
         text=message,
     )
-    err.run()
+    run_dialog(err)
     err.destroy()
 
 
@@ -884,7 +885,7 @@ def show_create_pool_wizard(app, eligibility, profiles, existing_names):
     try:
         while True:
             _refresh()
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,
@@ -933,7 +934,7 @@ def _show_no_eligible_disks(app) -> None:
         "path. Free a disk first (export or destroy its pool, wipe its labels, or "
         "remove its partitions)."
     )
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 
@@ -954,7 +955,7 @@ def _offer_register_pool(app, pool_name: str) -> None:
         "retention will not include it. Registration is persisted with the "
         "Pools tab Save button."
     )
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     if response != Gtk.ResponseType.YES:
         return
