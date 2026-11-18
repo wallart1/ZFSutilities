@@ -339,14 +339,17 @@ EOF
     local up1_rc=$?
     itf_artifact "upgrade1-transcript" "$up1_log"
     local up1_missing
+    # The activation hint the product prints (absolute path; see the
+    # activation runs below, which use the same command).
+    local sw_cmd="/usr/local/lib/zfsutilities/bin/switch-version"
     up1_missing="$(itf_missing_markers "$up1_log" \
         "INFO: --- $s_hostname (this host) ---" \
         "INFO: --- $c_hostname ---" \
         "A baseline manifest was captured" \
         "Deployed version:  $target_version — NOT activated" \
         "Active version:    $active_version (unchanged on this host)" \
-        "this host:  sudo switch-version $target_version" \
-        "$c_hostname:  ssh root@$c_hostname switch-version $target_version" \
+        "this host:  $sw_cmd $target_version" \
+        "$c_hostname:  ssh root@$c_hostname $sw_cmd $target_version" \
         || true)"
     # The capture message must appear under BOTH host sections — the
     # remote __baseline pipe is the point of this pass.
@@ -502,6 +505,7 @@ EOF
     local up2_rc=$?
     itf_artifact "upgrade2-transcript" "$up2_log"
     local up2_missing
+    local sw_cmd="/usr/local/lib/zfsutilities/bin/switch-version"
     up2_missing="$(itf_missing_markers "$up2_log" \
         "does not match" \
         "WARN: release tag v$new2" \
@@ -520,8 +524,8 @@ EOF
         "INFO:   Salvaged on $c_hostname:" \
         "Deployed version:  $new2 — NOT activated" \
         "Active version:    $target_version (unchanged on this host)" \
-        "this host:  sudo switch-version $new2" \
-        "$c_hostname:  ssh root@$c_hostname switch-version $new2" \
+        "this host:  $sw_cmd $new2" \
+        "$c_hostname:  ssh root@$c_hostname $sw_cmd $new2" \
         || true)"
     if [[ $up2_rc -eq 0 && -z "$up2_missing" ]]; then
         itf_step pass "pass 2 scans, salvages, and deploys per host" \

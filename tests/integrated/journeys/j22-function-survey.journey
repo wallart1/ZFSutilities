@@ -28,10 +28,17 @@
 # Env knobs: ITF_SURVEY_SEED, ITF_SURVEY_FRACTION (>=0.5),
 # ITF_SURVEY_SW, ITF_SURVEY_ARCHIVE.
 #
-# Guest state required: post-install baseline template; the two-node
-# shape (selected two-node items) additionally needs the compute
-# template + two-node site keys.  ITF_SW_SOURCE must be dev-tarball —
-# the surveyed tree is pushed from dev either way.
+# Template profile: the driver's --template knob (storage by default;
+# mint for the bare-desktop leg — the storage guest then comes from the
+# mint template, the product joins through the first-time-user
+# installer, and the two-node lab's P2P wiring goes through
+# NetworkManager instead of ifupdown).
+#
+# Guest state required: post-install baseline template (the mint leg:
+# the mint desktop template); the two-node shape (selected two-node
+# items) additionally needs the compute template + two-node site keys.
+# ITF_SW_SOURCE must be dev-tarball — the surveyed tree is pushed from
+# dev either way.
 # Snapshots produced: as-cloned, pools-created (per lab shape).
 
 # shellcheck source=survey-lib.sh
@@ -44,9 +51,31 @@ journey_main() {
             "pushes the enumerated tree from dev)"
         return 1
     fi
+
+    # Template profile (the driver's --template knob), resolved the j21
+    # way: storage keeps today's behavior; mint runs the survey on the
+    # desktop baseline.
+    local profile="${ITF_JOURNEY_TEMPLATE:-storage}"
+    local s_template="" s_base="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}"
+    case "$profile" in
+        storage) s_template="${ITF_TEMPLATE_NAME:-}" ;;
+        mint) s_template="${ITF_MINT_TEMPLATE_NAME:-}" ;;
+        *)
+            itf_step fail "template profile" \
+                "j22 supports --template storage|mint, not '$profile'"
+            return 1
+            ;;
+    esac
+    if [[ -z "$s_template" || -z "$s_base" ]]; then
+        itf_step fail "site config: profile placement" \
+            "profile=$profile resolves no template name / base host —" \
+            "check the site config keys for the profile"
+        return 1
+    fi
+
     itf_step info "journey start" \
         "j22 function survey; sw=${ITF_SURVEY_SW:-tree}" \
-        "fraction=${ITF_SURVEY_FRACTION:-0.5}"
+        "fraction=${ITF_SURVEY_FRACTION:-0.5} profile=$profile"
 
     # ------------------------------------------------------------------
     # Stage S: selection FIRST — the list is drawn at the beginning of
@@ -63,10 +92,12 @@ journey_main() {
     if (( SURVEY_NEEDS_TWO )); then
         # shellcheck source=j05-two-node-install.journey
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
-        j05_two_node_lab_main || return 1
+        j05_two_node_lab_main --storage-template "$s_template" || return 1
         guest_ip="$(awk '{print $3}' "$ITF_RUN_DIR/guest-storage.txt")"
     else
-        itf_single_node_lab_main j22-function-survey || return 1
+        local -a lab_args=(--template "$s_template")
+        [[ "$profile" == mint ]] && lab_args+=(--bare-baseline)
+        itf_single_node_lab_main j22-function-survey "${lab_args[@]}" || return 1
         guest_ip="$J_GUEST_IP"
     fi
     if [[ -z "$guest_ip" || "$guest_ip" == "-" ]]; then
@@ -83,6 +114,11 @@ journey_main() {
         local c_ip
         c_ip="$(awk '{print $3}' "$ITF_RUN_DIR/guest-compute.txt")"
         itf_survey_stage_tree_compute "$guest_ip" "$c_ip" || return 1
+    elif [[ "$profile" == mint ]]; then
+        # Bare desktop baseline: the product joins through the
+        # first-time-user installer before any item runs (the two-node
+        # shape already installed via install-two-node).
+        itf_survey_install_baseline "$guest_ip" || return 1
     fi
     itf_survey_stage_playground "$guest_ip" || return 1
     itf_survey_stage_gui_env "$guest_ip" || return 1

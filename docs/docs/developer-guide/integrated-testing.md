@@ -106,7 +106,14 @@ tests/integrated/itf journey run <name> --rerun
 tests/integrated/itf journey run j21-zfs-probes --template ubuntu
                                     # start from a chosen baseline profile
                                     # (storage|compute|ubuntu|mint; default
-                                    # storage — supported by j21)
+                                    # storage — supported by j21 and j22)
+tests/integrated/itf journey run j22-function-survey --template mint
+                                    # the function survey on the mint
+                                    # desktop baseline (two-node draw: the
+                                    # storage guest is a bare Cinnamon
+                                    # desktop; P2P wiring goes through
+                                    # NetworkManager and the product
+                                    # installs through install-two-node)
 tests/integrated/itf watch            # tail the active run — NOT a console
 tests/integrated/itf status           # guests + template + runs overview
 ```
@@ -367,12 +374,20 @@ Four profiles share the build machinery:
   configured Mint ISO by the ubiquity preseed plus the serial-driven
   provision boot (no product). It is the plain desktop-OS leg for
   journeys that exercise the GUI, which install the product through
-  the first-time-user path; its clones carry a real VGA device for a
-  real Cinnamon session, and freshness keys on the ISO name like
+  the first-time-user path (j22's `--template mint` leg is this in
+  practice: the kernel carries the ZFS module but a bare desktop ships
+  no `zfs`/`zpool` userland, so the test-pool recipe installs
+  `zfsutils-linux` beside `parted`); its clones carry a real VGA device
+  for a real Cinnamon session, and freshness keys on the ISO name like
   ubuntu/compute.
 
 Journeys that support profile selection take it at run time
-(`itf journey run j21-zfs-probes --template ubuntu`).
+(`itf journey run j21-zfs-probes --template ubuntu`; the j22 function
+survey takes `storage` — the default — or `mint`, the desktop leg:
+the storage-side guest then comes from the mint template, installs the
+product through the first-time-user path — `install-two-node` when the
+draw includes two-node items — and the two-node lab's P2P wiring goes
+through NetworkManager instead of ifupdown).
 
 - **Linked clones, by design.** The itf guest storage is LVM-thin,
   which supports Proxmox linked clones: each guest clones from the

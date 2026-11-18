@@ -13,7 +13,13 @@ if PYTHON_SRC not in sys.path:
 
 import zfs_lock_manager as zlm
 from command_builders import BashStep
-from test_support import capture_logs, mock_gtk
+from test_support import capture_logs, import_gui_fresh, mock_gtk
+
+# Every import helper below uses import_gui_fresh: under pytest-xdist a
+# worker can co-host a suite that imports the real GTK module chain
+# (test_main, test_datasets_tree), leaving this module cached with real
+# Gtk bound — the mock-internals assertions here (Gtk.Entry.return_value,
+# ...) then fail with AttributeError in full-suite runs only.
 
 _MISSING_RUNNER = object()
 
@@ -36,7 +42,7 @@ class TestShowBigStuff(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -177,7 +183,7 @@ class TestSnapshot(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -365,7 +371,7 @@ class TestDeleteDatasetsRunner(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -547,7 +553,7 @@ class TestUnmount(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -815,7 +821,7 @@ class TestUnmountDataset(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -1289,7 +1295,7 @@ class TestMount(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -2523,7 +2529,7 @@ class TestBrowse(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -2743,7 +2749,7 @@ class TestDeleteSnapshots(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -2844,7 +2850,7 @@ class TestVolumeLoopActions(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -3465,7 +3471,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -3830,7 +3836,7 @@ class TestUnmountShadowedMounts(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 
@@ -4310,7 +4316,7 @@ class TestMountRepair(unittest.TestCase):
 
     def _import_under_mock(self):
         with mock_gtk():
-            import dataset_actions as da
+            da = import_gui_fresh("dataset_actions")
 
             return da
 

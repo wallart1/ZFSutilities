@@ -5,6 +5,7 @@ Pool tab action handlers — extracted from pools_page.py.
 import os
 import re
 import subprocess
+import threading
 import time
 
 import gi
@@ -38,6 +39,52 @@ from scrub_manager import (
     pause_scrub,
     stop_scrub,
 )
+
+# How long the UI thread waits on one `zpool export` before reporting a
+# stall (F-051).  A pool whose zvol backs an active iSCSI LUN session
+# blocks the export ioctl uninterruptibly in the kernel (observed live:
+# a D-state `zpool export` in taskq_wait), and a subprocess timeout
+# cannot reclaim a D-state child — so the fence is a worker thread the
+# UI stops waiting on, never a kill.
+EXPORT_STALL_WARN_S = int(os.environ.get("ZFSUTILITIES_EXPORT_STALL_WARN_S", "120"))
+
+
+class _BoundedExport:
+    """One `zpool export` with a hard UI-side deadline (F-051).
+
+    The export runs in a daemon worker thread; the UI thread never waits
+    on it past the deadline.  A D-state ioctl cannot be killed — after a
+    stall the worker lingers until the kernel releases it (holder
+    removal may let it complete on its own), so the caller keeps the
+    object and can poll `wait` again after resolving holders.
+    """
+
+    def __init__(self, repo, pool_name):
+        self._repo = repo
+        self._pool = pool_name
+        self._outcome = {"done": False, "success": False, "stderr": ""}
+        self._worker = threading.Thread(
+            target=self._work, daemon=True, name=f"pool-export-{pool_name}"
+        )
+        self._worker.start()
+
+    def _work(self):
+        try:
+            self._outcome["success"], self._outcome["stderr"] = (
+                self._repo.export_pool_detailed(self._pool)
+            )
+        finally:
+            self._outcome["done"] = True
+
+    def wait(self, timeout_s):
+        """Wait up to *timeout_s*; return ``(finished, success, stderr)``."""
+        self._worker.join(timeout_s)
+        return self._outcome["done"], self._outcome["success"], self._outcome["stderr"]
+
+
+def _log_export_stall(pool_name, timeout_s):
+    log_msg(f"WARN: Export of '{pool_name}' stalled {timeout_s}s — pool still held")
+    log_msg("WARN: Resolving pool holders so the export can finish")
 
 
 def on_pools_watch(app):
@@ -358,9 +405,16 @@ def on_pools_export(app):
         return
 
     for pool_name in selected:
-        success, stderr = app.ctx.zfs_repository.export_pool_detailed(pool_name)
-        if success:
+        export = _BoundedExport(app.ctx.zfs_repository, pool_name)
+        finished, success, stderr = export.wait(EXPORT_STALL_WARN_S)
+        if finished and success:
             log_msg(f"INFO: Pool '{pool_name}' exported successfully")
+            continue
+
+        if not finished:
+            _log_export_stall(pool_name, EXPORT_STALL_WARN_S)
+            if _recover_stalled_export(app, pool_name, export):
+                log_msg(f"INFO: Pool '{pool_name}' exported successfully after resolving blockers")
             continue
 
         log_msg(f"WARN: Error exporting pool '{pool_name}'")
@@ -883,25 +937,103 @@ def _try_export_with_recovery(app, pool_name, stderr):
         _show_export_blockers_dialog(app, pool_name, unresolvable)
         return False
 
-    # Safe auto-unmount of filesystems that have no other blocker.
+    if not _resolve_export_blockers(app, pool_name, blockers):
+        log_msg(f"INFO: Export of '{pool_name}' cancelled by user")
+        return False
+
+    # The retry gets the same UI-side deadline: the stall case (a held
+    # zvol blocking the ioctl) blocks any attempt, not just the first.
+    retry = _BoundedExport(repo, pool_name)
+    finished, success, stderr2 = retry.wait(EXPORT_STALL_WARN_S)
+    if finished and success:
+        return True
+
+    if not finished:
+        _log_export_stall(pool_name, EXPORT_STALL_WARN_S)
+        return _recover_stalled_export(app, pool_name, retry)
+
+    log_msg(f"WARN: Export of '{pool_name}' still failed after recovery: {stderr2.strip()}")
+    return False
+
+
+def _resolve_export_blockers(app, pool_name, blockers):
+    """Clear the resolvable blockers of a failed or stalled export.
+
+    Safe auto-unmount of filesystems that have no other blocker, then
+    approval-driven resolution of the side-effect blockers (stop VMs,
+    remove iSCSI LUNs, unshare, terminate processes).  Returns False as
+    soon as the user declines any step.
+    """
+    repo = app.ctx.zfs_repository
+
     unmount_ok, unmount_err = _unmount_pool_filesystems(repo, pool_name, blockers)
     if not unmount_ok:
         log_msg(f"WARN: Auto-unmount of filesystems failed: {unmount_err}")
 
-    # Approval-driven resolution of side-effect blockers.
     approved = True
     approved &= _approve_and_stop_vms(app, blockers)
     approved &= _approve_and_remove_iscsi(app, blockers)
     approved &= _approve_and_unshare(app, blockers, repo)
     approved &= _approve_and_terminate_processes(app, blockers)
+    return approved
 
-    if not approved:
+
+def _recover_stalled_export(app, pool_name, export):
+    """Resolve the holders of a stalled export with the user's approval.
+
+    A stall means the export ioctl is blocked in the kernel — most often
+    a zvol held by a live iSCSI LUN session, which an end user has no
+    way to release by hand.  Diagnose the pool's blockers and clear them
+    through the same approval-driven flow the fast-fail path uses;
+    removing the holder (the LUN) is what lets the kernel release the
+    lingering export, so afterwards we wait for the stalled worker to
+    settle and only then retry.  Returns True if the pool ended up
+    exported.
+    """
+    repo = app.ctx.zfs_repository
+
+    blockers = _collect_export_blockers(repo, pool_name)
+    _log_pool_mount_state(repo, pool_name)
+    resolvable = [b for b in blockers if b.resolvable]
+    unresolvable = [b for b in blockers if not b.resolvable]
+
+    for reason in unresolvable:
+        log_msg(f"WARN: {reason.dataset}: {reason.detail}")
+    if unresolvable:
+        _show_export_blockers_dialog(app, pool_name, unresolvable)
+
+    if not resolvable:
+        log_msg(
+            f"WARN: Export of '{pool_name}' stays kernel-blocked; "
+            "no removable holders found"
+        )
+        return False
+
+    if not _resolve_export_blockers(app, pool_name, blockers):
         log_msg(f"INFO: Export of '{pool_name}' cancelled by user")
         return False
 
-    success, stderr2 = repo.export_pool_detailed(pool_name)
-    if success:
+    # The lingering worker may complete on its own once the holder is
+    # gone — give it the same bound before spending a fresh attempt.
+    finished, success, _stderr = export.wait(EXPORT_STALL_WARN_S)
+    if finished and success:
         return True
 
-    log_msg(f"WARN: Export of '{pool_name}' still failed after recovery: {stderr2.strip()}")
+    if finished:
+        retry = _BoundedExport(repo, pool_name)
+        retry_finished, retry_success, retry_stderr = retry.wait(EXPORT_STALL_WARN_S)
+        if retry_success:
+            return True
+        if retry_finished:
+            log_msg(
+                f"WARN: Export of '{pool_name}' still failed after recovery: "
+                f"{retry_stderr.strip()}"
+            )
+            return False
+
+    log_msg(
+        f"WARN: Holders of '{pool_name}' removed but the export stays "
+        "kernel-blocked; it may still complete on its own — check the "
+        "pool state before retrying"
+    )
     return False

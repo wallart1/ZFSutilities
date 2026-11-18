@@ -2661,7 +2661,7 @@ marks that pool as an offsite candidate; the Offsite tab detects an online candi
 | **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected)                                                  |
 | **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                                                                   |
 | **Import**  | Enabled only when at least one selected pool is `IMPORTABLE`. Imports those pools directly, or opens a dialog listing importable pools if none are selected |
-| **Export**  | Confirms, then runs `zpool export` on all selected online pools                                                                                             |
+| **Export**  | Confirms, then runs `zpool export` on all selected online pools. A failed export enters the blocker-diagnosis flow; an export that never returns (a pool whose zvol sits behind a live iSCSI LUN session blocks the kernel uninterruptibly) stops blocking the window after a bounded wait and enters the same holder-removal dialogs — removing the LUN is what lets the kernel finish the export |
 | **Save**    | Saves registry changes; turns **red** while there are unsaved changes (the Pools tab label turns red with it)                                                  |
 | **Revert**  | Reloads registry from the last saved settings                                                                                                               |
 | **Refresh** | Re-runs `zpool list`, rescans importable pools, and refreshes the table                                                                                     |

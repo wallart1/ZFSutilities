@@ -1254,6 +1254,99 @@ test_j05_encrypted_flag_contract() {
     assert_rc 0 $?
 }
 
+test_j05_storage_template_routing() {
+    test_start "j05 lab builder: --storage-template routes the storage clone"
+    local work="$tmp_dir/j05-sttpl"
+    mkdir -p "$work"
+    local j05="$mydir/tests/integrated/journeys/j05-two-node-install.journey"
+    # The storage clone must carry --template <name> (the mint leg);
+    # the run then fails fast at the hostname gate (stubbed exec) with
+    # no base-host contact of any kind.
+    (
+        # shellcheck disable=SC1090
+        source "$j05"
+        itf_step() { return 0; }
+        itf_step_start() { :; }
+        itf_guest_exec() { return 1; }
+        # shellcheck disable=SC2034  # site keys for the two-node gate
+        ITF_COMPUTE_BASE=cb.invalid
+        # shellcheck disable=SC2034
+        ITF_COMPUTE_TEMPLATE_NAME=tpl-compute
+        # shellcheck disable=SC2034
+        ITF_ISCSI_STORAGE_IP=10.9.0.1
+        # shellcheck disable=SC2034
+        ITF_ISCSI_COMPUTE_IP=10.9.0.2
+        # shellcheck disable=SC2034
+        ITF_STORAGE_BASE=sb.invalid
+        ITF_RUN_DIR="$work"
+        itf_journey_stage_from_template() {
+            echo "$*" >> "$work/stage-calls"
+            # Distinct guest records so the hostname gate (not the
+            # same-IP convergence path) is where the run stops.
+            J_VMID=8005
+            J_GUEST_IP="10.0.0.$((5 + $(wc -l < "$work/stage-calls")))"
+            return 0
+        }
+        j05_two_node_lab_main --storage-template itf-template-mint \
+            > /dev/null 2>&1
+        echo "$?" > "$work/rc"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_contains "$(head -1 "$work/stage-calls")" \
+        "j05-storage --base sb.invalid --template itf-template-mint --role storage"
+    # The P2P branch lives in-guest (NetworkManager when ifupdown is
+    # absent) — the source contract, like the encrypted-tail greps above.
+    grep -q "nmcli con add type ethernet" "$j05"
+    assert_rc 0 $?
+    grep -q "command -v ifup" "$j05"
+    assert_rc 0 $?
+}
+
+test_single_node_lab_template_and_bare_flags() {
+    test_start "single-node lab: --template routes the clone; --bare-baseline swaps the verify"
+    local work="$tmp_dir/sn-flags"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        ITF_RUN_DIR="$work"
+        _calls=""
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_step_start() { :; }
+        itf_journey_stage_from_template() {
+            _calls+="clone:$*; "
+            # shellcheck disable=SC2034
+            J_VMID=8006
+            # shellcheck disable=SC2034
+            J_GUEST_IP=10.0.0.9
+            return 0
+        }
+        itf_journey_verify_installed() { _calls+="verify; "; return 0; }
+        itf_journey_stage_test_pools() { _calls+="pools; "; return 0; }
+        itf_single_node_lab_main j99 --template itf-template-mint \
+            --bare-baseline > /dev/null 2>&1
+        _calls+="bare-rc=$?; "
+        itf_single_node_lab_main j99 > /dev/null 2>&1
+        _calls+="default-rc=$?; "
+        itf_single_node_lab_main j99 --bogus > /dev/null 2>&1
+        _calls+="bogus-rc=$?"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    local calls
+    calls="$(cat "$work/calls")"
+    assert_contains "$calls" "clone:j99 --template itf-template-mint; "
+    # Bare baseline: an info step stands in for the installed-state
+    # verify (the template carries no product).
+    assert_contains "$calls" "info:installed state verified"
+    # The default run keeps the real verify; exactly one verify total.
+    local n_verify
+    n_verify="$(printf '%s' "$calls" | grep -o 'verify;' | wc -l)"
+    assert_equals 1 "$n_verify"
+    assert_contains "$calls" "bare-rc=0"
+    assert_contains "$calls" "default-rc=0"
+    assert_contains "$calls" "bogus-rc=2"
+}
+
 test_j05_same_ip_collision_convergence() {
     test_start "j05: same-IP collision converges via a bounded storage re-lease"
     local work="$tmp_dir/j05-collide"
@@ -2291,6 +2384,8 @@ test_keystore_unlock_mount_feeds_stdin
 test_encrypted_key_lun_stage_happy_path
 test_encrypted_key_lun_gates_on_config
 test_j05_encrypted_flag_contract
+test_j05_storage_template_routing
+test_single_node_lab_template_and_bare_flags
 test_j05_same_ip_collision_convergence
 test_two_node_journeys_read_four_field_records
 test_upgrade_relabel_stage_rewrites_release

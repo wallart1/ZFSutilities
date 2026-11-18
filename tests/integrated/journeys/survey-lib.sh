@@ -22,6 +22,11 @@
 #       Push the tree under test into the guest at /root/ZFSutilities
 #       (working tree or the fetched release — always the enumerated
 #       tree; j11's dev-tarball serve path).
+#   itf_survey_install_baseline <guest-ip>
+#       Bare-desktop legs only (the mint profile, single-node shape):
+#       first-time-user install-single-node from the staged tree, so the
+#       survey starts from the same post-install point the storage leg's
+#       template clone provides.
 #   itf_survey_stage_playground <guest-ip>
 #       Survey-owned scratch state + the pinned payload config
 #       (ZFSCONFIG_PATH) every CLI recipe runs under.
@@ -219,6 +224,36 @@ itf_survey_stage_tree_compute() {
             "see survey-tree-pack.log / survey-tree-unpack.log"
         return 1
     fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Baseline install (bare-desktop legs — the mint profile, single-node
+# shape; the two-node lab installs via install-two-node itself)
+# ---------------------------------------------------------------------------
+
+itf_survey_install_baseline() {
+    local guest_ip="$1"
+    itf_step_start "survey baseline install" \
+        "first-time-user install-single-node onto the bare desktop"
+    # The fresh-system sequence from j01's install stage (common.sh),
+    # minus the download: the tree under test is already staged by
+    # itf_survey_stage_tree, and this baseline carries no installed
+    # product to verify first (the mint template has none by design).
+    local pre_log="$ITF_RUN_DIR/survey-prereq.log"
+    if itf_guest_exec "$guest_ip" \
+            "/root/ZFSutilities/bin/check-prerequisites --single-node" \
+            > "$pre_log" 2>&1; then
+        itf_step fail "prereq check (fresh desktop)" \
+            "unexpectedly reported all-present"
+    else
+        itf_step pass "prereq check (fresh desktop)" \
+            "reports the missing items a user must handle"
+        itf_artifact "survey-prereq" "$pre_log"
+    fi
+    itf_journey_run_installer "$guest_ip" 'y\ny\n\n\n' \
+        "install-single-node completes" || return 1
+    itf_journey_verify_installed "$guest_ip"
     return 0
 }
 
@@ -717,6 +752,16 @@ itf_survey_run_gui_items() {
         if itf_guest_exec "$guest_ip" '
             source /root/survey-env.sh
             export SURVEY_DS SURVEY_RID
+            # The GUI is a config-reading surface like every CLI recipe:
+            # the pinned survey config (three registered test pools) is
+            # what the managed-pool scope keys its rows on — the
+            # installed config registers none, so without this the
+            # datasets/pools pages survey an empty world.  Both override
+            # names: the Python GUI reads ZFSUTILITIES_CONFIG_PATH
+            # (config_core), the shell side ZFSCONFIG_PATH (installer-lib)
+            # — one env, two keys.
+            export ZFSCONFIG_PATH=/root/survey-config.json
+            export ZFSUTILITIES_CONFIG_PATH=/root/survey-config.json
             timeout 5400 python3 /root/survey-harness/gui_probe.py \
                 --ops /root/survey-ops.tsv \
                 --results /root/survey-results.jsonl \

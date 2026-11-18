@@ -92,7 +92,9 @@ L2_INTERACTIONS = {
     "pools": [
         {"suffix": "select-pool", "label": "select a pool row", "role": "select-first"},
         {"suffix": "select-scrub", "label": "select a scrub-queue row", "role": "select-second"},
-        {"suffix": "cycle-combo", "label": "change a pools combobox", "role": "cycle-combo"},
+        # No cycle-combo here: the Pools page carries no combobox (the
+        # scrub controls moved to the Scrub Manager); the entry surveyed
+        # a widget that no longer exists and could only block.
         {"suffix": "navigate", "label": "open the Pools page", "role": "navigate"},
     ],
     "datasets": [

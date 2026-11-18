@@ -17,6 +17,8 @@ ITF guest driver); this module contributes the GLib executor and the
 pytest front end.
 """
 
+import importlib
+import sys
 import time
 
 import e2e_support as e2e
@@ -31,6 +33,15 @@ gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
 backup_runner = import_or_skip_gi("backup_runner")
+# The engine needs a REAL GLib binding: GLib.timeout_add drives the step
+# watcher, and a mock-bound copy (cached by another suite's module-level
+# mock_gtk import at collection) leaves every step hanging on this suite's
+# own watchdog. Self-heal instead of trusting the collection order: evict
+# and re-import under the real gi established just above.
+if type(backup_runner.GLib).__name__ == "MagicMock":
+    sys.modules.pop("backup_runner", None)
+    backup_runner = importlib.import_module("backup_runner")
+    assert type(backup_runner.GLib).__name__ != "MagicMock"
 
 
 # ---------------------------------------------------------------------------

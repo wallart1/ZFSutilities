@@ -731,3 +731,90 @@ unregistered/offline pools; stored profiles keep them but skip+WARN at run.
   iter_parent (product now reads it; paths are tuples).
 - Docs: gtk-gui.md Detach section gained a button-gating paragraph;
   testing.md growth-buttons row extended.
+
+## 2026-11-17 (pub) — j22 function survey on the mint leg (first 0.142.0 survey run)
+
+First j22 run against the merged 0.142.0 tree, on the user-chosen mint
+baseline (`--template mint`, full universe). Green on run
+run-20261117-162554 after one product fix (F-051, verified by the
+archive replay) and four harness gaps fixed in-cycle:
+
+- **j22 profile support** (new): reads the driver's `--template` knob
+  (storage default | mint); `itf_single_node_lab_main` gained
+  `--template/--bare-baseline`, `j05_two_node_lab_main` gained
+  `--storage-template`, and the j05 P2P stage branches in-guest
+  (ifupdown stanza vs NetworkManager `nmcli` profile; the lease-bounce
+  fallback chain gained `nmcli device reapply`). The bare mint
+  single-node shape installs the product first-time-user from the
+  staged tree (`itf_survey_install_baseline`).
+- **Mint carries the ZFS kernel module but no userland** — the pool
+  recipe now installs `zfsutils-linux` beside `parted` (mint userland
+  2.2.2 vs module 2.4.1 coexist fine; the GUI logs a version WARN).
+- **GUI probe config**: the GUI is a config-reading surface like the
+  CLI recipes — the probe now runs under the pinned survey config via
+  BOTH names (`ZFSUTILITIES_CONFIG_PATH` for config_core,
+  `ZFSCONFIG_PATH` for shell-outs). Without it, 0.142.0's managed-pool
+  scope legitimately empties the datasets/pools pages (installed
+  config registers no pools) — leg-independent, first 0.142.0 survey
+  proof.
+- **GTK_USE_PORTAL=0 in gui_probe**: on a desktop distro GTK routes
+  native file choosers through xdg-desktop-portal, which cannot start
+  headless under Xvfb and stacks D-Bus timeouts past the op watchdog.
+- **Stale catalog entry removed**: `gui-w-pools-cycle-combo` surveyed a
+  Pools-page combobox that no longer exists (scrub controls moved to
+  the Scrub Manager); it could only block.
+- **F-051 (verified)**: Pools → Export froze the window — a zvol held
+  by a live iSCSI LUN session blocks `zpool export` uninterruptibly
+  (D-state, taskq_wait), and the handler ran it unbounded on the UI
+  thread; a subprocess timeout cannot reclaim a D-state child. Fix:
+  `_export_pool_bounded` worker thread + `EXPORT_STALL_WARN_S`
+  (default 120 s, env-overridable) + holder-naming WARN. Live proof:
+  the Export op passed at the 120.98 s bound with the window alive.
+- Remaining survey skips are fixture-by-design (step-table rows empty
+  under the pinned config) or data-accumulation preconditions
+  (alignment samples for the Performance page).
+
+## 2026-11-17 (pub) — cycle wrap-up: PREEXISTING emptied, export-stall recovery, GTK binding fences
+
+Wrap-up run on the uncommitted j22-mint/F-051 tree. Full suite green
+twice over (final: 115 suites, 6711/0; python 4834 + 22 skip).
+
+- **All four PREEXISTING entries resolved, file emptied.** (1) Upgrade
+  journeys' transcript markers updated to the absolute-path
+  switch-version prints (j10/j12/j19/j23/j25; `sw_cmd` local keeps the
+  lines under 100 cols). (2) j18 header, its closing-report line, and
+  the journeys README j18 row now say PENDING+DRIFT (the parser's
+  failed-mode fixture test is by design). (3) The tooltip full-suite
+  flake: ROOT CAUSE reproduced deterministically — a pytest-xdist
+  worker co-hosting a real-GTK suite (test_main/test_datasets_tree
+  import at collection) leaves GUI modules cached REAL-bound, and
+  mock-internals assertions (`Gtk.Entry.return_value`) then die with
+  AttributeError, full runs only. Fence: the file's 12 import helpers
+  use `import_gui_fresh` (the sanctioned tool; wholesale fresh=True
+  re-executes the cyclic pools_page↔pool_actions graph and breaks 10
+  tests — import_gui_fresh's targeted restore does not). Verified
+  poisoned AND standalone: 140/140. Swept the same conversion across
+  ten more suites (121 sites) + extended the gi-guard audit's parser
+  to recognize module-level `x = import_gui_fresh("mod")` as an
+  import. (4) The export-stall WARN-only branch routed through the
+  recovery machinery: `_BoundedExport` (worker + `wait`), shared
+  `_resolve_export_blockers`, new `_recover_stalled_export` (diagnose
+  → approval dialogs → wait for the stalled worker to settle → one
+  fresh retry → honest give-up WARNs; the "Release holders" manual
+  instruction is gone). Five new pool-actions tests; the zero-caller
+  `_export_pool_bounded` wrapper removed.
+- **Sweep regression caught and fixed by the full gate:** module-level
+  `import_gui_fresh("backup_runner")` in test_backup_runner replaced
+  the cache with a mock-bound copy at collection, and
+  test_offsite_e2e/test_runner_factory plain-import it expecting REAL
+  GLib (`GLib.timeout_add` drives the step watcher) — every mechanics
+  step hung to the 60 s watchdog (5 failed, first full run). Fix:
+  module-level sites keep the original STICKY imports (comment
+  explains why), and test_offsite_e2e now SELF-HEALS its binding
+  (evict + re-import under real gi when it finds MagicMock GLib) —
+  order-independent, verified under deliberate poisoning.
+- Docs: messages manual gained the three stall-recovery rows;
+  gtk-gui.md Export row describes the bounded wait + holder dialogs;
+  testing.md's freshness guidance names both fences and the cyclic-
+  graph trap; GLOSSARY +D-state, +sticky binding, +xdg-desktop-portal.
+  Docs integrity 23/23; mkdocs build green.

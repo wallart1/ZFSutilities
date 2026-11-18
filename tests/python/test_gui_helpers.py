@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 from unittest.mock import call as mock_call
 
-from test_support import mock_gtk
+from test_support import import_gui_fresh, mock_gtk
 
 
 def _import_gui_helpers():
@@ -15,7 +15,7 @@ def _import_gui_helpers():
     import itself requires gi.
     """
     with mock_gtk():
-        import gui_helpers
+        gui_helpers = import_gui_fresh("gui_helpers")
 
     return gui_helpers
 
@@ -64,7 +64,7 @@ class TestAddVarRow(unittest.TestCase):
     def test_block_scroll_true_connects_scroll_event_handler(self):
         """A ComboBox created with block_scroll=True suppresses widget scroll."""
         with mock_gtk() as gtk_mock:
-            import gui_helpers
+            gui_helpers = import_gui_fresh("gui_helpers")
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 grid = MagicMock()
@@ -95,7 +95,7 @@ class TestAddVarRow(unittest.TestCase):
     def test_block_scroll_false_does_not_connect_scroll_event(self):
         """A ComboBox created with block_scroll=False has no scroll guard."""
         with mock_gtk() as gtk_mock:
-            import gui_helpers
+            gui_helpers = import_gui_fresh("gui_helpers")
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 grid = MagicMock()
@@ -117,7 +117,7 @@ class TestAddVarRow(unittest.TestCase):
     def test_tooltip_set_on_label_and_widget(self):
         """The tooltip lands on the input widget, not just the label."""
         with mock_gtk() as gtk_mock:
-            import gui_helpers
+            gui_helpers = import_gui_fresh("gui_helpers")
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 grid = MagicMock()
@@ -141,7 +141,7 @@ class TestAddVarRow(unittest.TestCase):
     def test_no_tooltip_leaves_widget_untouched(self):
         """Without a tooltip, neither the label nor the widget gets one."""
         with mock_gtk() as gtk_mock:
-            import gui_helpers
+            gui_helpers = import_gui_fresh("gui_helpers")
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 grid = MagicMock()
@@ -164,7 +164,7 @@ class TestSetColumnHeaderTooltip(unittest.TestCase):
     def test_sets_tooltip_label_and_widget_on_column(self):
         """The header label carries the tooltip and becomes the column widget."""
         with mock_gtk() as gtk_mock:
-            import gui_helpers
+            gui_helpers = import_gui_fresh("gui_helpers")
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 col = MagicMock()
@@ -275,7 +275,7 @@ class TestTextViewSearch(unittest.TestCase):
         view = MagicMock()
         view.get_buffer.return_value = buffer
         with mock_gtk() as gtk_mock:
-            import gui_helpers
+            gui_helpers = import_gui_fresh("gui_helpers")
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 search = gui_helpers.TextViewSearch(view)
@@ -720,7 +720,7 @@ class TestCreateMenuBar(unittest.TestCase):
 
     def test_view_menu_contains_font_submenus(self):
         with mock_gtk() as gtk_mock:
-            import gui_helpers
+            gui_helpers = import_gui_fresh("gui_helpers")
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 app = MagicMock()

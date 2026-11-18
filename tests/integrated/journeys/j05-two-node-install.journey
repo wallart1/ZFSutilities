@@ -49,7 +49,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 # for ssh on it, and rewrite the guest record (4th field = the
 # run-tagged qm NAME, same shape itf_journey_stage_from_template
 # writes). Debian's dhcpcd DECLINEs the duplicate on re-acquire now
-# that the compute clone is up and answering for it. On success echoes
+# that the compute clone is up and answering for it (a NetworkManager
+# guest — the mint leg — bounces the lease via nmcli device reapply).
+# On success echoes
 # the new address and returns 0; any failure returns 1 (the caller
 # fails the hostname gate — no silent fallback).
 _j05_storage_lease_reacquire() {
@@ -65,7 +67,8 @@ _j05_storage_lease_reacquire() {
         i=$(ls /sys/class/net | grep -v "^lo$" | sed -n 1p) || exit 3
         ifdown "$i" 2>/dev/null || dhcpcd -k "$i" 2>/dev/null || true
         sleep 2
-        ifup "$i" 2>/dev/null || dhcpcd "$i" 2>/dev/null || true
+        ifup "$i" 2>/dev/null || dhcpcd "$i" 2>/dev/null \
+            || nmcli device reapply "$i" 2>/dev/null || true
     ' > "$ITF_RUN_DIR/lease-reacquire-${gname}.log" 2>&1 || true
     new_ip="$(itf_guest_ip "$base" "$vmid" 600 || true)"
     if [[ -z "$new_ip" || "$new_ip" == "$other_ip" ]]; then
@@ -95,9 +98,11 @@ j05_two_node_lab_main() {
     if [[ -n "${J05_ENCRYPTED_KEYS:-}" ]]; then
         encrypted_keys=1
     fi
+    local storage_template=""
     while (( $# > 0 )); do
         case "$1" in
             --encrypted-keys) encrypted_keys=1; shift ;;
+            --storage-template) storage_template="$2"; shift 2 ;;
             *) echo "itf: unknown j05_two_node_lab_main option: $1" >&2; return 2 ;;
         esac
     done
@@ -117,8 +122,13 @@ j05_two_node_lab_main() {
     # Stage T: clone both guests from their role templates
     # ------------------------------------------------------------------
 
-    itf_journey_stage_from_template j05-storage --base "$s_base" --role storage \
-        || return 1
+    if [[ -n "$storage_template" ]]; then
+        itf_journey_stage_from_template j05-storage --base "$s_base" \
+            --template "$storage_template" --role storage || return 1
+    else
+        itf_journey_stage_from_template j05-storage --base "$s_base" --role storage \
+            || return 1
+    fi
     local s_vmid="$J_VMID"
     local s_ip="$J_GUEST_IP"
 
@@ -183,9 +193,12 @@ j05_two_node_lab_main() {
 
     # The hot-plugged NIC lands as the second predictable name (net0 is
     # the template's only NIC); wait for it inside each guest, then
-    # configure the P2P static persistently (both guests run ifupdown:
-    # Debian classic on storage, ifupdown2 on the PVE host) and bring it
-    # up now.
+    # configure the P2P static persistently and bring it up now.  The
+    # in-guest script branches on the network stack the guest actually
+    # runs: ifupdown (Debian classic on the storage clone, ifupdown2 on
+    # the PVE host) writes /etc/network/interfaces, while a desktop
+    # baseline (the mint leg) owns its NICs through NetworkManager and
+    # gets a persistent connection profile instead.
     local p2p_if="ens19" side ip net_log
     for side in storage compute; do
         [[ "$side" == storage ]] && ip="$ITF_ISCSI_STORAGE_IP" || ip="$ITF_ISCSI_COMPUTE_IP"
@@ -196,11 +209,18 @@ j05_two_node_lab_main() {
         if itf_guest_exec "$gip" "
             for i in \$(seq 1 30); do [[ -e /sys/class/net/${p2p_if} ]] && break; sleep 2; done
             [[ -e /sys/class/net/${p2p_if} ]] || exit 3
-            stanza='\\n# itf P2P link (j05)\\nauto ${p2p_if}'
-            stanza+='\\niface ${p2p_if} inet static\\n    address ${ip}/24\\n'
-            grep -q 'iface ${p2p_if} inet static' /etc/network/interfaces \\
-                || printf '%b' \"\$stanza\" >> /etc/network/interfaces
-            ifup ${p2p_if} || { ip link set ${p2p_if} up; ip addr add ${ip}/24 dev ${p2p_if}; }
+            if command -v ifup >/dev/null 2>&1; then
+                stanza='\\n# itf P2P link (j05)\\nauto ${p2p_if}'
+                stanza+='\\niface ${p2p_if} inet static\\n    address ${ip}/24\\n'
+                grep -q 'iface ${p2p_if} inet static' /etc/network/interfaces \\
+                    || printf '%b' \"\$stanza\" >> /etc/network/interfaces
+                ifup ${p2p_if} || { ip link set ${p2p_if} up; ip addr add ${ip}/24 dev ${p2p_if}; }
+            else
+                nmcli con show itf-p2p >/dev/null 2>&1 \\
+                    || nmcli con add type ethernet con-name itf-p2p ifname ${p2p_if} \\
+                           ipv4.method manual ipv4.addresses ${ip}/24 autoconnect yes
+                nmcli con up itf-p2p
+            fi
             ip -4 addr show ${p2p_if} | grep -q '${ip}/'
         " > "$net_log" 2>&1; then
             itf_step pass "P2P address configured [$side]" "$ip/24 on $p2p_if"

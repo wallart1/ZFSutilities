@@ -39,6 +39,15 @@ from typing import ClassVar
 OP_TIMEOUT_DEFAULT = int(os.environ.get("SURVEY_OP_TIMEOUT", "300"))
 MAX_DIALOG_RESPONSES_PER_OP = 6
 
+# Native file-chooser dialogs must stay in-process on every distro.  On a
+# desktop OS (the mint leg) GTK routes GtkFileChooserNative through
+# xdg-desktop-portal over the session bus; headless under a private Xvfb
+# the portal backend cannot start and the D-Bus activation stacks timeouts
+# past the op watchdog — the op dies as a SIGKILLed stall (the Export
+# button, observed live).  A server leg has no portal at all and always
+# used the built-in dialog; pin that behavior everywhere.
+os.environ.setdefault("GTK_USE_PORTAL", "0")
+
 # Dialog-button label classes (mnemonics stripped, lowercased).  "close"
 # and "stop" are negative-side: they dismiss/refuse rather than commit.
 NEGATIVE_LABELS = re.compile(

@@ -628,12 +628,19 @@ bind the current context's mocks and call history starts empty — without
 leaking a different module object to the rest of the session. Use it whenever
 a test asserts on widget call counts or needs to patch a GUI module it did
 not itself import. Helpers that re-import a GUI module (the `_import_*`
-helpers several suites use) must always pass `fresh=True`: otherwise a GUI
-dependency cached with real bindings — for example `gui_helpers` imported at
-collection time by a suite that uses real GTK — leaks real Gtk into the
-re-imported module and crashes tests that hand mock windows to real dialog
-constructors (`TypeError: could not convert value for property
-'transient_for' from MagicMock to GtkWindow`).
+helpers several suites use) must always request freshness in one of two ways:
+otherwise a GUI dependency cached with real bindings — for example
+`gui_helpers` imported at collection time by a suite that uses real GTK —
+leaks real Gtk into the re-imported module and crashes tests that hand mock
+windows to real dialog constructors (`TypeError: could not convert value for
+property 'transient_for' from MagicMock to GtkWindow`), or fails
+mock-internals assertions outright (`Gtk.Entry.return_value` on the real
+class). The two ways: whole-context `fresh=True`, or — when the helper needs
+exactly one module fresh and the GUI import graph is cyclic (for example
+`pools_page` ↔ `pool_actions`) — `import_gui_fresh("module")` inside a plain
+`mock_gtk()` context, which evicts the closure for the import and restores
+every other binding afterwards; wholesale `fresh=True` re-executes the whole
+graph on every helper call and can trip over those cycles.
 
 One binding-shape rule prevents the cross-suite flakes that only appear under
 `pytest -n auto`: an in-function import of a GUI module must never run bare.

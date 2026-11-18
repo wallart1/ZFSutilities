@@ -12,7 +12,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import memory_stats as ms
-from test_support import mock_gtk
+from test_support import import_gui_fresh, mock_gtk
 
 
 def _arc_sample(mono, hits=1000, misses=100, size=32648235840, c_max=48318382080):
@@ -1177,7 +1177,7 @@ class TestRollingChart(unittest.TestCase):
 
     def test_window_trims_to_max_samples(self):
         with mock_gtk():
-            import memory_page as mp
+            mp = import_gui_fresh("memory_page")
 
             chart = mp.RollingChart("t", ["a"], max_samples=3)
             for i in range(5):
@@ -1189,7 +1189,7 @@ class TestRollingChart(unittest.TestCase):
         # mock_gtk hands every DrawingArea the same shared mock, so the
         # call history spans the session — assert the latest request.
         with mock_gtk():
-            import memory_page as mp
+            mp = import_gui_fresh("memory_page")
 
             chart = mp.RollingChart("t", ["a"])
             chart.widget.set_size_request.assert_called_with(-1, 220)
@@ -1197,7 +1197,7 @@ class TestRollingChart(unittest.TestCase):
     def test_draw_smoke(self):
         """A full draw pass must not raise with two series and a reference."""
         with mock_gtk():
-            import memory_page as mp
+            mp = import_gui_fresh("memory_page")
 
             chart = mp.RollingChart("traffic", ["read", "write"])
             chart.set_reference(1000.0, "c_max")
@@ -1213,7 +1213,7 @@ class TestRollingChart(unittest.TestCase):
         """The Cairo fallback's 9px text scales with the widget-resolved
         GUI base font, like the matplotlib renderer's point sizes."""
         with mock_gtk():
-            import memory_page as mp
+            mp = import_gui_fresh("memory_page")
 
             chart = mp.RollingChart("traffic", ["read", "write"])
             for i in range(4):
@@ -1231,7 +1231,7 @@ class TestRollingChart(unittest.TestCase):
         ticks: tick marks below the plot and age labels between the ends
         (the matplotlib renderer draws the same positions)."""
         with mock_gtk():
-            import memory_page as mp
+            mp = import_gui_fresh("memory_page")
 
             chart = mp.RollingChart("traffic", ["read", "write"])
             chart.append(0.0, [10, 5])
@@ -1254,7 +1254,7 @@ class TestRollingChart(unittest.TestCase):
         """Interior ticks whose labels would overlap drop out until the
         survivors fit; the end ticks always stay."""
         with mock_gtk():
-            import memory_page as mp
+            mp = import_gui_fresh("memory_page")
 
             # 50 px plot, 24 px labels: the middle tick cannot fit between
             # the edge-aligned ends, so only the two end ticks survive.
@@ -1275,7 +1275,7 @@ class TestRollingChart(unittest.TestCase):
         """The first label is left-aligned at the plot edge; the last
         ("now") is right-aligned so it never spills past the plot."""
         with mock_gtk():
-            import memory_page as mp
+            mp = import_gui_fresh("memory_page")
 
             layout = mp._x_tick_layout(self._fake_cr(6.0), 60.0, 58.0, 400.0)
             first_x, _first_label, first_label_x = layout[0]

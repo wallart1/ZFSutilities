@@ -12,7 +12,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk
+from test_support import import_gui_fresh, mock_gtk
 
 # gui_helpers may already be bound to the real gi by an earlier suite in
 # the same process (test_dashboard_page imports it under real gi), and
@@ -22,7 +22,7 @@ from test_support import mock_gtk
 for _module in ("gui_helpers", "datasets_page"):
     sys.modules.pop(_module, None)
 with mock_gtk():
-    import datasets_page as dp
+    dp = import_gui_fresh("datasets_page")
 
 
 class _FakePoolRow:

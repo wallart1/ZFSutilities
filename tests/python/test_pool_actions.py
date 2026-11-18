@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,22 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from test_support import mock_gtk
+
+
+def _iscsi_blocker(dataset="tank/vm-211-disk-0", bsname="vm-211-disk-0", lun_info=""):
+    """A resolvable iSCSI-holder blocker shaped like gui_helpers.BusyReason.
+
+    Built as a local namespace (not an import) so this suite keeps no
+    module-level GUI import — the gi import-guard audit requires that.
+    """
+    return SimpleNamespace(
+        category="iscsi",
+        dataset=dataset,
+        detail="zvol is an active iSCSI LUN backstore",
+        resolvable=True,
+        action="",
+        data={"bsname": bsname, "lun_info": lun_info},
+    )
 
 
 def _fake_reason(category, dataset, detail, resolvable=False, action="", data=None):
@@ -579,6 +596,302 @@ class TestOnPoolsExport(unittest.TestCase):
             pa.on_pools_export(app)
 
         app._importable_pool_cache.invalidate.assert_called_once_with()
+
+    def test_export_stall_warns_and_returns(self):
+        """A never-returning export must not freeze the handler (F-051).
+
+        A zvol held by an active iSCSI LUN session blocks `zpool export`
+        uninterruptibly in the kernel; the UI-side deadline reports the
+        stall, the stall recovery finds nothing removable, and the
+        handler finishes — window alive, refreshes run.
+        """
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        app.ctx.zfs_repository.list_datasets.return_value = []
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        release = threading.Event()
+
+        def blocked_export(_pool):
+            release.wait(timeout=10)  # simulate the D-state ioctl
+            return (False, "")
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "EXPORT_STALL_WARN_S", 0.05),
+            patch.object(
+                app.ctx.zfs_repository,
+                "export_pool_detailed",
+                side_effect=blocked_export,
+            ),
+            patch.object(pa, "log_msg") as mock_log,
+        ):
+            try:
+                pa.Gtk.MessageDialog = msg_dialog
+                pa.on_pools_export(app)  # must return, not hang
+            finally:
+                release.set()
+
+        mock_refresh.assert_called_once_with(app)
+        warnings = [c.args[0] for c in mock_log.call_args_list if "stalled" in c.args[0]]
+        self.assertTrue(warnings, "no stall warning logged")
+        gave_up = [
+            c.args[0]
+            for c in mock_log.call_args_list
+            if "no removable holders" in c.args[0]
+        ]
+        self.assertTrue(gave_up, "no honest give-up warning logged")
+
+    def test_export_stall_recovers_after_iscsi_holder_removal(self):
+        """The stall path resolves holders with approval instead of WARN-only.
+
+        A stalled export (zvol held by a live iSCSI LUN session) goes
+        through the same blocker diagnosis and approval dialogs as the
+        fast-fail path; removing the LUN releases the kernel hold, the
+        lingering worker completes, and the pool exports.
+        """
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/vm-211-disk-0", ds_type="volume", mounted="no")
+        ]
+        blocker = _iscsi_blocker(lun_info="iqn.2023-01.com.example:t1 (LUN 3)")
+
+        release = threading.Event()
+
+        def blocked_export(_pool):
+            release.wait(timeout=10)  # the D-state ioctl
+            return (True, "")  # completes once the holder is gone
+
+        confirm_calls = {"n": 0}
+
+        def approve_and_release():
+            confirm_calls["n"] += 1
+            if confirm_calls["n"] == 1:
+                return pa.Gtk.ResponseType.YES  # the export confirm dialog
+            release.set()  # the LUN removal releases the kernel hold
+            return pa.Gtk.ResponseType.YES  # the LUN-removal approval
+
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.side_effect = approve_and_release
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "EXPORT_STALL_WARN_S", 0.05),
+            patch.object(repo, "export_pool_detailed", side_effect=blocked_export),
+            patch.object(pa, "collect_dataset_busy_reasons", return_value=[blocker]),
+            patch.object(pa, "subprocess") as mock_subprocess,
+            patch.object(pa, "log_msg") as mock_log,
+        ):
+            mock_subprocess.run.side_effect = lambda *a, **k: SimpleNamespace(
+                returncode=0, stderr=""
+            )
+            try:
+                pa.Gtk.MessageDialog = msg_dialog
+                pa.on_pools_export(app)
+            finally:
+                release.set()
+
+        msgs = [c.args[0] for c in mock_log.call_args_list]
+        self.assertIn(
+            "INFO: Pool 'tank' exported successfully after resolving blockers", msgs
+        )
+        self.assertTrue(any("Removed iSCSI backstore" in m for m in msgs))
+        manual = [m for m in msgs if "Release holders" in m]
+        self.assertFalse(manual, "stall must not instruct manual holder release")
+        mock_refresh.assert_called_once_with(app)
+
+    def test_export_stall_cancelled_by_user(self):
+        """Declining the holder-removal approval cancels the stalled export."""
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/vm-211-disk-0", ds_type="volume", mounted="no")
+        ]
+        blocker = _iscsi_blocker()
+        release = threading.Event()
+
+        def blocked_export(_pool):
+            release.wait(timeout=10)
+            return (False, "")
+
+        msg_dialog = MagicMock()
+        confirm_calls = {"n": 0}
+
+        def confirm_then_decline():
+            confirm_calls["n"] += 1
+            if confirm_calls["n"] == 1:
+                return pa.Gtk.ResponseType.YES  # the export confirm dialog
+            return pa.Gtk.ResponseType.NO  # decline the LUN-removal approval
+
+        msg_dialog.return_value.run.side_effect = confirm_then_decline
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "EXPORT_STALL_WARN_S", 0.05),
+            patch.object(repo, "export_pool_detailed", side_effect=blocked_export),
+            patch.object(pa, "collect_dataset_busy_reasons", return_value=[blocker]),
+            patch.object(pa, "log_msg") as mock_log,
+        ):
+            try:
+                pa.Gtk.MessageDialog = msg_dialog
+                pa.on_pools_export(app)
+            finally:
+                release.set()
+
+        msgs = [c.args[0] for c in mock_log.call_args_list]
+        self.assertIn("INFO: Export of 'tank' cancelled by user", msgs)
+        self.assertNotIn("INFO: Pool 'tank' exported successfully after resolving blockers", msgs)
+
+    def test_recovery_retry_stall_routes_through_stall_recovery(self):
+        """A stalled retry inside fast-fail recovery gets the same treatment.
+
+        The fast-fail path resolved blockers and retried; the retry itself
+        stalls (kernel hold) — the stall recovery must run, clear the
+        holder with approval, and let the lingering retry finish.
+        """
+        pa = _import_pool_actions()
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/vm-211-disk-0", ds_type="volume", mounted="no")
+        ]
+        blocker = _iscsi_blocker(lun_info="iqn.2023-01.com.example:t1 (LUN 3)")
+
+        release = threading.Event()
+
+        def blocked_retry(_pool):
+            release.wait(timeout=10)
+            return (True, "")  # completes once the holder is gone
+
+        msg_dialog = MagicMock()
+        calls = {"n": 0}
+
+        def approve_and_release():
+            calls["n"] += 1
+            if calls["n"] == 2:
+                # Only the stall recovery's LUN removal releases the hold:
+                # the first approval (fast-fail recovery) must leave the
+                # retry stalled so the stall branch is what runs.
+                release.set()
+            return pa.Gtk.ResponseType.YES
+
+        msg_dialog.return_value.run.side_effect = approve_and_release
+
+        with (
+            patch.object(pa, "EXPORT_STALL_WARN_S", 0.05),
+            patch.object(repo, "export_pool_detailed", side_effect=blocked_retry),
+            patch.object(pa, "collect_dataset_busy_reasons", return_value=[blocker]),
+            patch.object(pa, "subprocess"),
+            patch.object(pa, "log_msg") as mock_log,
+        ):
+            mock_subprocess_run = pa.subprocess.run
+            mock_subprocess_run.return_value = SimpleNamespace(returncode=0, stderr="")
+            try:
+                pa.Gtk.MessageDialog = msg_dialog
+                recovered = pa._try_export_with_recovery(app, "tank", "")
+            finally:
+                release.set()
+
+        self.assertTrue(recovered)
+        msgs = [c.args[0] for c in mock_log.call_args_list]
+        self.assertTrue(any("stalled" in m for m in msgs), "no stall warning logged")
+
+    def test_stall_recovery_retries_fresh_when_linger_returns_failure(self):
+        """A lingering export that returns failure gets one fresh attempt."""
+        pa = _import_pool_actions()
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/vm-211-disk-0", ds_type="volume", mounted="no")
+        ]
+        blocker = _iscsi_blocker(lun_info="iqn.2023-01.com.example:t1 (LUN 3)")
+
+        release = threading.Event()
+        # Attempt 1 (the stalled one) fails after the holder is removed;
+        # attempt 2 (the fresh retry) succeeds.
+        outcomes = [
+            lambda _pool: (release.wait(timeout=10), (False, "pool busy"))[1],
+            lambda _pool: (True, ""),
+        ]
+        state = {"i": 0}
+
+        def export_call(pool):
+            outcome = outcomes[min(state["i"], len(outcomes) - 1)]
+            state["i"] += 1
+            return outcome(pool)
+
+        msg_dialog = MagicMock()
+        calls = {"n": 0}
+
+        def approve_and_release():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                release.set()
+            return pa.Gtk.ResponseType.YES
+
+        msg_dialog.return_value.run.side_effect = approve_and_release
+
+        with (
+            patch.object(pa, "EXPORT_STALL_WARN_S", 0.05),
+            patch.object(repo, "export_pool_detailed", side_effect=export_call),
+            patch.object(pa, "collect_dataset_busy_reasons", return_value=[blocker]),
+            patch.object(pa, "subprocess"),
+        ):
+            pa.subprocess.run.return_value = SimpleNamespace(returncode=0, stderr="")
+            export = pa._BoundedExport(repo, "tank")
+            finished, _ok, _err = export.wait(0.05)
+            self.assertFalse(finished)  # the stall that triggers recovery
+            try:
+                pa.Gtk.MessageDialog = msg_dialog
+                recovered = pa._recover_stalled_export(app, "tank", export)
+            finally:
+                release.set()
+
+        self.assertTrue(recovered)
+
+    def test_bounded_export_deadline(self):
+        """The bounded export reports finished and deadline shapes."""
+        pa = _import_pool_actions()
+        repo = MagicMock()
+        repo.export_pool_detailed.return_value = (True, "")
+        finished, ok, err = pa._BoundedExport(repo, "tank").wait(5)
+        self.assertTrue(finished)
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+
+        never = threading.Event()
+        repo.export_pool_detailed.side_effect = lambda _pool: (
+            never.wait(timeout=10) and (False, ""),
+            "",
+        )
+        finished, ok, _ = pa._BoundedExport(repo, "tank").wait(0.05)
+        never.set()
+        self.assertFalse(finished)
+        self.assertFalse(ok)
 
     def test_export_auto_unmounts_and_retries_on_unmount_failure(self):
         pa = _import_pool_actions()

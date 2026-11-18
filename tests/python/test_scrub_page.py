@@ -11,13 +11,13 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import scrub_manager as sm
-from test_support import mock_gtk
+from test_support import import_gui_fresh, mock_gtk
 
 
 class TestScrubPageWidgets(unittest.TestCase):
     def test_scrub_store_schema(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             # Verify the expected column count for the scrub store
             # We can't fully instantiate the UI without a real app, but we can
@@ -26,7 +26,7 @@ class TestScrubPageWidgets(unittest.TestCase):
 
     def test_get_selected_pool_names(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             # Create a minimal mock treeview with multi-selection
             mock_model = MagicMock()
@@ -46,7 +46,7 @@ class TestScrubPageWidgets(unittest.TestCase):
     def test_unregistered_pool_hidden_from_scrub_table(self):
         """Managed-pool scope: an unregistered pool gets no scrub row."""
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             app = MagicMock()
             app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -76,7 +76,7 @@ class TestScrubPageWidgets(unittest.TestCase):
 
     def test_flicker_free_refresh_logic(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             # The refresh_scrub_table function exists and can be called with a
             # mocked app object that has the required attributes.
@@ -102,7 +102,7 @@ class TestScrubPageWidgets(unittest.TestCase):
 
     def test_as_of_column_uses_monospace_font(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             with patch.object(pp, "set_monospace_font") as mock_mono:
                 with patch.object(pp, "refresh_pools_page", MagicMock()):
@@ -118,7 +118,7 @@ class TestScrubPageWidgets(unittest.TestCase):
         """The Scan Line cell drops zpool's `scan:` field label (the column
         header already carries it); empty scan lines still render as —."""
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             app = MagicMock()
             # Managed-pool scope: register both fixture pools so both rows show.
@@ -165,7 +165,7 @@ class TestScrubPageWidgets(unittest.TestCase):
 
     def test_refresh_shows_canceled_scrub_date(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             app = MagicMock()
             # Managed-pool scope: register the fixture pool so its scrub row shows.
@@ -200,7 +200,7 @@ class TestScrubPageWidgets(unittest.TestCase):
     def test_refresh_shows_paused_scrub_date(self):
         """The As Of column shows the paused-since date while a scrub is paused."""
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             app = MagicMock()
             # Managed-pool scope: register the fixture pool so its scrub row shows.
@@ -239,7 +239,7 @@ class TestScrubPageWidgets(unittest.TestCase):
         are waiting for a slot; the State column must not say paused.
         """
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             app = MagicMock()
             # Managed-pool scope: register the fixture pool so its scrub row shows.
@@ -276,7 +276,7 @@ class TestScrubReorder(unittest.TestCase):
 
     def test_scrub_view_is_reorderable(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             with patch.object(pp, "refresh_pools_page", MagicMock()):
                 with patch.object(pp, "ScrubQueue", MagicMock()):
@@ -289,7 +289,7 @@ class TestScrubReorder(unittest.TestCase):
 
     def test_sort_disables_scrub_dnd(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             app = MagicMock()
             app.scrub_view = MagicMock()
@@ -303,7 +303,7 @@ class TestScrubReorder(unittest.TestCase):
 
     def test_drag_end_updates_queue_order(self):
         with mock_gtk():
-            import pools_page as pp
+            pp = import_gui_fresh("pools_page")
 
             app = MagicMock()
             app.scrub_queue = MagicMock()

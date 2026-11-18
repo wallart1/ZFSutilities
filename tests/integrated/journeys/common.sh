@@ -1191,8 +1191,11 @@ itf_journey_stage_test_pools() {
 # The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb,
 # plus a udev settle the documented recipe lacks.
 set -e
-# parted/partprobe are not part of a base Debian install.
-apt-get install -y parted
+# parted/partprobe are not part of a base Debian install, and a plain
+# desktop OS (the mint leg) ships the ZFS kernel module but not the
+# userland — install both so the recipe is self-sufficient.
+apt-get install -y parted zfsutils-linux
+modprobe zfs || true
 parted -s /dev/sdb mklabel gpt
 for i in {1..15}; do
     if [[ $i -eq 1 ]]; then start="1MiB"; else start="$(( (i-1)*5120 ))MiB"; fi
@@ -3215,19 +3218,44 @@ itf_journey_stage_boot_workload_lab() {
     return 0
 }
 
-# itf_single_node_lab_main <gname>
+# itf_single_node_lab_main <gname> [--template T] [--bare-baseline]
 #
 # The single-node lab prefix, factored from j04/j11: clone the
 # post-install baseline template, verify the installed state, and create
 # the documented three-RAIDZ1 test pools.  Sets J_VMID/J_GUEST_IP (the
 # clone stage's globals) for the caller's scenario stages.
+#
+# --template T clones a named baseline instead of the storage default
+# (j22's mint leg: the desktop template, which carries no product).
+# --bare-baseline goes with it: the installed-state verify becomes an
+# info step, because the product-less template's caller installs or
+# stages the product itself (the first-time-user path).
 itf_single_node_lab_main() {
     local gname="$1"
+    shift
+    local template="" bare=0
+    while (( $# > 0 )); do
+        case "$1" in
+            --template) template="$2"; shift 2 ;;
+            --bare-baseline) bare=1; shift ;;
+            *) echo "itf: unknown itf_single_node_lab_main option: $1" >&2; return 2 ;;
+        esac
+    done
 
     itf_step_start "stage: single-node lab" "$gname (clone, verify, test pools)"
-    itf_journey_stage_from_template "$gname" || return 1
+    if [[ -n "$template" ]]; then
+        itf_journey_stage_from_template "$gname" --template "$template" || return 1
+    else
+        itf_journey_stage_from_template "$gname" || return 1
+    fi
 
-    itf_journey_verify_installed "$J_GUEST_IP"
+    if (( bare )); then
+        itf_step info "installed state verified" \
+            "bare baseline (no product on this template) — the caller" \
+            "installs the product before the scenarios run"
+    else
+        itf_journey_verify_installed "$J_GUEST_IP"
+    fi
 
     itf_journey_stage_test_pools "$gname" "${ITF_BASE_HOSTS[0]}" "$J_VMID" \
         "$J_GUEST_IP" || return 1

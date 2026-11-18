@@ -276,6 +276,58 @@ test_wrap_residue_gate_and_summary() {
     test_pass
 }
 
+# ------------------------------------------------------------------------------
+# Mint leg: baseline install + profile gates
+# ------------------------------------------------------------------------------
+
+test_baseline_install_stage_shape() {
+    test_start "baseline install: first-time-user sequence on a bare desktop"
+    local root run
+    root="$(make_itf_root "$tmp_root/root9")"
+    run="$tmp_root/run9"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_exec() { return 1; }   # prereq check reports missing
+        itf_journey_run_installer() { echo "installer-feed:$2"; return 0; }
+        itf_journey_verify_installed() { echo "verify-installed"; }
+        itf_survey_install_baseline 10.0.0.1 2>/dev/null
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:prereq check (fresh desktop)"
+    # j01's fresh-system feed, verbatim.
+    assert_contains "$out" "installer-feed:y\\ny\\n\\n\\n"
+    assert_contains "$out" "verify-installed"
+    test_pass
+}
+
+test_journey_profile_gates() {
+    test_start "j22 journey: unsupported profiles and missing templates fail closed"
+    local root run
+    root="$(make_itf_root "$tmp_root/root10")"
+    run="$tmp_root/run10"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        # shellcheck disable=SC1090
+        source "'"$mydir"'/tests/integrated/journeys/j22-function-survey.journey"
+        ITF_SW_SOURCE=dev-tarball
+        ITF_JOURNEY_TEMPLATE=compute
+        journey_main > /dev/null 2>&1
+        echo "rc-bogus=$?"
+        ITF_JOURNEY_TEMPLATE=mint
+        ITF_MINT_TEMPLATE_NAME=""
+        journey_main > /dev/null 2>&1
+        echo "rc-no-template=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc-bogus=1"
+    assert_contains "$out" "fail:template profile"
+    assert_contains "$out" "rc-no-template=1"
+    assert_contains "$out" "fail:site config: profile placement"
+    test_pass
+}
+
 test_select_new_creates_archive_and_half_sample
 test_select_new_deterministic
 test_select_replay_reproduces_the_list
@@ -283,6 +335,8 @@ test_select_rerun_reuses_prior_list
 test_feed_map_parsing
 test_placeholder_resolution
 test_cli_item_verdicts_and_routing
+test_baseline_install_stage_shape
+test_journey_profile_gates
 test_wrap_residue_gate_and_summary
 
 rm -rf "$tmp_root"

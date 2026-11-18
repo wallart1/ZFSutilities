@@ -13,7 +13,7 @@ if PYTHON_SRC not in sys.path:
 
 from app_context import AppContext
 from command_builders import BashStep
-from test_support import mock_gtk
+from test_support import import_gui_fresh, mock_gtk
 
 
 def _mock_app_with_runner():
@@ -72,7 +72,7 @@ class TestRestorePageRun(unittest.TestCase):
 
     def test_prepare_session_log_called(self):
         with mock_gtk():
-            import restore_page
+            restore_page = import_gui_fresh("restore_page")
         _configure_dialog_ok(restore_page)
         app = _mock_app_with_runner()
         app.parent_dir = REPO_ROOT
@@ -84,7 +84,7 @@ class TestRestorePageRun(unittest.TestCase):
 
     def test_auto_destination_computes_dest(self):
         with mock_gtk():
-            import restore_page
+            restore_page = import_gui_fresh("restore_page")
         _configure_dialog_ok(restore_page)
         app = _mock_app_with_runner()
         app.parent_dir = REPO_ROOT

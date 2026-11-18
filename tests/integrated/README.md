@@ -51,8 +51,9 @@ tests/integrated/itf watch          # tail the active run — NOT the console
 **One run at a time per dev host — enforced by the driver, not by
 convention.** Every run binds the fixed HTTP port, arms the shared
 installer-syslog listener, and consumes the base hosts' guest budget,
-and the parallel repo lanes share all of it. `journey run` and
-`template build` take a machine-wide flock (`/tmp/itf-active-run.lock`):
+and the parallel repo lanes share all of it. `journey run`, `template
+build`, and `vmimage build` take a machine-wide flock
+(`/tmp/itf-active-run.lock`):
 a concurrent starter WAITS (heartbeats every 30 s, up to
 `ITF_RUNLOCK_WAIT=7200` s; `0` refuses instantly) and names the active
 holder — including which repo lane holds it. The lock dies with the

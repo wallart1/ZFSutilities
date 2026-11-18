@@ -38,6 +38,11 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 # Mock GTK/WebKit so gi.repository imports succeed without a display.
+# Sticky import on purpose (NOT import_gui_fresh): later-collected suites
+# (test_offsite_e2e, test_runner_factory) plain-import backup_runner at
+# collection expecting the real GLib binding — GLib.timeout_add drives the
+# step watcher — and a fresh mock-bound copy cached here would leave their
+# steps hanging on the watchdog.
 import log_index as li
 from test_support import capture_logs, mock_gtk, temp_config_dir
 

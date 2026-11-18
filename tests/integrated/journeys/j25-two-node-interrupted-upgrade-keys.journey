@@ -764,6 +764,9 @@ EOF
     local rec_rc=$?
     itf_artifact "upgrade-recovery-transcript" "$rec_log"
     local rec_missing
+    # The activation hint the product prints (absolute path; the
+    # activation run below uses the same command).
+    local sw_cmd="/usr/local/lib/zfsutilities/bin/switch-version"
     rec_missing="$(itf_missing_markers "$rec_log" \
         "WARN: release tag v$target_version" \
         "does not match" \
@@ -782,8 +785,8 @@ EOF
         "INFO:   Salvaged on $c_hostname:" \
         "Deployed version:  $target_version — NOT activated" \
         "Active version:    $active_version (unchanged on this host)" \
-        "this host:  sudo switch-version $target_version" \
-        "$c_hostname:  ssh root@$c_hostname switch-version $target_version" \
+        "this host:  $sw_cmd $target_version" \
+        "$c_hostname:  ssh root@$c_hostname $sw_cmd $target_version" \
         || true)"
     if [[ $rec_rc -ne 0 || -n "$rec_missing" ]]; then
         itf_step fail "recovery upgrade completes" \

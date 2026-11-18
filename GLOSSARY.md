@@ -1,6 +1,7 @@
 # Glossary
 
 **Items to be added by Zcode:**
+    marker
 
 
 Plain-language definitions of terms as they are actually used in this
@@ -197,6 +198,18 @@ must be a file inside a deployed tree — deploy-version copies `bin/
 lib/ python/ docs/ share/ VERSION` only, so a repo-root file
 (README.md) can never be the deleted file, while a docs/ file can. The
 upgrade ITF journeys exercise the classification live.
+
+## D-state
+
+A process sleeping so deeply that nothing can interrupt it — the state
+letter `D` in `ps` output (`uninterruptible sleep`). It happens when a
+process waits on the kernel itself, most famously on a ZFS ioctl that
+cannot complete: `zpool export` on a pool whose zvol backs a live iSCSI
+LUN session sits in D-state until the holder goes away, and no kill —
+not even SIGKILL, not even a subprocess timeout — can reclaim it. This
+is why the GUI's export fence is a bounded *wait* (stop waiting, keep
+the window alive) rather than a kill, and why the recovery removes the
+holder instead of disciplining the command.
 
 ## dp module identity
 
@@ -812,6 +825,18 @@ the 30 s default). With reuse plus the batched probe
 (`dashboard_page._probe_remote_host`), a refresh rides one existing
 connection and the poll becomes invisible in the remote journal.
 
+## sticky binding
+
+The way Python's module cache interacts with the GUI test mocks: the
+first `mock_gtk()` context that imports a GUI module fixes ("sticks")
+which Gtk that module uses for the rest of the process. The binding can
+also stick to the *real* GTK when another suite in the same pytest-xdist
+worker imported the module outside any mock — the root cause of
+full-suite-only test flakes. The antidotes are `mock_gtk(fresh=True)`
+(evict the whole GUI module set for the context) and
+`test_support.import_gui_fresh("name")` (evict for one import, restore
+the rest) — see the developer guide's testing page.
+
 ## strict mode
 
 Bash's `set -euo pipefail` trio at the top of a script: exit on any
@@ -936,3 +961,13 @@ requested root, which exposed suites whose worlds modeled only part of
 the tree (a destination that existed in the existence model but had no
 listing rows). Related: mock (the stand-in itself) and the standing
 mock-fidelity rule.
+
+## xdg-desktop-portal
+
+A desktop service (one per login session) that applications ask to open
+native file choosers and other system dialogs on their behalf. GTK
+switches to it automatically on desktop distributions — with
+`GTK_USE_PORTAL=0` an application keeps GTK's built-in in-process
+dialog instead. The itf GUI survey probe sets that variable because a
+portal cannot start inside a private Xvfb display: its D-Bus activation
+stacks timeouts until the survey's op watchdog kills the operation.

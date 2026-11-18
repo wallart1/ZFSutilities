@@ -22,8 +22,8 @@
 #       the fence fires against the unreachable storage host — the
 #       ssh-255 WARN live (rescan problems + "reconcile-iscsi-state
 #       did not run" + still-missing FATAL, unit failed).  Storage
-#       returns late: the boot oracle (FAILED + DRIFT for the
-#       encrypted LUNs — keys unload at power-off), then the
+#       returns late: the boot oracle (PENDING + per-LUN DRIFT for
+#       the encrypted LUNs — keys unload at power-off), then the
 #       post-return truth measured live (the sessions and the plain
 #       LUNs return unaided; the return tick stays red exactly for
 #       the keys-pending encrypted LUN — reconcile skips it with the
@@ -1214,7 +1214,7 @@ $(cat "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps")" \
         "VMs stay stopped — operator qm start, and onboot's autostart" \
         "RACES the iSCSI login and is never retried, recorded live" \
         "with journal evidence); S16 both-node power cycle (ssh-255" \
-        "WARN live against dead storage; FAILED+DRIFT boot oracle after" \
+        "WARN live against dead storage; PENDING+DRIFT boot oracle after" \
         "the late return; sessions + plain LUNs return unaided while" \
         "the fence stays red exactly for the keys-pending LUN; F-042:" \
         "the keys-pending fence save strands the encrypted index" \

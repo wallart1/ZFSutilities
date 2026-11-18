@@ -312,7 +312,7 @@ EOF
         "Salvaged on"
         "Deployed version:  $target_version — NOT activated"
         "Active version:    $active_version (unchanged on this host)"
-        "sudo switch-version $target_version"
+        "/usr/local/lib/zfsutilities/bin/switch-version $target_version"
     )
     local marker missing_markers=""
     for marker in "${markers[@]}"; do

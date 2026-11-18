@@ -15,7 +15,7 @@ if PYTHON_SRC not in sys.path:
 import feature_config
 import file_locking
 import scrub_manager as sm
-from test_support import capture_logs, temp_config_dir
+from test_support import capture_logs, import_gui_fresh, temp_config_dir
 
 
 class TestScrubControlStateChecking(unittest.TestCase):
@@ -1072,8 +1072,8 @@ class TestPoolActionsScrub(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
-            import pools_page
+            pool_actions = import_gui_fresh("pool_actions")
+            pools_page = import_gui_fresh("pools_page")
 
         app = MagicMock()
         app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -1095,8 +1095,8 @@ class TestPoolActionsScrub(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
-            import pools_page
+            pool_actions = import_gui_fresh("pool_actions")
+            pools_page = import_gui_fresh("pools_page")
 
         app = MagicMock()
         app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -1116,8 +1116,8 @@ class TestPoolActionsScrub(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
-            import pools_page
+            pool_actions = import_gui_fresh("pool_actions")
+            pools_page = import_gui_fresh("pools_page")
 
         app = MagicMock()
         app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -1136,8 +1136,8 @@ class TestPoolActionsScrub(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
-            import pools_page
+            pool_actions = import_gui_fresh("pool_actions")
+            pools_page = import_gui_fresh("pools_page")
 
         app = MagicMock()
         app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -1158,8 +1158,8 @@ class TestPoolActionsScrub(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
-            import pools_page
+            pool_actions = import_gui_fresh("pool_actions")
+            pools_page = import_gui_fresh("pools_page")
 
         app = MagicMock()
         app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -1186,8 +1186,8 @@ class TestPoolActionsScrub(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
-            import pools_page
+            pool_actions = import_gui_fresh("pool_actions")
+            pools_page = import_gui_fresh("pools_page")
 
         app = MagicMock()
         app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -1208,7 +1208,7 @@ class TestPoolActionsScrub(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
+            pool_actions = import_gui_fresh("pool_actions")
 
         app = MagicMock()
         app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
@@ -1232,7 +1232,7 @@ class TestPoolsWatchImportableSkip(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pool_actions
+            pool_actions = import_gui_fresh("pool_actions")
 
         app = MagicMock()
         app.known_pools = [
@@ -1267,7 +1267,7 @@ class TestScheduleScrubRefreshBurst(unittest.TestCase):
         from test_support import mock_gtk
 
         with mock_gtk():
-            import pools_page
+            pools_page = import_gui_fresh("pools_page")
 
         app = MagicMock()
         with patch.object(pools_page.GLib, "timeout_add_seconds") as mock_timeout:

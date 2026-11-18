@@ -133,7 +133,7 @@ EOF
         "cannot be distinguished from pristine content"
         "Deployed version:  $target_version — NOT activated"
         "Active version:    $active_version (unchanged on this host)"
-        "sudo switch-version $target_version"
+        "/usr/local/lib/zfsutilities/bin/switch-version $target_version"
     )
     local -a forbid1=(
         "modified:   docs/docs/index.md"
@@ -258,7 +258,7 @@ EOF
         "Diff unavailable: no pristine source for version $active_version"
         "Deployed version:  $target_version — NOT activated"
         "Active version:    $active_version (unchanged on this host)"
-        "sudo switch-version $target_version"
+        "/usr/local/lib/zfsutilities/bin/switch-version $target_version"
     )
     local -a forbid2=(
         "added:      bin/itf-pre-tweak"

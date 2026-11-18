@@ -2026,8 +2026,11 @@ GUI Pools tab actions: watch windows, details dump, registry add/remove/save/rev
 | `WARN: Error importing pool '...'` | Import failed | That import aborted; others continue |
 | `INFO: Pool '...' exported successfully` | Export succeeded after the Yes/No confirm | Informational |
 | `WARN: Error exporting pool '...'` | Export failed; the blocker-diagnosis/recovery path is entered | Recovery continues |
+| `WARN: Export of '...' stalled ...s — pool still held` / `WARN: Resolving pool holders so the export can finish` | The export command has not returned within the UI-side wait (a zvol behind a live iSCSI LUN session blocks the kernel uninterruptibly); the window stays responsive and the same blocker-removal dialogs as a failed export are entered | Holder resolution begins |
+| `WARN: Export of '...' stays kernel-blocked; no removable holders found` | The stalled export's blocker diagnosis found nothing the GUI can clear | Give up; check what holds the pool |
+| `WARN: Holders of '...' removed but the export stays kernel-blocked; it may still complete on its own — check the pool state before retrying` | Holders were removed with approval but the kernel has not released the export command yet | Give up; the export may still finish on its own |
 | `INFO: ... of ... datasets in '...' are still mounted` / `INFO: All datasets in '...' are already unmounted` | Mount state after a failed export — `zpool export` unmounts the pool's datasets as part of its attempt, so the unmount work is usually already done before the failure | Informational; only the named blockers remain |
-| `INFO: Pool '...' exported successfully after resolving blockers` | Export succeeded on retry after VM/LUN/share/process teardown | Informational |
+| `INFO: Pool '...' exported successfully after resolving blockers` | Export succeeded on retry after VM/LUN/share/process teardown — or after a stalled export's holders were cleared and the export completed | Informational |
 | `INFO: Removed '...' from pool registry (unsaved)` | Pool dropped from the known list after Yes/No confirm (the pool itself is not destroyed) | Save persists |
 | `INFO: No changes to save` | The dirty flag is false | Save skipped |
 | `WARN: Error saving pool registry: ...` | Saving the registry JSON raised | Save aborted; changes stay unsaved |

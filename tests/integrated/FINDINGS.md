@@ -21,6 +21,7 @@ files a finding.
 
 | ID | Date | Journey | Symptom | Suspected area | Status | Repair plan |
 |----|------|---------|---------|----------------|--------|-------------|
+| F-051 | 2026-11-17 | j22-function-survey (mint leg) | Pools → Export froze the window for good: with a live iSCSI LUN session holding the pool's zvol, `zpool export` blocks uninterruptibly (D-state, taskq_wait — observed live on the guest) and the handler ran it synchronously on the UI thread with no bound; the post-failure blocker-recovery flow never got its turn (run-20261117-150953; reproduced run-20261117-153840 and run-20261117-160333) | GUI export path: `pool_actions.on_pools_export` → `zfs_repository.export_pool_detailed` (unbounded `_run`) | verified | in-cycle per approved session plan: export runs in a worker thread with a hard UI-side deadline (`EXPORT_STALL_WARN_S`, default 120 s, env-overridable); on stall a holder-naming WARN tells the user to release LUN sessions and retry — a subprocess timeout alone cannot reclaim a D-state child. Verified by the archive replay run-20261117-162554: the Export op completed at the 120 s bound with the window alive and the survey verdict green (every selected item passed) |
 
 Status values: `open` → `planned` (repair plan approved) → `fixed`
 (dev change landed) → `verified` (rerun green) → `accepted` (user waives).
