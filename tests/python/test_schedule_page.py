@@ -717,23 +717,39 @@ class TestSchedulePageWidgets(_FreshSchedulePageTestCase):
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page.list_profiles", return_value=[])
-    def test_schedule_view_wires_next_run_tooltip(self, _lst, mock_gtk):
-        """The treeview must offer the full Next Run text via a row tooltip."""
+    def test_schedule_view_attaches_cell_tooltips(self, _lst, _mock_gtk):
+        """The shared clipped-cell handler offers every column's full text.
+
+        The old bespoke Next-Run-only tooltip was superseded by the shared
+        handler, which fires wherever the rendered text actually clips.
+        """
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state = MagicMock()
+
+        with patch.object(schedule_page, "attach_cell_tooltips") as recorder:
+            schedule_page.create_schedule_page(app)
+
+        recorder.assert_called_once_with(app.schedule_view, app.schedule_store)
+
+    @patch("schedule_page.Gtk")
+    @patch("schedule_page.list_profiles", return_value=[])
+    def test_every_text_renderer_ellipsizes(self, _lst, mock_gtk):
+        """All five text columns ellipsize, not just Next Run."""
         schedule_page = self._import_schedule_page()
         app = MagicMock()
         app._ui_state = MagicMock()
 
         schedule_page.create_schedule_page(app)
 
-        app.schedule_view.set_has_tooltip.assert_called_once_with(True)
-        connects = app.schedule_view.connect.call_args_list
-        self.assertTrue(
-            any(
-                call[0][:2] == ("query-tooltip", schedule_page._on_next_run_query_tooltip)
-                for call in connects
-            ),
-            "Expected query-tooltip to be connected to _on_next_run_query_tooltip",
-        )
+        # Under mock_gtk all renderers share one instance; the column loop
+        # must account for every ellipsize set_property call on it.
+        renderer = mock_gtk.CellRendererText.return_value
+        ellipsize = schedule_page.Pango.EllipsizeMode.END
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", ellipsize)
+        ]
+        self.assertEqual(len(ellipsize_calls), 5)
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page.list_profiles", return_value=[])
@@ -773,74 +789,6 @@ class TestSchedulePageWidgets(_FreshSchedulePageTestCase):
         tips = mock_gtk.Expander.return_value.set_tooltip_text.call_args_list
         self.assertEqual(len(tips), 1)
         self.assertIn("JSON dump", tips[0].args[0])
-
-
-class TestNextRunQueryTooltip(_FreshSchedulePageTestCase):
-    """_on_next_run_query_tooltip resolves the hovered Next Run cell."""
-
-    def _make_view(self, hit):
-        view = MagicMock()
-        view.convert_widget_to_bin_window_coords.return_value = (120, 18)
-        view.get_path_at_pos.return_value = hit
-        return view
-
-    def test_hover_on_next_run_cell_sets_tooltip_text(self):
-        schedule_page = self._import_schedule_page()
-        path = MagicMock(name="path")
-        next_run_col = MagicMock(name="next_run_col")
-        view = self._make_view((path, next_run_col, 3, 7))
-        tooltip = MagicMock()
-        app = MagicMock()
-        app.schedule_store = MagicMock()
-        app.schedule_store.__getitem__.return_value = [
-            True,
-            "p1",
-            "backup",
-            "* * * * *",
-            "",
-            "Sat Oct 10 2026 23:30 · 23:30 Sat = 03:30 Sun UTC — names dated Sun",
-            "2026-10-10 23:30",
-        ]
-
-        result = schedule_page._on_next_run_query_tooltip(
-            view, 120, 18, False, tooltip, app, next_run_col
-        )
-
-        self.assertTrue(result)
-        view.convert_widget_to_bin_window_coords.assert_called_once_with(120, 18)
-        app.schedule_store.__getitem__.assert_called_once_with(path)
-        tooltip.set_text.assert_called_once_with(
-            "Sat Oct 10 2026 23:30 · 23:30 Sat = 03:30 Sun UTC — names dated Sun"
-        )
-
-    def test_hover_on_other_column_returns_false(self):
-        schedule_page = self._import_schedule_page()
-        next_run_col = MagicMock(name="next_run_col")
-        other_col = MagicMock(name="other_col")
-        view = self._make_view((MagicMock(name="path"), other_col, 3, 7))
-        tooltip = MagicMock()
-        app = MagicMock()
-
-        result = schedule_page._on_next_run_query_tooltip(
-            view, 120, 18, False, tooltip, app, next_run_col
-        )
-
-        self.assertFalse(result)
-        tooltip.set_text.assert_not_called()
-
-    def test_hover_on_empty_space_returns_false(self):
-        schedule_page = self._import_schedule_page()
-        next_run_col = MagicMock(name="next_run_col")
-        view = self._make_view(None)
-        tooltip = MagicMock()
-        app = MagicMock()
-
-        result = schedule_page._on_next_run_query_tooltip(
-            view, 120, 18, False, tooltip, app, next_run_col
-        )
-
-        self.assertFalse(result)
-        tooltip.set_text.assert_not_called()
 
 
 class TestNextRunStrings(_FreshSchedulePageTestCase):

@@ -57,6 +57,7 @@ from disks_page import enclosure_display_name
 from feature_config import get_enclosures_config, get_managed_pool_names
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     note_label,
@@ -351,6 +352,7 @@ def _device_table(app, store_attr, columns, state_key, expand_index=None, header
     view.set_headers_visible(True)
     for index, (title, width) in enumerate(columns):
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
         col = Gtk.TreeViewColumn(title, renderer, text=index)
         configure_treeview_column(col, width=width, min_width=60)
         if index == expand_index:
@@ -358,6 +360,8 @@ def _device_table(app, store_attr, columns, state_key, expand_index=None, header
         if header_tooltips and header_tooltips[index]:
             set_column_header_tooltip(col, title, header_tooltips[index])
         view.append_column(col)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(view, store)
     setattr(app, store_attr, store)
     app._ui_state.bind_treeview(view, state_key)
     view.set_size_request(-1, 60)

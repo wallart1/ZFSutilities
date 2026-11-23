@@ -818,3 +818,283 @@ twice over (final: 115 suites, 6711/0; python 4834 + 22 skip).
   testing.md's freshness guidance names both fences and the cyclic-
   graph trap; GLOSSARY +D-state, +sticky binding, +xdg-desktop-portal.
   Docs integrity 23/23; mkdocs build green.
+
+## 2026-11-17 (pub2) — Disks page: one selection per page + enclosure correlation tint
+
+- User request, two parts: (1) selecting a row in any of the page's three
+  treeviews deselects everything in the other two; (2) selecting an
+  Enclosures row tints the associated rows in the other panes and expands
+  the Pool Topology so all tinted rows are visible.
+- _deselect_other_views (new) unselect_all()s the other two views under the
+  repurposed _disks_syncing_selection guard (was checked but never set in
+  product code); called inside `if pathlist:` in all three changed
+  handlers, so empty transitions (store clears during the 30 s background
+  refresh) never disturb the selection _repopulate_enclosures is about to
+  capture and restore. Invariant: at most one selection on the page.
+- Enclosure tint reuses the teal flag/columns: _highlight_enclosure_disks
+  (new) tints member whole-disk rows (parent_path rule, like
+  _highlight_pool_disks) plus every topology device on them;
+  _highlight_topology_nodes_for_disk renamed …_for_disks(set) with any()
+  matching (empty set clears). Pool selector deliberately untouched by
+  enclosure selection (not a treeview; drives Proxmox enroll etc.);
+  emptied selection restores the pool baseline.
+- Refresh resilience falls out of ordering: enclosure restore runs last in
+  refresh_disks_page and GTK fires "changed" on the restore, re-tinting.
+- Tests: FakeTreeSelection gained unselect_all (clears paths, counts
+  calls); test_topology_selection_is_never_modified_by_disk_selection
+  inverted into the new law; TestEnclosureSelection (8 cases: deselect
+  both panes, tint disks-not-partitions, multi-pool expansion proves ALL
+  holding pools expand, baseline restore, guard no-op, selector untouched,
+  refresh-restore re-tint, empty-set clears).
+- Docs: gtk-gui.md — inventory sync paragraph rewritten around the
+  one-selection law, Enclosures section gained the correlation paragraph,
+  topology section names the pane-clearing + enclosure tint. Strict mkdocs
+  build green.
+
+## 2026-11-17 — Pool Topology Blocksize column: ashift-based pools, per-disk sectors
+
+- User report: pool rows' Blocksize read as sector sizes (on the node every
+  pool's 1<<ashift coincides with its disks' sector size); device rows showed
+  "-". User decisions: pool rows render the derivation ("4096 bytes (ashift
+  12)"), device rows render that disk's physical sector size.
+- disks_page.py: _member_sector_lookup(new) builds a member-path →
+  physical-sector resolver (by_path index + realpath, same normalization as
+  _collect_disk_paths; fail-open "-" — the always-hidden boot disk lands
+  here); _populate_topology_store takes the resolver and renders per row
+  kind (pool = ashift-based + derivation, disk = sector, groups = "-");
+  Blocksize column width 90 → 150; header tooltip reworded for both kinds.
+- Tests: TestTopologyBlocksizeRendering rewritten + grown (derivation text,
+  ashift-None dash, sector resolution, inventory-miss dash, sector-None
+  dash, mirror dash + mixed 4096/512 members).
+- Docs: gtk-gui.md topology Blocksize row rewritten; GLOSSARY gained
+  "ashift" and "physical sector size" entries. Strict mkdocs build green.
+
+## 2026-11-17 — Migrate Pool: enforced quiesce, safe export, no holding export
+
+- User report (real temp→threeamigos holding migration, ashift change), five
+  items. PREEXISTING first per user instruction: Pools-page Export action
+  still exports bare-first and recovers reactively — must get the same
+  proactive export preparation (new entry).
+- Bandwidth-limit tooltip: text after the dash now states the effective-cap
+  rule (min of this limit and involved enclosure limits).
+- Quiesce is now ENFORCED, not assumed: cutover split into three runner
+  phases (copy / catchup / destructive); after catchup, written@cutover per
+  dataset (new ZfsRepository.datasets_written_since + parse_zfs_bytes,
+  oracle verified live on stewie) — any nonzero refuses (Re-check/Defer
+  dialog); unverifiable also defers.
+- Step 15 export: disruptive-steps confirm (lists remaining steps verbatim,
+  states downtime begins + verified quiesced) + proactive export prep
+  reusing pool_actions blockers/unmount machinery (unmount safe filesystems,
+  re-scan; survivors → blocker dialog + defer). Bare export never attempted.
+- Step 25 holding-pool export DELETED from plan + executor (golden diff =
+  one removed line); holding pool stays online the whole cutover.
+- mixed_size_warning: "limited to" → "limited by" (docs line too).
+- Tests: _drive_handler scripts the new gates (written/disruptive/export
+  knobs); TestQuiesceAndDisruptionGates + TestPreparePoolExport new;
+  three-tuple ripples fixed; goldens regenerated (holding only).
+- Docs: gtk-gui Cutover section rewritten (gates in order, holding pool
+  never exported); messages manual rows for the new INFO/WARN lines;
+  GLOSSARY "quiesce" added.
+
+## 2026-11-17 — Disks page: migrate-picker sizing verified pinned; pane cells ellipsize + hover
+
+- User report, two items (both observed on 0.141.0 during the real
+  temp→threeamigos migration): Migrate Pool's new-disks picker too short +
+  window not scrollable; Disk Inventory cells neither ellipsized nor
+  tooltip'd on overflow.
+- Item 1 was ALREADY FIXED by the same-day pub3 merge a06f1bf (natural
+  dialog sizing): probe-verified on the real show_migrate_pool_dialog under
+  private Xvfb — 0.141.0/pre-merge 801c644 crush the picker to ~3 rows
+  (71px) on a short window (resize 700x480 = the deterministic red
+  condition); the merged tree keeps the full 20-row cap (464px), scrolls
+  inside, and the dialog window carries the overflow at every screen size
+  incl. the 90%-workarea cap. No product change; the geometry is now PINNED
+  in disks_dialogs_realized_check.py (real dialog, resized short).
+- Item 2: all three Disks-page panes (user widened scope from Disk
+  Inventory to include Enclosures + Pool Topology) now END-ellipsize every
+  text renderer and wire gui_helpers.attach_cell_tooltips — Disk Inventory
+  and Pool Topology offset 0, Enclosures offset 1 (unrendered id column at
+  store 0). Same idiom as the Pools/Dashboard/Alignment tables; docs
+  already state the universal rule (Tooltips section + Disks-tab intro),
+  so no doc changes.
+- Tests: mocked wiring/offset/renderer test in test_disks_page.py;
+  realized check grew the real-migrate-dialog case + a real-page panes
+  case (every renderer END, every view has-tooltip), red-proofed on a
+  /tmp copy with the fix reverted (PANGO_ELLIPSIZE_NONE).
+- GOTCHA (realized probes): once create_disks_page's returned page widget
+  is garbage-collected, the container tree tears down and the views' column
+  lists EMPTY (app attributes hold the bare views only) — realized probes
+  must keep the page widget referenced.
+
+## 2026-11-17 — zfscheckagainst: absent counterpart is a verdict, not a WARN
+
+User reported three `WARN: Dataset to check ... does not exist or is offline.`
+lines (zfscheckagainst:333) from the Retention page's Prune Snapshots on
+stewie (session 2026-11-17_21-21-20_prune_gui.log, label=offsite). Verified
+live: the WARNs fired on fivebays prune candidates whose reverse fss rows
+map to source-side datasets that don't exist — NVME1/zfsutilities-manifests
+(store exists only at the first hop, by design) and
+threeamigos/proxmox/vm-215-disk-0/1 (VM 215 archived to
+temp/archive/threeamigos/proxmox/...). No harm: every deletion verified via
+other rows (z22tb hold-tag / z40tb common snap); all 5 steps rc=0.
+
+Fix (this tree, uncommitted): a counterpart dataset missing on an ONLINE
+pool is now a distinct "absent" outcome — logged once per run per dataset
+at INFO (`/tmp/caabsentprinted.$PPID` marker, repeats at VERB), folded like
+offline_pools, and when every matched row is absent the verdict is rc 4
+("not common — nothing to protect"; user-approved auto-delete). Absent
+never overrides a different row's offline/locked rc 6 or last-common rc 7.
+The old WARN+skip fallthrough wrongly landed absent-only cases on rc 5
+(interactive confirm; GUI non-interactive = keep) — the store's
+@dailybackup pruning (new in 0.142.0) would have been stuck on that.
+Caller side needed nothing: delsnap/preview already treat 0|4 alike.
+Cleanup of the new marker added to the fssalreadyprinted exit traps
+(zfsdelsnap, zfsretain dry-run, this suite). Docs: messages/index.md row
+replaced (2 new rows), modules.md rc-4 row + new "Absent counterpart
+datasets" subsection, GLOSSARY gained "counterpart dataset". Tests: 3 new
+in test-zfscheckagainst (absent-only → 4 + INFO once, INFO-then-VERB via
+with_msg_level — log_verb hides from stderr unless a gate is set,
+absent+offline → 6). Suites: checkagainst 38/38, delsnap 25/25, retain
+32/32, cleanup 16/16; full suite green; mkdocs --strict clean; shellcheck
+matches baseline (SC2016 info, intentional single-quoted trap).
+
+## 2026-11-18 — Log Viewer: path line no longer highlights on pop-out/focus
+
+User report: Logs page → Log Viewer — "the log path should not be
+highlighted." Root cause (verified against GTK 3.24.41 gtklabel.c):
+`gtk_label_grab_focus` runs `select_region(0, -1)` — select ALL text —
+whenever a selectable label gains focus by any route other than a click,
+gated by GtkSettings `gtk-label-select-on-focus` (default on); the
+selection is drawn while focused. The path line (`logs_path_label`,
+selectable) is the first focusable child of viewer_box, so the pop-out
+window's initial focus (`_on_logs_popout_toggled` → show_all) and Tab
+navigation deterministically highlighted the whole path.
+
+Fix (this tree, uncommitted, user-approved scope): one line in main.py
+`do_activate` next to the CSS provider —
+`Gtk.Settings.get_default().set_property("gtk-label-select-on-focus",
+False)` — app-wide. Labels stay click/drag-copyable everywhere (docs
+promise "selectable for copying" in gtk-gui.md, still true); only the
+focus-driven select-all is disabled. The other 11 set_selectable sites
+are untouched and inherit the same protection. No docs change needed.
+
+Verification: Xvfb probe (3 phases: stock pop-out path reproduces
+bounds (0,75); fix → bounds None; manual select_region still selects) +
+realized-style smoke driving the REAL `_on_logs_popout_toggled` /
+`_update_logs_path_label` / `LogPopoutWindow` with a faithful viewer_box
+build — stock phase highlighted, fixed phase plain (screenshots
+inspected). Affected suites test_main + test_logs_page green; full
+suite green (run-tests -q). No new permanent test (plan-scoped one-off
+probes; mock_gtk can't exercise real GtkSettings).
+
+## 2026-11-18 — Miscellaneous Logs heading tooltips removed; heading dead zone fixed
+
+Two user asks, one turn. (1) Logs page → Miscellaneous Logs treeview:
+remove the pre-existing tooltips. (2) Disks page → Disk Inventory column
+headings need tooltips.
+
+(1) The Miscellaneous list shares `_make_log_view_columns` with the main
+list, which attached a tooltip-bearing header label to every column.
+New `header_tooltips=False` parameter; the Miscellaneous call passes it
+and gets plain default headings (no header widget at all). The main
+list keeps its tooltips, and the "Miscellaneous Logs (N)" expander-bar
+tooltip is not on the treeview and stays (stated in the approved plan).
+
+(2) The Disk Inventory headings ALREADY had tooltips — every Disks
+column calls `set_column_header_tooltip`. Root cause (probe-verified
+earlier in the campaign session): GTK seats the custom header label
+inside the column's header Gtk.Button at the label's NATURAL text
+width, so a 160px heading carried only a ~40px tooltip-active strip;
+hovering the rest showed nothing, hence "needs tooltips". Fix at the
+helper: the header label now connects its `realize` to
+`_on_header_label_realize`, which arms the enclosing header Button with
+the same tooltip text — the button spans the full heading width. One
+helper change arms every heading app-wide (all pages using the helper
+plus EditableListView); checkagainst's bespoke `_build_header` Box does
+not use the helper and stays for the pending campaign.
+
+Tests: test_logs_page header test now expects 7 main-list header
+tooltips and 14 appended columns (both lists; shared TreeView mock);
+test_gui_helpers gained the realize-wiring assert plus handler tests
+(arms button / no-op without ancestor);
+disks_dialogs_realized_check now realizes the real Disks page in its
+private-Xvfb window and asserts per column: label tooltip non-empty,
+Button ancestor exists, button tooltip equals the label's, button
+allocation spans the column width (±2px), and first-column button
+minus label strip ≥ 40px (dead-zone evidence). Docs: gtk-gui.md Tooltips
+section carves the Miscellaneous table out of the every-heading claim.
+Affected suites green; realized check green; ruff clean.
+
+Follow-up, same day (user: "I still see tooltips everywhere in this
+treeview, and they all say the same thing"): the survivor was the
+EXPANDER tooltip. GTK shows a widget with no tooltip of its own the
+nearest armed ancestor's text, and the expander wraps the whole
+Miscellaneous treeview, so its one tooltip surfaced over every heading,
+row, and cell — uniform text everywhere is the fall-through signature.
+Removed the expander tooltip too; a code comment at the expander
+records the law so it does not come back. New guard test
+test_misc_section_carries_no_tooltips asserts create_logs_page never
+arms the shared Expander mock (with the file's idiom for isolating the
+viewer-frame one-shot side effect — the shared-mock trap bit once
+during development). gtk-gui.md exception sentence widened to the whole
+section: title bar, headings, and cells all tooltip-free.
+
+## 2026-11-18 — All treeviews: ellipsize + clipped-cell tooltips campaign
+
+User cue: "GUI -> All treeviews: Ellipsize all the cells on text overflow
+and provide tooltips containing the cell's full text." Executes the
+campaign planned earlier the same day (approval had been pending; the
+re-issued request was the go).
+
+Helper: attach_cell_tooltips/_on_cell_query_tooltip gained column_map
+(gui_helpers) — a per-visible-column list of store indices, None = never
+tooltip. Needed because two views' visible order diverges from store
+order and no constant offset can route them: the Pool Registry (visible
+Name, Offsite, Health, Errors, numeric vs store 0 name, 1 health, 2
+size … 9 flag, 10 offsite, 11 errors) and the pool-growth target tree
+(visible Size = store 5, State = store 2). Existing offset call sites
+untouched.
+
+Treated (21 views, 13 files): pages — Pool Registry (map), Datasets,
+Schedule (bespoke always-on _on_next_run_query_tooltip deleted,
+superseded by the shared clipped-only handler; all five text renderers
+ellipsize now, not just Next Run), Offsite steps, Retention bucket (spin
+renderers untouched — int store values fall through the str check) +
+prune, Checkagainst editable + readonly ×3 (the _build_header Box
+duplicate migrated to set_column_header_tooltip — dedup AND the
+full-heading fix; helper deleted), Logs main + Miscellaneous (inline
+header-label block swapped for the shared helper on main; misc keeps
+plain headings; BOTH lists attach clipped-cell tooltips — per-celled
+text, not the removed uniform ancestor tooltip; guard test docstring
+narrowed to expander/title bar), EditableListView (covers both Backup
+step tables), memory_page _device_table (L2ARC/SLOG/Enclosures).
+Dialogs — pool_watch Watch window, pool_actions Import-Pool picker,
+pool_create_wizard + pool_growth disk pickers, growth target tree (map),
+pool_profile manage, profile manage/add-overwrite/recall pickers, and
+the apply-profile picker — whose Description column KEEPS its deliberate
+word-wrap (wrapped text never clips; full text already visible) and
+passes column_map=[0, 1, None] so it never tooltips.
+
+Ellipsize idiom: files that import Pango use the enum; the rest follow
+the dashboard/pools precedent `set_property("ellipsize", 3)  #
+Pango.EllipsizeMode.END`.
+
+Tests: column_map routing unit tests in test_gui_helpers (map reads the
+named store column; None entry and beyond-map positions return False);
+per-view wiring tests everywhere (recorder pattern: view/store/offset or
+map + renderer ellipsize counts — reset the shared CellRendererText mock
+before counting, earlier same-module tests accumulate on it). Schedule's
+bespoke handler tests replaced. FakePickerTreeView gained
+set_has_tooltip/connect no-ops. The gi-import guard caught one bare
+in-function import — use the module-level binding.
+
+Docs: gtk-gui.md Tooltips carve-out sentence now reads "neither the
+collapsed section's title bar nor its column headings carries a tooltip
+— though its clipped cells still show their full text on hover, like
+every other table"; the Schedule Next Run paragraph generalized to every
+cell. Docs validation pair green; site rebuilt.
+
+Smoke: full GUI launch as dan re-execs through pkexec (main.py:422,
+root-by-design) — passwordless launch smoke not possible; the realized
+checks (disks/backup/alignment, real GTK under private Xvfb) carry the
+render validation instead, in the full suite.

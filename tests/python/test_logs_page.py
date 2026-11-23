@@ -1379,12 +1379,14 @@ class TestCreateLogsPage(unittest.TestCase):
     @patch("logs_page._sync_log_list")
     @patch("logs_page._update_success_rate_label")
     def test_column_headers_use_label_tooltips(self, _mock_update, _mock_sync):
-        """TreeViewColumn tooltips must live on the header label widget."""
+        """Main-list tooltips live on header labels; Miscellaneous has none."""
         app = MagicMock()
         app.config = {}
         app._ui_state.bind_treeview = MagicMock()
 
         # Isolate this test from any earlier Gtk mock calls.
+        lp.Gtk.TreeView.reset_mock()
+        lp.Gtk.TreeView.return_value.reset_mock()
         lp.Gtk.TreeViewColumn.reset_mock()
         lp.Gtk.TreeViewColumn.return_value.reset_mock()
 
@@ -1400,8 +1402,8 @@ class TestCreateLogsPage(unittest.TestCase):
 
         lp.create_logs_page(app)
 
-        # Both the main list and the Miscellaneous list use the same column
-        # set; only the Type tooltip differs per list.
+        # Both lists use the same column set, but only the main list's
+        # headings carry tooltips; the Miscellaneous list runs tooltip-free.
         expected_tooltips = [
             "Session log timestamp",
             "Log type: backup, offsite, restore, prune, dataset, gui, or cron",
@@ -1410,16 +1412,10 @@ class TestCreateLogsPage(unittest.TestCase):
             "Size of the log file on disk",
             "Elapsed run time",
             "Bytes transferred during the operation",
-            "Session log timestamp",
-            "Log type: cli (directly-executed scripts) or a persistent log (scrub, rsync)",
-            "Name of the operation or profile",
-            "Completion status",
-            "Size of the log file on disk",
-            "Elapsed run time",
-            "Bytes transferred during the operation",
         ]
 
-        # Only the column header labels are passed to TreeViewColumn.set_widget().
+        # Only the main list's column header labels are passed to
+        # TreeViewColumn.set_widget().
         set_widgets = [
             call[0][0] for call in lp.Gtk.TreeViewColumn.return_value.set_widget.call_args_list
         ]
@@ -1429,6 +1425,69 @@ class TestCreateLogsPage(unittest.TestCase):
         self.assertEqual(sorted(actual_tooltips), sorted(expected_tooltips))
         for widget in set_widgets:
             widget.show_all.assert_called_once_with()
+
+        # Under mock_gtk both views are the same shared TreeView mock, so
+        # the appended-column count covers both lists: 7 columns each.
+        appended = lp.Gtk.TreeView.return_value.append_column.call_args_list
+        self.assertEqual(len(appended), 2 * len(expected_tooltips))
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    def test_misc_section_carries_no_tooltips(self, _mock_update, _mock_sync):
+        """Nothing in the Miscellaneous section arms a static tooltip.
+
+        GTK shows a widget without its own tooltip the nearest armed
+        ancestor's text, so one tooltip on the section expander would
+        surface over the whole collapsed treeview — every heading and row
+        would show the same text. The clipped-cell hover tooltips attached
+        to the list itself are per-cell and stay; this guard pins the
+        expander (and with it the section title bar) tooltip-free.
+        """
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+
+        # Isolate this test from any earlier Gtk mock calls and one-shot
+        # side effects (e.g. the viewer-frame sentinel list).
+        lp.Gtk.Frame.side_effect = None
+        lp.Gtk.Expander.reset_mock()
+        lp.Gtk.Expander.return_value.reset_mock()
+
+        lp.create_logs_page(app)
+
+        lp.Gtk.Expander.return_value.set_tooltip_text.assert_not_called()
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    def test_both_log_views_attach_cell_tooltips(self, _mock_update, _mock_sync):
+        """Both lists' clipped cells show their full text on hover."""
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+
+        # Isolate this test from any earlier Gtk mock calls.
+        lp.Gtk.CellRendererText.reset_mock()
+        lp.Gtk.CellRendererText.return_value.reset_mock()
+
+        with patch.object(lp, "attach_cell_tooltips") as recorder:
+            lp.create_logs_page(app)
+
+        calls = recorder.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertIs(calls[0].args[0], app.logs_view)
+        self.assertIs(calls[0].args[1], app.logs_store)
+        self.assertIs(calls[1].args[0], app.logs_misc_view)
+        self.assertIs(calls[1].args[1], app.logs_misc_store)
+
+        # Every renderer ellipsizes: 7 columns × 2 lists (mock_gtk
+        # shares one renderer instance).
+        renderer = lp.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c
+            for c in renderer.set_property.call_args_list
+            if c.args == ("ellipsize", lp.Pango.EllipsizeMode.END)
+        ]
+        self.assertEqual(len(ellipsize_calls), 14)
 
     @patch("logs_page._sync_log_list")
     @patch("logs_page._update_success_rate_label")

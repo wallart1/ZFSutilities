@@ -38,6 +38,7 @@ from disks_page import (
 )
 from gi.repository import Gtk
 from gui_helpers import (
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     create_scrolled_dialog,
@@ -751,10 +752,16 @@ def _build_disk_picker(
         ("Status", _COL_STATUS, 320),
     ):
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         tree_column = Gtk.TreeViewColumn(title, renderer, text=column_index, foreground=_COL_FG)
         set_column_header_tooltip(tree_column, title, _DISK_HEADER_TOOLTIP[title])
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
+
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # visible columns (toggle + by-id..Status) match their store positions;
+    # the Use toggle's bool falls through the handler's str check.
+    attach_cell_tooltips(view, store)
 
     # Non-expanding, like every GUI table: the picker is only as tall as
     # its rows (up to the 20-row cap) and scrolls inside beyond that; the
@@ -1147,10 +1154,21 @@ def _build_target_tree(
         ("State", _TCOL_STATE, 240, "Pool-reported state; greyed rows cannot be selected"),
     ):
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         tree_column = Gtk.TreeViewColumn(title, renderer, text=column_index, foreground=_TCOL_FG)
         set_column_header_tooltip(tree_column, title, tooltip)
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
+
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # visible Size column is store column 5 and State is store column 2 (the
+    # foreground and node payload sit between them), so a column_map routes
+    # each visible position to its store column.
+    attach_cell_tooltips(
+        view,
+        store,
+        column_map=[_TCOL_NAME, _TCOL_TYPE, _TCOL_SIZE, _TCOL_STATE],
+    )
 
     # Non-expanding, like every GUI table: the target tree is only as tall
     # as its rows (up to the 20-row cap) and scrolls inside beyond that;

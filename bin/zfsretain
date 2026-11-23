@@ -88,11 +88,12 @@ function retain {
     # minimum age), so "Would: Remove" matches what a real run deletes.
     # Not modeled here: lock contention at deletion time, destroy failures,
     # and the interactive confirm for snapshots with no checkagainst
-    # entries. checkagainst's rc-5 print-once marker is cleaned up at exit,
-    # like zfsdelsnap's own trap.
+    # entries. checkagainst's print-once markers (rc-5 table dump,
+    # absent-counterpart list) are cleaned up at exit, like zfsdelsnap's
+    # own trap.
     if [[ $dryrun != "N" ]]; then
         log_msg "INFO: Dry run: shows what a real run would delete."
-        append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
+        append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$" "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"'
     fi
 
     local set_save=$-

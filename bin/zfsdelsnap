@@ -24,8 +24,9 @@ unset _local_bashinit
 # counterpart) is keyed on the checkagainst shell's $PPID: this process when
 # delsnap runs in a pipe subshell, or this process's parent when delsnap runs
 # at top level. Remove both possible markers at exit so the table stays
-# once-per-run without littering /tmp.
-append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
+# once-per-run without littering /tmp. The absent-counterpart marker follows
+# the same keying.
+append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$" "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"'
 
 
 # Print a snapshot's age in whole days (floor division), or -1 when its

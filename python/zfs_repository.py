@@ -851,6 +851,33 @@ def parse_rate_limit(text: str) -> int | None:
         return None
 
 
+# Regex: ^(\d+(?:\.\d+)?)\s*([BKMGTP])?B?$
+# Purpose: parse a zfs human-size field as printed by `zfs list` (e.g.
+# "0B", "72K", "1.50M") into bytes. Group 1 is the magnitude; group 2 is
+# the optional power-of-1024 suffix letter. A bare number or a "B" suffix
+# both mean plain bytes; anything else (e.g. "-" for "no such snapshot")
+# does not match and parses to None.
+_ZFS_SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([BKMGTP])?B?$")
+
+_ZFS_SIZE_MULTIPLIERS = {
+    None: 1,
+    "B": 1,
+    "K": 1024,
+    "M": 1024**2,
+    "G": 1024**3,
+    "T": 1024**4,
+    "P": 1024**5,
+}
+
+
+def parse_zfs_bytes(text: str) -> int | None:
+    """Parse a zfs human-size field ("0B", "72K", "1.50M") to bytes, else None."""
+    match = _ZFS_SIZE_RE.match(text.strip())
+    if match is None:
+        return None
+    return int(float(match.group(1)) * _ZFS_SIZE_MULTIPLIERS[match.group(2)])
+
+
 _ENCLOSURE_RATE_CACHE = {}
 
 
@@ -1524,6 +1551,28 @@ class ZfsRepository:
         """
         result = self._run(self._zfs("list", "-rH", "-t", "volume", "-o", "name", pool))
         return [line for line in result.stdout.strip().split("\n") if line]
+
+    def datasets_written_since(self, pool: str, snapshot_bare: str) -> dict[str, int | None]:
+        """Return bytes written per dataset since *snapshot_bare* (recursive).
+
+        One ``zfs list -H -r -o name,written@<snap> <pool>`` query backs the
+        Migrate Pool quiesce gate: the cutover is refused while any dataset
+        reports a nonzero value. A dataset without the snapshot (or an
+        unparseable field) maps to None. A failed query raises, and the
+        caller defers — an unreadable answer is not a quiesced pool.
+        """
+        result = self._run(
+            self._zfs("list", "-H", "-r", "-o", f"name,written@{snapshot_bare}", pool)
+        )
+        written: dict[str, int | None] = {}
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            written[parts[0]] = parse_zfs_bytes(parts[1])
+        return written
 
     def list_snapshots(
         self,

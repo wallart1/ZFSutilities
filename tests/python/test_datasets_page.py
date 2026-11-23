@@ -172,6 +172,27 @@ class TestCreateDatasetsPage(unittest.TestCase):
             self.assertTrue(tips, f"{name} tooltip missing")
             self.assertTrue(all(t.args[0].strip() for t in tips))
 
+    def test_view_attaches_cell_tooltips_and_ellipsizes(self):
+        """Ellipsized cells show their full text on hover."""
+        app = self._make_app()
+        with patch.object(dp, "refresh_datasets_page"):
+            with patch.object(dp, "attach_cell_tooltips") as recorder:
+                dp.create_datasets_page(app)
+
+        recorder.assert_called_once_with(app.datasets_view, app.datasets_store)
+
+        # Every text renderer ellipsizes (mock_gtk shares one instance);
+        # the tree has seven columns. Reset first: earlier tests in this
+        # module accumulated calls on the same shared renderer mock.
+        dp.Gtk.CellRendererText.reset_mock()
+        with patch.object(dp, "refresh_datasets_page"):
+            dp.create_datasets_page(self._make_app())
+        renderer = dp.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 7)
+
 
 class TestRefreshDatasetsPage(unittest.TestCase):
     """refresh_datasets_page loads online pools into the tree."""

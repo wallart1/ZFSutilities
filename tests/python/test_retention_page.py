@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from unittest.mock import call as mock_call
@@ -226,7 +227,7 @@ class TestMassDeleteVarTooltips(unittest.TestCase):
 class TestRetentionStaticTooltips(unittest.TestCase):
     """Static tooltips on the retention tables and prune controls."""
 
-    def _build_page(self, header_recorder=None):
+    def _build_page(self, header_recorder=None, attach_recorder=None):
         _clear_cached_modules(
             "retention_page",
             "retention_actions",
@@ -248,10 +249,14 @@ class TestRetentionStaticTooltips(unittest.TestCase):
             )
 
             with patch.object(rp, "import_legacy_retention", return_value=False):
+                patches = []
                 if header_recorder is not None:
-                    with patch.object(rp, "set_column_header_tooltip", header_recorder):
-                        rp.create_retention_page(app, app.ctx)
-                else:
+                    patches.append(patch.object(rp, "set_column_header_tooltip", header_recorder))
+                if attach_recorder is not None:
+                    patches.append(patch.object(rp, "attach_cell_tooltips", attach_recorder))
+                with ExitStack() as stack:
+                    for p in patches:
+                        stack.enter_context(p)
                     rp.create_retention_page(app, app.ctx)
 
             return rp, app
@@ -267,6 +272,26 @@ class TestRetentionStaticTooltips(unittest.TestCase):
         )
         for title, tip in recorded:
             self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_both_tables_attach_cell_tooltips(self):
+        """Ellipsized bucket and prune cells show their full text on hover."""
+        recorder = MagicMock()
+        rp, app = self._build_page(attach_recorder=recorder)
+
+        calls = recorder.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertIs(calls[0].args[0], app._ret_view)
+        self.assertIs(calls[0].args[1], app._ret_store)
+        self.assertIs(calls[1].args[0], app._ret_prune_view)
+        self.assertIs(calls[1].args[1], app._ret_prune_store)
+
+        # The text renderers ellipsize (Bucket, Type, Pool, Health); the
+        # Retain Count and Min Age spin renderers are a different class.
+        renderer = rp.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 4)
 
     def test_pool_combo_and_prune_controls_carry_tooltips(self):
         rp, app = self._build_page()

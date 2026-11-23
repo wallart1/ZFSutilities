@@ -414,6 +414,32 @@ class TestOffsiteStaticTooltips(unittest.TestCase):
         for title, tip in recorded:
             self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
 
+    def test_step_table_attaches_cell_tooltips(self):
+        """Ellipsized step cells show their full text on hover."""
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {"pools": []}
+        app.config = {"pools": []}
+
+        with patch.object(op, "attach_cell_tooltips") as recorder:
+            with (
+                patch("offsite_page._do_generate_snap"),
+                patch("offsite_page.do_detect_offsite_pool"),
+            ):
+                op.create_offsite_page(app, app.ctx)
+
+        recorder.assert_called_once_with(app.offsite_step_view, app.offsite_step_store)
+
+        # Every step-table text renderer ellipsizes (mock_gtk shares one
+        # instance); the four text columns follow the Active toggle.
+        renderer = op.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 4)
+
     def test_step_add_remove_buttons_and_advanced_carry_tooltips(self):
         op, app = self._build_page()
 

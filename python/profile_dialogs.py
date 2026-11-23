@@ -38,6 +38,7 @@ from feature_config import (
 from gi.repository import Gtk, Pango
 from gui_helpers import (
     _ensure_treeview_scrolling,
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
@@ -483,10 +484,14 @@ def show_manage_profiles_dialog(app):
     ]
     for col_idx, title_text, width, header_tip in cols:
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         set_column_header_tooltip(col, title_text, header_tip)
         configure_treeview_column(col, width=width)
         view.append_column(col)
+
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(view, store)
 
     # Dialog table: expand stays on so an enlarged dialog grows the list;
     # the default height follows the natural row count.
@@ -969,6 +974,7 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
     picker_selection.set_mode(Gtk.SelectionMode.SINGLE)
 
     name_renderer = Gtk.CellRendererText()
+    name_renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     name_col = Gtk.TreeViewColumn("Profile", name_renderer, text=0)
     set_column_header_tooltip(
         name_col, "Profile", "Profiles that apply to the selected dataset type"
@@ -977,6 +983,7 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
     picker_view.append_column(name_col)
 
     applies_renderer = Gtk.CellRendererText()
+    applies_renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     applies_col = Gtk.TreeViewColumn("Applies to", applies_renderer, text=1)
     set_column_header_tooltip(
         applies_col, "Applies to", "Dataset types the profile can be applied to"
@@ -993,6 +1000,12 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
     set_column_header_tooltip(desc_col, "Description", "Free-text summary of the profile")
     configure_treeview_column(desc_col, width=350)
     picker_view.append_column(desc_col)
+
+    # Cells ellipsize and show their full text on hover — except the
+    # Description column: its renderer wraps, so the full text is always
+    # visible and a tooltip would only repeat it. The column_map's None
+    # entry keeps that column tooltip-free.
+    attach_cell_tooltips(picker_view, picker_store, column_map=[0, 1, None])
 
     picker_sw = capped_treeview_scroll(picker_view)
     # Expand so resizing the dialog vertically grows the profile list (and
@@ -1288,16 +1301,21 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run
         view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
 
         r0 = Gtk.CellRendererText()
+        r0.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         c0 = Gtk.TreeViewColumn("Profile", r0, text=0)
         set_column_header_tooltip(c0, "Profile", f"Existing {tab_type} profiles")
         configure_treeview_column(c0, width=150)
         view.append_column(c0)
 
         r1 = Gtk.CellRendererText()
+        r1.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         c1 = Gtk.TreeViewColumn("Schedule", r1, text=1)
         set_column_header_tooltip(c1, "Schedule", "Cron schedule the profile runs on")
         configure_treeview_column(c1, width=150)
         view.append_column(c1)
+
+        # Cells ellipsize; the shared handler shows the full text on hover.
+        attach_cell_tooltips(view, store)
 
         def _on_selection_changed(selection):
             model, tree_iter = selection.get_selected()
@@ -1427,16 +1445,21 @@ def show_recall_profile_dialog(app, tab_type, on_select):
     view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
 
     r0 = Gtk.CellRendererText()
+    r0.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     c0 = Gtk.TreeViewColumn("Profile", r0, text=0)
     set_column_header_tooltip(c0, "Profile", f"Saved {tab_type} profiles")
     configure_treeview_column(c0, width=150)
     view.append_column(c0)
 
     r1 = Gtk.CellRendererText()
+    r1.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     c1 = Gtk.TreeViewColumn("Schedule", r1, text=1)
     set_column_header_tooltip(c1, "Schedule", "Cron schedule the profile runs on")
     configure_treeview_column(c1, width=150)
     view.append_column(c1)
+
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(view, store)
 
     scroll = capped_treeview_scroll(view)
     _ensure_treeview_scrolling(view)

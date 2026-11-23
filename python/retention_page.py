@@ -31,6 +31,7 @@ from feature_config import (
 from gi.repository import Gtk
 from gui_helpers import (
     add_var_row,
+    attach_cell_tooltips,
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
@@ -244,6 +245,7 @@ def create_retention_page(app, ctx):
     app._ui_state.bind_treeview(app._ret_view, "retention_buckets_view")
 
     r0 = Gtk.CellRendererText()
+    r0.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     c0 = Gtk.TreeViewColumn("Bucket", r0, text=0)
     configure_treeview_column(c0, width=70)
     set_column_header_tooltip(
@@ -253,6 +255,7 @@ def create_retention_page(app, ctx):
 
     r1 = Gtk.CellRendererText()
     r1.set_property("foreground", "gray")
+    r1.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     c1 = Gtk.TreeViewColumn("Type", r1, text=1)
     configure_treeview_column(c1, width=60)
     set_column_header_tooltip(
@@ -299,6 +302,10 @@ def create_retention_page(app, ctx):
     tv.append_column(c3)
     app._ret_minage_renderer = r3
 
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # spin columns' int values fall through the handler's str check.
+    attach_cell_tooltips(tv, app._ret_store)
+
     sw = capped_treeview_scroll(tv)
     outer.pack_start(sw, False, False, 0)
 
@@ -341,6 +348,7 @@ def create_retention_page(app, ctx):
     pv.connect("drag-end", _on_prune_drag_end, app)
 
     rp0 = Gtk.CellRendererText()
+    rp0.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     cp0 = Gtk.TreeViewColumn("Pool", rp0, text=0)
     configure_treeview_column(cp0, width=140)
     set_column_header_tooltip(
@@ -350,6 +358,7 @@ def create_retention_page(app, ctx):
     )
     pv.append_column(cp0)
     rp1 = Gtk.CellRendererText()
+    rp1.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     cp1 = Gtk.TreeViewColumn("Health", rp1, text=1)
     configure_treeview_column(cp1, width=90)
     set_column_header_tooltip(
@@ -359,6 +368,9 @@ def create_retention_page(app, ctx):
         "omitted from the list.",
     )
     pv.append_column(cp1)
+
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(pv, app._ret_prune_store)
 
     psw = capped_treeview_scroll(pv)
     outer.pack_start(psw, False, False, 0)

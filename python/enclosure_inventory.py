@@ -374,7 +374,7 @@ class EnclosureInventory:
             devpath = self._udev_lookup(boot_path)[0]
         controller = pci_controller(devpath) if devpath else None
         if controller:
-            log_msg(f"VERB: excluding boot-disk controller {controller} from eSATA grouping")
+            log_msg(f"DEBUG: excluding boot-disk controller {controller} from eSATA grouping")
         return controller
 
 

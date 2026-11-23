@@ -914,6 +914,49 @@ class TestGrowthDialogStaticTooltips(unittest.TestCase):
         for title, tip in recorded:
             self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
 
+    def test_shared_disk_picker_attaches_cell_tooltips(self):
+        """Ellipsized picker cells show their full text on hover."""
+        pgd = _import_dialogs()
+        with patch.object(pgd, "attach_cell_tooltips") as recorder:
+            pgd._build_disk_picker(_state(pgd), lambda: None, "Pick disks")
+
+        recorder.assert_called_once_with(
+            pgd.Gtk.TreeView.return_value, pgd.Gtk.ListStore.return_value
+        )
+
+        # The five text renderers ellipsize (Use is a toggle); mock_gtk
+        # shares one renderer instance.
+        renderer = pgd.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 5)
+
+    def test_target_tree_attaches_cell_tooltips_with_column_map(self):
+        """The target tree routes its out-of-order columns via column_map.
+
+        The visible Size column is store column 5 and State is store
+        column 2 (the foreground and node payload sit between), so the
+        offset arithmetic cannot express the mapping.
+        """
+        pgd = _import_dialogs()
+        state = _attach_state(pgd)
+        with patch.object(pgd, "attach_cell_tooltips") as recorder:
+            pgd._build_target_tree(state, lambda: None, MagicMock())
+
+        recorder.assert_called_once_with(
+            pgd.Gtk.TreeView.return_value,
+            pgd.Gtk.TreeStore.return_value,
+            column_map=[pgd._TCOL_NAME, pgd._TCOL_TYPE, pgd._TCOL_SIZE, pgd._TCOL_STATE],
+        )
+
+        # The four text renderers ellipsize (mock_gtk shares one instance).
+        renderer = pgd.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 4)
+
     def test_review_scaffold_typed_entry_and_checkbox_carry_tooltips(self):
         pgd = _import_dialogs()
         scaffold = pgd._ReviewScaffold(MagicMock(), lambda: None)

@@ -1069,8 +1069,9 @@ the first entry above:
 4. The counterpart pool is the first segment of the expanded destination
    root (`fivebays`).
 5. If the counterpart pool is online, look for a common snapshot between
-   the source and the counterpart dataset. If offline, fall through to
-   hold-tag verification (below).
+   the source and the counterpart dataset. If the pool is online but the
+   counterpart dataset does not exist, the row counts as absent (see
+   below). If offline, fall through to hold-tag verification (below).
 
 Multiple fss entries may match one snapshot. `checkagainst` evaluates every
 matching entry and only returns "safe to delete" when all counterparts can
@@ -1087,12 +1088,25 @@ hold, the current snapshot may be the only shared point; deletion is
 blocked (returns 6). Non-offsite labels always block when the counterpart
 is offline (no holds to check).
 
+#### Absent counterpart datasets (pool online, dataset missing)
+
+A counterpart pool can be online while the counterpart dataset does not
+exist. Two common cases: datasets that exist only on the destination (the
+property-manifest store is created at the first hop by capture, so the
+source pool has no matching dataset), and backups of datasets whose source
+was later removed (for example, an archived VM's disks). No incremental
+chain can exist through such a row, so the row cannot block deletion: the
+absent dataset is reported once per run at `INFO` (repeats at `VERB`), and
+if every matched row is absent the verdict is "not common" (return 4). An
+absent counterpart never overrides a different row that is offline or
+locked — those still block for safety (return 6).
+
 #### Return codes
 
 | Code | Meaning                                                           |
 | ---- | ----------------------------------------------------------------- |
 | 0    | Safe to delete (includes hold-verified offline counterpart)       |
-| 4    | No counterpart snapshots found — candidate is not common          |
+| 4    | Not common with any counterpart — includes every matched counterpart dataset being absent (missing on an online pool) |
 | 5    | No entry in `fss` table matched the snapshot — no check performed |
 | 6    | Counterpart pool offline and no hold tag — blocked for safety     |
 | 7    | Last remaining common snapshot — deletion blocked                 |

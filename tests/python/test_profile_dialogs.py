@@ -228,6 +228,14 @@ class FakePickerTreeView:
     def set_grid_lines(self, *_args):
         pass
 
+    # The clipped-cell tooltip attach arms the view; the fake only needs
+    # to accept the calls (the handler never fires in these tests).
+    def set_has_tooltip(self, *_args):
+        pass
+
+    def connect(self, *_args, **_kwargs):
+        pass
+
     def get_selection(self):
         return self._selection
 
@@ -468,6 +476,35 @@ class TestApplyProfileDialog(unittest.TestCase):
             mock_create_dialog.return_value = mock_dialog
             result = pd.show_apply_profile_dialog(app, datasets, pool_has_special=pool_has_special)
         return result, mock_dialog, stores, views
+
+    def test_apply_profile_picker_attaches_cell_tooltips(self):
+        """Picker cells ellipsize; the wrapped Description never tooltips.
+
+        The Description renderer wraps, so its full text is always visible
+        and the column_map's None entry keeps it tooltip-free.
+        """
+        pd = _import_profile_dialogs()
+        app = self._dialog_app()
+        datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "custom"}]
+
+        with patch.object(pd, "attach_cell_tooltips") as recorder:
+            self._run_dialog(pd, app, datasets, [pd.Gtk.ResponseType.CANCEL])
+
+        recorder.assert_called_once()
+        self.assertEqual(recorder.call_args.args[0].__class__, FakePickerTreeView)
+        self.assertEqual(recorder.call_args.kwargs, {"column_map": [0, 1, None]})
+
+        # Only the Profile and Applies-to renderers ellipsize; Description
+        # keeps its wrap (mock_gtk shares one renderer instance).
+        renderer = pd.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 2)
+        wrap_width_calls = [
+            c for c in renderer.set_property.call_args_list if c.args[0] == "wrap-width"
+        ]
+        self.assertEqual(len(wrap_width_calls), 1)
 
     def test_apply_profile_dialog_builds_preview(self):
         pd = _import_profile_dialogs()
@@ -1682,6 +1719,27 @@ class TestManageProfilesDialog(unittest.TestCase):
                 ["general", "filesystem, volume", "Balanced settings.", "built-in"], appended
             )
 
+    def test_manage_dialog_attaches_cell_tooltips(self):
+        """Ellipsized profile cells show their full text on hover."""
+        pd = _import_profile_dialogs()
+        app = self._dialog_app()
+        view = _make_tree_view(GtkListStoreAdapter(), [])
+        store = MagicMock()
+
+        with (
+            patch.object(
+                pd,
+                "create_dialog",
+                return_value=MagicMock(run=MagicMock(return_value=pd.Gtk.ResponseType.CLOSE)),
+            ),
+            patch.object(pd.Gtk, "ListStore", return_value=store),
+            patch.object(pd.Gtk, "TreeView", return_value=view),
+            patch.object(pd, "attach_cell_tooltips") as recorder,
+        ):
+            pd.show_manage_profiles_dialog(app)
+
+        recorder.assert_called_once_with(view, store)
+
     def test_manage_profiles_add_profile(self):
         pd = _import_profile_dialogs()
         app = self._dialog_app()
@@ -2411,6 +2469,28 @@ class TestProfileDialogStaticTooltips(unittest.TestCase):
             "Add Profile to Schedule name entry lacks a tooltip",
         )
 
+    def test_add_profile_overwrite_picker_attaches_cell_tooltips(self):
+        """Ellipsized overwrite-picker cells show their full text on hover."""
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+
+        with dialog_patch:
+            with (
+                patch.object(pd, "get_user", return_value="tester"),
+                patch.object(
+                    pd,
+                    "list_profiles",
+                    return_value=[{"tab_type": "backup", "profile_name": "p1", "cron": {}}],
+                ),
+                patch.object(pd, "attach_cell_tooltips") as recorder,
+            ):
+                pd.show_add_profile_dialog(app, "backup", {})
+
+        recorder.assert_called_once_with(
+            pd.Gtk.TreeView.return_value, pd.Gtk.ListStore.return_value
+        )
+
     def test_recall_button_carries_tooltip(self):
         pd = _import_profile_dialogs()
         app = _make_app()
@@ -2427,6 +2507,27 @@ class TestProfileDialogStaticTooltips(unittest.TestCase):
         tip = dialog.get_widget_for_response.return_value.set_tooltip_text.call_args.args[0]
         self.assertTrue(tip.strip())
         self.assertIn("backup tab", tip)
+
+    def test_recall_picker_attaches_cell_tooltips(self):
+        """Ellipsized recall-picker cells show their full text on hover."""
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+
+        with dialog_patch:
+            with (
+                patch.object(
+                    pd,
+                    "list_profiles",
+                    return_value=[{"tab_type": "backup", "profile_name": "p1", "cron": {}}],
+                ),
+                patch.object(pd, "attach_cell_tooltips") as recorder,
+            ):
+                pd.show_recall_profile_dialog(app, "backup", lambda *_args: None)
+
+        recorder.assert_called_once_with(
+            pd.Gtk.TreeView.return_value, pd.Gtk.ListStore.return_value
+        )
 
 
 class TestAddProfileManagedScopeGate(unittest.TestCase):

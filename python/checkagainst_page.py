@@ -34,10 +34,12 @@ from feature_config import (
 )
 from gi.repository import Gtk
 from gui_helpers import (
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     handle_editing_key_press,
     set_button_markup,
+    set_column_header_tooltip,
     set_page_tab_attention,
     show_error,
 )
@@ -181,13 +183,15 @@ def create_checkagainst_page(app):
     for col_idx in (COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT):
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", True)
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         renderer.connect("edited", _on_cell_edited, app, col_idx)
         renderer.connect("editing-started", _on_editing_started, tv, col_idx)
         col = Gtk.TreeViewColumn(_COLUMN_TITLES[col_idx], renderer, text=col_idx)
         configure_treeview_column(col, width=_column_width(col_idx))
-        col.set_widget(_build_header(_COLUMN_TITLES[col_idx]))
-        col.get_widget().set_tooltip_text(_COLUMN_TOOLTIPS[col_idx])
+        set_column_header_tooltip(col, _COLUMN_TITLES[col_idx], _COLUMN_TOOLTIPS[col_idx])
         tv.append_column(col)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(tv, app._ca_store)
     app._ui_state.bind_treeview(app._ca_view, "checkagainst_view")
 
     sw = capped_treeview_scroll(tv)
@@ -238,15 +242,6 @@ def _column_width(col_idx):
     return widths.get(col_idx, 100)
 
 
-def _build_header(title_text):
-    """Build a TreeViewColumn header widget with title."""
-    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-    lbl = Gtk.Label(label=title_text)
-    box.pack_start(lbl, False, False, 0)
-    box.show_all()
-    return box
-
-
 def _build_readonly_treeview(store, state_key):
     """Build a non-reorderable, non-editable TreeView for derived rows."""
     tv = Gtk.TreeView(model=store)
@@ -256,11 +251,14 @@ def _build_readonly_treeview(store, state_key):
     for col_idx in (COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT):
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", False)
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         col = Gtk.TreeViewColumn(_COLUMN_TITLES[col_idx], renderer, text=col_idx)
         configure_treeview_column(col, width=_column_width(col_idx))
-        col.set_widget(_build_header(_COLUMN_TITLES[col_idx]))
-        col.get_widget().set_tooltip_text(_COLUMN_TOOLTIPS[col_idx])
+        set_column_header_tooltip(col, _COLUMN_TITLES[col_idx], _COLUMN_TOOLTIPS[col_idx])
         tv.append_column(col)
+
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(tv, store)
 
     # Width persistence is useful even for read-only views.
     # The caller binds the view after it is attached to a toplevel.

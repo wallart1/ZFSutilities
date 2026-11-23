@@ -8,6 +8,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     _ensure_treeview_scrolling,
+    attach_cell_tooltips,
     build_full_dataset_name,
     capped_treeview_scroll,
     configure_treeview_column,
@@ -76,6 +77,7 @@ class PoolWatchWindow(Gtk.Window):
         ]
         for title, col_idx, width in ds_columns:
             renderer = Gtk.CellRendererText()
+            renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
             if title == "Created":
                 set_monospace_font(renderer)
             col = Gtk.TreeViewColumn(title, renderer, text=col_idx)
@@ -86,6 +88,11 @@ class PoolWatchWindow(Gtk.Window):
             if col_idx == 0:
                 col.set_cell_data_func(renderer, dataset_name_cell_func)
             self.view.append_column(col)
+
+        # Cells ellipsize; the shared handler shows the full text on hover.
+        # The visible text columns (0-6) match their store positions; the
+        # store holds plain names — the cell data func only styles the font.
+        attach_cell_tooltips(self.view, self.store)
 
         self.view.connect("button-press-event", self._on_right_click)
         self.view.connect("row-expanded", on_row_expanded, None)

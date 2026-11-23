@@ -382,16 +382,21 @@ function propmanifest_store_candidates {
         "$first" "${rest%%/*}" "$rest"
 }
 
-# Newest manifest file for one dataset: the last file (byte order — the
-# UTC-canonical generation names sort chronologically) whose name starts
-# with <prefix>. Pure string/file work, no zfs calls.
+# Newest manifest file for one dataset: the file whose name starts with
+# <prefix> that has the newest mtime (mtimes ride the send/receive
+# chain); equal mtimes fall to byte order — the greater generation name
+# wins a tie. Pure file work, no zfs calls.
 # Usage: propmanifest_newest_file <prefix-including-trailing-@>
 # Output: the newest matching file name (empty when none).
 function propmanifest_newest_file {
     local LC_ALL=C
-    local prefix="$1" best="" f
+    local prefix="$1" best="" f t bt=-1
     for f in "$prefix"*; do
-        [[ -f "$f" ]] && best="$f"
+        [[ -f "$f" ]] || continue
+        t=$(stat -c %Y -- "$f" 2>/dev/null) || t=-1
+        if (( t >= bt )); then
+            best="$f" bt="$t"
+        fi
     done
     printf '%s\n' "$best"
 }
@@ -626,9 +631,11 @@ function propmanifest_replay {
             return 0
         fi
 
-        # Exact generation = the newest snapshot on the backup copy (name
-        # sort: UTC-canonical names sort chronologically).
-        snaps=$(zfs list -t snapshot -H -o name -S name "$fs" 2>/dev/null) || snaps=""
+        # Exact generation = the newest snapshot on the backup copy by
+        # creation time. A name sort would be prefix-blind across
+        # snapshot families: offsite-... outranks dailybackup-...
+        # regardless of date.
+        snaps=$(zfs list -t snapshot -H -o name -S creation "$fs" 2>/dev/null) || snaps=""
         snap="${snaps%%$'\n'*}"
         snap="${snap#*@}"
         if [[ -z "$snap" ]]; then

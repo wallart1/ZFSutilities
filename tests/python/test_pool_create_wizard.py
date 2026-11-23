@@ -981,6 +981,26 @@ class TestWizardStaticTooltips(unittest.TestCase):
         for title, tip in recorded:
             self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
 
+    def test_disk_table_attaches_cell_tooltips(self):
+        """Ellipsized disk-table cells show their full text on hover."""
+        pcw = _import_wizard()
+        state = _state(pcw)
+        ctx = SimpleNamespace(repository=MagicMock())
+        with patch.object(pcw, "attach_cell_tooltips") as recorder:
+            pcw._build_disks_page(MagicMock(), state, ctx, lambda: None)
+
+        recorder.assert_called_once_with(
+            pcw.Gtk.TreeView.return_value, pcw.Gtk.ListStore.return_value
+        )
+
+        # The five text renderers ellipsize (Use is a toggle); mock_gtk
+        # shares one renderer instance.
+        renderer = pcw.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 5)
+
     def test_topology_radios_carry_tooltips(self):
         pcw = _import_wizard()
         self.assertEqual(set(pcw._TOPOLOGY_RADIO_TOOLTIPS), set(pcw.TOPOLOGIES))

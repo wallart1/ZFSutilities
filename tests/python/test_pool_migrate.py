@@ -268,12 +268,14 @@ class TestPlanMigrationSteps(unittest.TestCase):
                 STEP_CREATE_POOL,
                 STEP_COPY,
                 STEP_VERIFY,
-                STEP_EXPORT_SOURCE,
                 STEP_IMPORT_RENAME,
                 STEP_REAPPLY_HOLDS,
                 STEP_DESTROY_HOLDING,
             ],
         )
+        # The holding pool is never exported: it stays online for the whole
+        # cutover (exporting it would cut off every VM it serves).
+        self.assertNotIn("Export holding pool 'fivebays'", [step.description for step in steps])
 
     def test_catchup_steps_between_holds_capture_and_export(self):
         for mode, dest in ((MIGRATE_NEW_DISKS, "temp_mig"), (MIGRATE_HOLDING_POOL, "fivebays")):

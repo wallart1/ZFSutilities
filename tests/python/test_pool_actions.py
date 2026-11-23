@@ -475,6 +475,45 @@ class TestOnPoolsImport(unittest.TestCase):
         mock_scrub_refresh.assert_not_called()
         mock_burst.assert_not_called()
 
+    def test_import_fallback_picker_attaches_cell_tooltips(self):
+        """The fallback import picker's cells ellipsize and tooltip."""
+        pa = _import_pool_actions()
+        app = self._make_app_with_offline_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        dialog = MagicMock()
+        dialog.run.return_value = pa.Gtk.ResponseType.CANCEL
+        # The picker's run loop unpacks get_selected(); answer with no
+        # selection so the CANCEL response exits immediately.
+        pa.Gtk.TreeView.return_value.get_selection.return_value.get_selected.return_value = (
+            MagicMock(),
+            None,
+        )
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(app.ctx.zfs_repository, "import_pool"),
+            patch.object(app.ctx.zfs_repository, "importable_pools_raw", return_value="raw"),
+            patch.object(pa, "_parse_importable_pools", return_value=([("tank", {})], [])),
+            patch.object(pa, "create_dialog", return_value=dialog),
+            patch.object(pa, "attach_cell_tooltips") as recorder,
+        ):
+            pa.on_pools_import(app)
+
+        recorder.assert_called_once_with(
+            pa.Gtk.TreeView.return_value, pa.Gtk.ListStore.return_value
+        )
+        # The single text renderer ellipsizes.
+        renderer = pa.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 1)
+
     def test_import_importable_selected_refreshes_scrub_table(self):
         pa = _import_pool_actions()
         app = self._make_app_with_offline_selection(
@@ -643,9 +682,7 @@ class TestOnPoolsExport(unittest.TestCase):
         warnings = [c.args[0] for c in mock_log.call_args_list if "stalled" in c.args[0]]
         self.assertTrue(warnings, "no stall warning logged")
         gave_up = [
-            c.args[0]
-            for c in mock_log.call_args_list
-            if "no removable holders" in c.args[0]
+            c.args[0] for c in mock_log.call_args_list if "no removable holders" in c.args[0]
         ]
         self.assertTrue(gave_up, "no honest give-up warning logged")
 
@@ -707,9 +744,7 @@ class TestOnPoolsExport(unittest.TestCase):
                 release.set()
 
         msgs = [c.args[0] for c in mock_log.call_args_list]
-        self.assertIn(
-            "INFO: Pool 'tank' exported successfully after resolving blockers", msgs
-        )
+        self.assertIn("INFO: Pool 'tank' exported successfully after resolving blockers", msgs)
         self.assertTrue(any("Removed iSCSI backstore" in m for m in msgs))
         manual = [m for m in msgs if "Release holders" in m]
         self.assertFalse(manual, "stall must not instruct manual holder release")

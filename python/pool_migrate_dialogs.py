@@ -5,26 +5,30 @@ in place (stripe to raidz, mirror to raidz, width or ashift changes). The
 dialog collects a source pool and a destination (a new pool built on
 selected disks, or an existing holding pool), shows the full step plan, and
 gates the run behind typed confirmation of the source pool name. Execution
-is two runner phases: the copy phase (recursive migration snapshot, one
+is three runner phases: the copy phase (recursive migration snapshot, one
 resumable ``zfs-migrate-send`` step — ``zfs send -Rw`` received with
 ``zfs receive -u -F -s``, with ``pv`` in the pipeline and an optional
 bandwidth limit — per top-level dataset, then a dataset-tree verification
-step), and the cutover phase (a catch-up snapshot of the still-imported
-source pool plus one short ``zfs send -Rw -I`` incremental per dataset so
-writes made during the copy are not lost, then export the source
-pool, then — for new disks — re-import the migrated pool under the source
-pool's name, or — for holding pool — destroy the source, rebuild it from
-the user-selected disks (the freed source data members plus any eligible
-unused disks; former infra-vdev members start unchecked so they cannot
-silently join the data vdevs) with the chosen topology, copy back, and
-swap). The cutover
-phase starts only after a second typed confirmation, since it takes the
-pool briefly offline; before that confirmation the source layout is
-re-validated and the pool's zvols are checked for running VMs. The source
-pool's non-default properties (SOURCE=local, outside the curated profile
-set) are captured when the dialog opens, offered as checkboxes, and
-replayed with non-fatal ``zpool set`` steps right after the migrated pool
-is imported under the source pool's name.
+step), the catch-up phase (a snapshot of the still-imported source pool
+plus one short ``zfs send -Rw -I`` incremental per dataset so writes made
+during the copy are not lost), and the destructive phase (export the
+source pool, then — for new disks — re-import the migrated pool under the
+source pool's name, or — for holding pool — destroy the source, rebuild it
+from the user-selected disks (the freed source data members plus any
+eligible unused disks; former infra-vdev members start unchecked so they
+cannot silently join the data vdevs) with the chosen topology, copy back,
+and swap; the holding pool itself is never exported — it stays online for
+the whole cutover). The catch-up phase starts only after a second typed
+confirmation, since the source layout is re-validated before it. The
+destructive phase starts only after the enforced quiesce gate (no dataset
+written since the cutover snapshot — verified, not assumed), the
+running-VM warning, an explicit disruptive-steps confirmation, and a
+proactive export preparation (mounted filesystems unmounted, remaining
+blockers refused — busy processes, iSCSI LUNs, shares). The source pool's
+non-default properties (SOURCE=local, outside the curated profile set) are
+captured when the dialog opens, offered as checkboxes, and replayed with
+non-fatal ``zpool set`` steps right after the migrated pool is imported
+under the source pool's name.
 
 All decision logic lives in the pure helpers below or in ``pool_migrate``;
 ZFS I/O is delegated to ``ZfsRepository`` via the app context.
@@ -57,6 +61,11 @@ from gui_helpers import create_dialog, create_scrolled_dialog, set_action_toolti
 from iscsi_enroll import is_iscsi_managed_pool, log_manual_enrollment_steps
 from logging_config import log_msg
 from path_utils import resolve_local_bin
+from pool_actions import (
+    _collect_export_blockers,
+    _show_export_blockers_dialog,
+    _unmount_pool_filesystems,
+)
 from pool_create import (
     _BY_ID_DIR,
     TOPOLOGIES,
@@ -626,10 +635,11 @@ def _migrate_warnings(state: _MigrateState) -> list[str]:
     warnings: list[str] = [
         (
             "the pool must be quiesced from the cutover snapshot onward: "
-            "cutover takes a catch-up snapshot and then exports the source "
-            "pool — stop VMs and unmount shares that use it before "
-            "confirming the cutover; writes after that snapshot are lost, "
-            "but the window is only seconds"
+            "after the catch-up snapshot the wizard verifies no dataset has "
+            "been written since and refuses to continue until the pool is "
+            "quiet — stop VMs and unmount shares that use it before the "
+            "cutover; writes after that snapshot are lost, but the window "
+            "is only seconds"
         ),
         (
             "every dataset path survives the migration: the migrated pool is "
@@ -882,24 +892,28 @@ def _replay_props_steps(request: MigrationRequest) -> list[BashStep]:
 
 def build_migration_steps(
     request: MigrationRequest,
-) -> tuple[list[BashStep], list[BashStep]]:
-    """Build the (copy, cutover) step lists for one migration request.
+) -> tuple[list[BashStep], list[BashStep], list[BashStep]]:
+    """Build the (copy, catchup, destructive) step lists for one request.
 
     The copy phase ends with a fatal capture of the source pool's snapshot
     holds: holds never travel in send streams, and in holding mode the
     source pool (holds included) is destroyed, so the captured TSV is the
-    only record of them. The cutover phase starts with a catch-up snapshot
-    of the still-imported source pool plus one short incremental per dataset
-    (from the migration snapshot to the cutover snapshot), so writes made
-    while the copy ran are migrated before anything destructive happens.
-    The holds are reapplied as the last cutover step,
-    after the migrated pool has been imported under the source pool's name
-    (so the captured ``<pool>/<dataset>@<snap>`` paths match verbatim and
-    the copy-back receives never meet a held snapshot). Between the
-    import-rename and the holds reapply, one non-fatal ``zpool set`` step
-    per checked non-default pool property replays the origin's local
-    settings (comment, compatibility, …) that the profile system cannot
-    carry at create time.
+    only record of them. The catchup phase takes a snapshot of the still-
+    imported source pool plus one short incremental per dataset (from the
+    migration snapshot to the cutover snapshot), so writes made while the
+    copy ran are migrated before anything destructive happens. The
+    destructive phase runs only after the wizard verifies the pool is
+    quiesced from the cutover snapshot onward and the user confirms the
+    disruption; it exports the source pool (the only export — the holding
+    pool is never exported) and swaps in the migrated pool. The holds are
+    reapplied as the last destructive step, after the migrated pool has
+    been imported under the source pool's name (so the captured
+    ``<pool>/<dataset>@<snap>`` paths match verbatim and the copy-back
+    receives never meet a held snapshot). Between the import-rename and
+    the holds reapply, one non-fatal ``zpool set`` step per checked
+    non-default pool property replays the origin's local settings
+    (comment, compatibility, …) that the profile system cannot carry at
+    create time.
     """
     datasets = list(request.datasets)
     if request.mode == MIGRATE_NEW_DISKS:
@@ -938,7 +952,8 @@ def build_migration_steps(
                 fatal=True,
             )
         )
-        cutover = _catchup_steps(request, request.temp_pool) + [
+        catchup = _catchup_steps(request, request.temp_pool)
+        destructive = [
             BashStep(
                 build_pool_export_command(request.source_pool),
                 f"Export source pool {request.source_pool}",
@@ -952,8 +967,8 @@ def build_migration_steps(
                 fatal=True,
             ),
         ]
-        cutover += _replay_props_steps(request)
-        cutover += [
+        destructive += _replay_props_steps(request)
+        destructive += [
             BashStep(
                 build_apply_holds_command(request.source_pool, request.holds_file),
                 f"Reapply captured snapshot holds to {request.source_pool} "
@@ -968,7 +983,7 @@ def build_migration_steps(
                 fatal=False,
             ),
         ]
-        return copy, cutover
+        return copy, catchup, destructive
 
     # Holding-pool mode: copy out, then rebuild on the freed disks and swap.
     # Copies live in a reserved namespace on the holding pool so they cannot
@@ -991,11 +1006,11 @@ def build_migration_steps(
         )
     )
     # Held snapshots cannot be destroyed, so the source pool's holds must be
-    # released after capture and before zpool destroy. The cutover phase
-    # starts with the catch-up snapshot + incrementals into the holding
-    # namespace, so the copy phase's snapshot is not the last word on the
-    # source pool's data.
-    cutover = _catchup_steps(request, request.holding_pool, namespace) + [
+    # released after capture and before zpool destroy. The catchup phase
+    # takes the snapshot + incrementals into the holding namespace, so the
+    # copy phase's snapshot is not the last word on the source pool's data.
+    catchup = _catchup_steps(request, request.holding_pool, namespace)
+    destructive = [
         BashStep(
             build_pool_export_command(request.source_pool),
             f"Export source pool {request.source_pool}",
@@ -1035,7 +1050,7 @@ def build_migration_steps(
     # included), so copy-back skips the snapshot step and sends the cutover
     # snapshot — a -R full send of the migration snapshot would omit it and
     # lose everything the catch-up carried.
-    cutover += _copy_steps(
+    destructive += _copy_steps(
         request.holding_pool,
         request.temp_pool,
         datasets,
@@ -1043,13 +1058,7 @@ def build_migration_steps(
         rate_limit=request.rate_limit,
         src_namespace=namespace,
     )[1:]
-    cutover += [
-        BashStep(
-            build_pool_export_command(request.holding_pool),
-            f"Export holding pool {request.holding_pool}",
-            is_rsync=False,
-            fatal=True,
-        ),
+    destructive += [
         BashStep(
             build_pool_import_rename_command(request.temp_pool, request.source_pool),
             f"Import {request.temp_pool} as {request.source_pool}",
@@ -1057,8 +1066,8 @@ def build_migration_steps(
             fatal=True,
         ),
     ]
-    cutover += _replay_props_steps(request)
-    cutover += [
+    destructive += _replay_props_steps(request)
+    destructive += [
         BashStep(
             build_apply_holds_command(request.source_pool, request.holds_file),
             f"Reapply captured snapshot holds to {request.source_pool} from {request.holds_file}",
@@ -1078,7 +1087,7 @@ def build_migration_steps(
             fatal=False,
         ),
     ]
-    return copy, cutover
+    return copy, catchup, destructive
 
 
 # ---------------------------------------------------------------------------
@@ -1422,7 +1431,8 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     rate_entry = Gtk.Entry()
     rate_entry.set_hexpand(True)
     rate_entry.set_tooltip_text(
-        "Optional cap on copy bandwidth, e.g. 100m or 64KiB — blank paces the copy at full speed"
+        "Optional cap on copy bandwidth, e.g. 100m or 64KiB — the effective cap is "
+        "the minimum of this limit and the limits of any involved disk enclosures"
     )
     rate_row.pack_start(rate_entry, True, True, 0)
     content.pack_start(rate_row, False, False, 0)
@@ -1607,7 +1617,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
 
 
 def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
-    """Typed-confirmation gate before the destructive cutover phase."""
+    """Typed-confirmation gate before the catch-up phase of the cutover."""
     dialog = create_dialog(
         "Confirm Cutover",
         app,
@@ -1616,8 +1626,8 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
     )
     ok_btn = dialog.add_button("Cut Over", _RESPONSE_MIGRATE)
     ok_btn.set_tooltip_text(
-        "Take the catch-up snapshot, export the source pool, and swap in the "
-        "migrated pool — the pool must stay quiesced from here on"
+        "Take the catch-up snapshot and send the final incrementals — the "
+        "destructive steps run only after the pool is verified quiesced"
     )
     content = dialog.get_content_area()
     text = Gtk.Label()
@@ -1626,12 +1636,14 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
     text.set_text(
         f"The copy phase finished. Cutover now takes a final catch-up "
         f"snapshot of pool '{request.source_pool}' — carrying over every "
-        f"change made since the copy began — then exports the pool and swaps "
-        f"in the migrated pool under that name.\n\n"
+        f"change made since the copy began — and sends the short "
+        f"incrementals. No disruptive step runs yet: the wizard first "
+        f"verifies the pool is quiesced from that snapshot onward and then "
+        f"asks again before the export.\n\n"
         f"Stop every VM and unmount every share that uses "
-        f"'{request.source_pool}' now: the pool must be quiesced from the "
-        f"cutover snapshot onward, and writes made after that snapshot are "
-        f"lost (the window is seconds)."
+        f"'{request.source_pool}' now, so the verification can pass on the "
+        f"first try; writes made after that snapshot are lost (the window "
+        f"is seconds)."
     )
     content.pack_start(text, False, False, 0)
     entry = Gtk.Entry()
@@ -1661,6 +1673,143 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
                 return True
     finally:
         dialog.destroy()
+
+
+def _written_since(repository, request: MigrationRequest) -> dict[str, int | None]:
+    """Return per-dataset bytes written since the cutover snapshot.
+
+    The quiesce oracle: any nonzero value means a writer is still active
+    and the destructive phase must not start. The cutover snapshot is
+    recursive, so every dataset present at snapshot time reports a value;
+    None (no such snapshot on the dataset) is not a writer.
+    """
+    return repository.datasets_written_since(request.source_pool, request.cutover_snap_bare)
+
+
+def _quiesce_writers(written: dict[str, int | None]) -> list[tuple[str, int]]:
+    """Return (dataset, bytes) pairs for datasets written since the snapshot."""
+    return [(name, value) for name, value in sorted(written.items()) if value]
+
+
+def _show_quiesce_refusal(app, request: MigrationRequest, writers) -> str:
+    """Refuse the destructive phase while datasets are still being written.
+
+    Returns ``"recheck"`` when the user chooses Re-check (the caller re-
+    queries and re-evaluates) or ``"defer"`` when the user defers the
+    cutover (state preserved, rerun Migrate Pool to finish).
+    """
+    dialog = create_dialog(
+        "Pool is not quiesced",
+        app,
+        [],
+        size=(640, 360),
+    )
+    defer_btn = dialog.add_button("Defer Cutover", Gtk.ResponseType.CANCEL)
+    defer_btn.set_tooltip_text(
+        "Keep the migration snapshot and copies in place; rerun Migrate Pool "
+        "to finish after the writers are stopped"
+    )
+    recheck_btn = dialog.add_button("Re-check", _RESPONSE_MIGRATE)
+    recheck_btn.set_tooltip_text("Query written@cutover again after stopping the writers")
+    content = dialog.get_content_area()
+    lines = "\n".join(f"• {name}: {format_bytes(amount)}" for name, amount in writers)
+    text = Gtk.Label()
+    text.set_halign(Gtk.Align.START)
+    text.set_line_wrap(True)
+    text.set_text(
+        f"Pool '{request.source_pool}' is not quiesced — these datasets were "
+        f"written after the cutover snapshot:\n\n{lines}\n\n"
+        "The destructive steps cannot run: writes made after that snapshot "
+        "would be lost. Stop every writer (VMs, shares, jobs), then re-check."
+    )
+    content.pack_start(text, False, False, 0)
+    dialog.show_all()
+    try:
+        response = dialog.run()
+    finally:
+        dialog.destroy()
+    return "recheck" if response == _RESPONSE_MIGRATE else "defer"
+
+
+def _show_disruptive_confirm(
+    app,
+    request: MigrationRequest,
+    destructive_steps: list[BashStep],
+) -> bool:
+    """Explicit gate before the disruptive steps (downtime begins).
+
+    Lists the destructive steps verbatim so the user sees exactly what is
+    about to run, and states that the pool is verified quiesced. Returns
+    True to proceed; False defers the cutover with state preserved.
+    """
+    dialog = create_dialog(
+        "Disruptive steps follow",
+        app,
+        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
+        size=(640, 420),
+    )
+    proceed_btn = dialog.add_button("Proceed", _RESPONSE_MIGRATE)
+    proceed_btn.set_tooltip_text(
+        "Run the listed steps now — the source pool goes offline until the swap completes"
+    )
+    content = dialog.get_content_area()
+    intro = Gtk.Label()
+    intro.set_halign(Gtk.Align.START)
+    intro.set_line_wrap(True)
+    intro.set_text(
+        f"Pool '{request.source_pool}' is verified quiesced — no dataset has "
+        f"been written since the cutover snapshot. Every remaining step is "
+        f"disruptive: downtime begins now and lasts until the rebuilt pool "
+        f"is imported under the source pool's name.\n\n"
+        "Steps that will run:"
+    )
+    content.pack_start(intro, False, False, 0)
+    steps_buf = Gtk.TextBuffer()
+    steps_buf.set_text(
+        "\n".join(f"{i}. {step.description}" for i, step in enumerate(destructive_steps, 1))
+    )
+    steps_tv = Gtk.TextView(buffer=steps_buf)
+    steps_tv.set_editable(False)
+    steps_tv.set_cursor_visible(False)
+    steps_tv.set_monospace(True)
+    steps_sw = Gtk.ScrolledWindow()
+    steps_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    steps_sw.set_min_content_height(120)
+    steps_sw.add(steps_tv)
+    content.pack_start(steps_sw, True, True, 0)
+    dialog.show_all()
+    try:
+        response = dialog.run()
+    finally:
+        dialog.destroy()
+    return response == _RESPONSE_MIGRATE
+
+
+def _prepare_pool_export(app, repository, pool: str) -> bool:
+    """Unmount and verify the pool so its export cannot hit a holder.
+
+    Proactive reuse of the Pools-page export machinery: collect blockers,
+    unmount every mounted filesystem that has no busy processes or active
+    shares, then re-collect. Returns True when the pool is unmounted and
+    blocker-free; False shows the blocker dialog (the cutover defers —
+    nothing destructive has run).
+    """
+    blockers = _collect_export_blockers(repository, pool)
+    if blockers:
+        all_ok, error = _unmount_pool_filesystems(repository, pool, blockers)
+        if not all_ok:
+            log_msg(f"WARN: Migrate cutover could not unmount '{pool}': {error}")
+            _show_export_blockers_dialog(app, pool, _collect_export_blockers(repository, pool))
+            return False
+        log_msg(f"INFO: Unmounted '{pool}' filesystems for the migration export")
+        blockers = _collect_export_blockers(repository, pool)
+    if blockers:
+        log_msg(
+            f"WARN: Migrate cutover deferred for '{pool}': {len(blockers)} export blocker(s) remain"
+        )
+        _show_export_blockers_dialog(app, pool, blockers)
+        return False
+    return True
 
 
 def _show_running_vms_warning(app, source_pool: str, running: dict[str, list[str]]) -> bool:
@@ -1971,8 +2120,19 @@ def on_disks_migrate_pool(app) -> None:
         runner = new_dataset_action_runner(app)
         if runner is None:
             raise RuntimeError("dataset action runner not available")
-        copy_steps, cutover_steps = build_migration_steps(request)
+        copy_steps, catchup_steps, destructive_steps = build_migration_steps(request)
         lock_id = zlm.acquire(request.source_pool, "w", f"Migrate pool {request.source_pool}")
+
+        def _defer_cutover(reason: str) -> None:
+            """Release the migration state and log the deferral (state kept)."""
+            zlm.release(lock_id)
+            _discard_holds_file(request.holds_file)
+            _finish_refresh(app)
+            log_msg(
+                f"INFO: Cutover deferred for '{request.source_pool}' ({reason}); "
+                "the migration snapshot and copies remain in place — rerun "
+                "Migrate Pool to finish"
+            )
 
         def _copy_complete(cancelled=False, rc=None):
             if cancelled or rc:
@@ -2013,28 +2173,61 @@ def on_disks_migrate_pool(app) -> None:
                     "— re-open Migrate Pool and review the plan again.",
                 )
                 return
+            if not _show_cutover_confirm(app, request):
+                _defer_cutover("typed confirmation cancelled")
+                return
+            runner.set_steps(catchup_steps)
+            update_disks_button_sensitivity(app)
+            runner.start(on_complete=_catchup_complete)
+
+        def _catchup_complete(cancelled=False, rc=None):
+            if cancelled or rc:
+                zlm.release(lock_id)
+                _discard_holds_file(request.holds_file)
+                _finish_refresh(app)
+                if cancelled:
+                    log_msg(f"INFO: Migrate pool catch-up cancelled for {request.source_pool}")
+                else:
+                    log_msg(
+                        f"WARN: Migrate pool catch-up failed for '{request.source_pool}' "
+                        f"(rc={rc}); no destructive step was run"
+                    )
+                return
+            # Quiesce gate: the destructive steps may run only when no dataset
+            # has been written since the cutover snapshot. A query failure is
+            # not a quiesced pool — defer like any other unknown.
+            while True:
+                try:
+                    written = _written_since(repository, request)
+                except Exception as exc:
+                    log_msg(
+                        f"WARN: Migrate cutover could not verify quiescence of "
+                        f"'{request.source_pool}': {exc}"
+                    )
+                    _defer_cutover("quiescence unverifiable")
+                    return
+                writers = _quiesce_writers(written)
+                if not writers:
+                    break
+                log_msg(
+                    f"WARN: Migrate cutover: pool '{request.source_pool}' is not "
+                    f"quiesced — {len(writers)} dataset(s) written since the "
+                    "cutover snapshot"
+                )
+                if _show_quiesce_refusal(app, request, writers) != "recheck":
+                    _defer_cutover("pool not quiesced")
+                    return
             running = _running_vms_on_pool(repository, request.source_pool)
             if running and not _show_running_vms_warning(app, request.source_pool, running):
-                zlm.release(lock_id)
-                _discard_holds_file(request.holds_file)
-                _finish_refresh(app)
-                log_msg(
-                    f"INFO: Cutover deferred for '{request.source_pool}' (running "
-                    "VMs declined); the migration snapshot and copies remain in "
-                    "place — rerun Migrate Pool to finish"
-                )
+                _defer_cutover("running VMs declined")
                 return
-            if not _show_cutover_confirm(app, request):
-                zlm.release(lock_id)
-                _discard_holds_file(request.holds_file)
-                _finish_refresh(app)
-                log_msg(
-                    f"INFO: Cutover deferred for '{request.source_pool}'; the "
-                    "migration snapshot and copies remain in place — rerun Migrate "
-                    "Pool to finish"
-                )
+            if not _show_disruptive_confirm(app, request, destructive_steps):
+                _defer_cutover("disruptive-steps confirmation declined")
                 return
-            runner.set_steps(cutover_steps)
+            if not _prepare_pool_export(app, repository, request.source_pool):
+                _defer_cutover("export blockers remain")
+                return
+            runner.set_steps(destructive_steps)
             update_disks_button_sensitivity(app)
             runner.start(on_complete=_cutover_complete)
 

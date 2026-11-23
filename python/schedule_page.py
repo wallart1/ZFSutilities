@@ -26,6 +26,7 @@ from cron_manager import (
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     ACTIVE_COLUMN_WIDTH,
+    attach_cell_tooltips,
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
@@ -125,7 +126,6 @@ def create_schedule_page(app):
     set_column_header_tooltip(col_active, "Active", "Turn this schedule entry on or off.")
     app.schedule_view.append_column(col_active)
 
-    next_run_col = None
     for col_idx, title_text, width, header_tip in [
         (COL_NAME, "Profile Name", 140, "The profile this row schedules. Click to sort."),
         (
@@ -144,6 +144,10 @@ def create_schedule_page(app):
         (COL_NEXT_RUN, "Next Run", 230, "Next time the cron fields will fire. Click to sort."),
     ]:
         r = Gtk.CellRendererText()
+        # Cells ellipsize so the Next Run decoration (and any long profile
+        # name or comment) keeps every row at a uniform height; the shared
+        # clipped-cell handler connected below restores the full text.
+        r.set_property("ellipsize", Pango.EllipsizeMode.END)
         if col_idx == COL_COMMENT:
             r.set_property("editable", True)
             r.connect("edited", _on_comment_edited, app)
@@ -151,13 +155,7 @@ def create_schedule_page(app):
             r.set_property("editable", False)
         if col_idx == COL_NEXT_RUN:
             set_monospace_font(r)
-            # The bucket/UTC-edge decoration can exceed one line; ellipsize
-            # it so every row keeps a uniform height, with the full text
-            # available via the row tooltip connected below.
-            r.set_property("ellipsize", Pango.EllipsizeMode.END)
         col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
-        if col_idx == COL_NEXT_RUN:
-            next_run_col = col
         configure_treeview_column(col, width=width)
         set_column_header_tooltip(col, title_text, header_tip)
         if col_idx in (COL_NAME, COL_TYPE, COL_COMMENT):
@@ -169,8 +167,10 @@ def create_schedule_page(app):
         app.schedule_view.append_column(col)
     app._ui_state.bind_treeview(app.schedule_view, "schedule_view")
 
-    app.schedule_view.set_has_tooltip(True)
-    app.schedule_view.connect("query-tooltip", _on_next_run_query_tooltip, app, next_run_col)
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # visible columns follow the store layout directly (the Active toggle's
+    # bool and the hidden sort key fall through the handler's checks).
+    attach_cell_tooltips(app.schedule_view, app.schedule_store)
 
     scroll = capped_treeview_scroll(app.schedule_view)
     outer.pack_start(scroll, False, False, 0)
@@ -674,22 +674,6 @@ def _update_next_run_for_iter(app, tree_iter):
     next_run, next_run_sort = _next_run_strings(cron, _snapshot_label_for(profile))
     app.schedule_store.set_value(tree_iter, COL_NEXT_RUN, next_run)
     app.schedule_store.set_value(tree_iter, COL_NEXT_RUN_SORT, next_run_sort)
-
-
-def _on_next_run_query_tooltip(view, x, y, keyboard_mode, tooltip, app, next_run_col):
-    """Show the full Next Run string when the Next Run cell is hovered.
-
-    The cell renderer ellipsizes decorated values (the UTC-edge
-    translation) so every row keeps a uniform height; the tooltip
-    restores the complete text.  Hovers over other columns or empty space
-    return False so GTK falls through to the default behavior.
-    """
-    bin_x, bin_y = view.convert_widget_to_bin_window_coords(x, y)
-    hit = view.get_path_at_pos(bin_x, bin_y)
-    if not hit or hit[1] is not next_run_col:
-        return False
-    tooltip.set_text(app.schedule_store[hit[0]][COL_NEXT_RUN])
-    return True
 
 
 def _on_selection_changed(selection, app):

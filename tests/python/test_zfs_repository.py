@@ -42,6 +42,7 @@ from zfs_repository import (
     mountpoint_unreachable,
     mounts_stacked_on,
     parse_rate_limit,
+    parse_zfs_bytes,
     valid_rate_limit,
     validate_dest_mount_chain,
     zvol_device_path,
@@ -126,6 +127,32 @@ class TestZfsRepositoryReads(unittest.TestCase):
     def test_list_volume_names_empty_output_returns_empty_list(self):
         repo = self._repo("")
         self.assertEqual(repo.list_volume_names("tank"), [])
+
+    def test_datasets_written_since_parses_quiesce_oracle(self):
+        """written@snap values: 0B/None are quiesced, anything else is a writer."""
+        stdout = "tank\t0B\ntank/data\t72K\ntank/vol\t-\n"
+        repo = self._repo(stdout)
+        self.assertEqual(
+            repo.datasets_written_since("tank", "migrate-1-cutover"),
+            {"tank": 0, "tank/data": 72 * 1024, "tank/vol": None},
+        )
+
+    def test_datasets_written_since_empty_output_returns_empty_map(self):
+        repo = self._repo("")
+        self.assertEqual(repo.datasets_written_since("tank", "migrate-1-cutover"), {})
+
+    def test_parse_zfs_bytes_forms(self):
+        for text, want in (
+            ("0B", 0),
+            ("512", 512),
+            ("72K", 72 * 1024),
+            ("1.50M", int(1.5 * 1024**2)),
+            ("2.13G", int(2.13 * 1024**3)),
+            ("-", None),
+            ("", None),
+            ("garbage", None),
+        ):
+            self.assertEqual(parse_zfs_bytes(text), want, text)
 
     def test_list_snapshots_parses_eight_columns(self):
         stdout = "tank/data@snap1\t2025-01-01\tsnapshot\t100K\t-\t50G\t-\t-\n"
