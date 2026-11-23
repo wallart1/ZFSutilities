@@ -1,18 +1,16 @@
 # ITF Coverage Map
 
-Journey coverage of the product surface, by node mode. Agent-maintained:
+Journey coverage of the ZFSutilities surface, by node mode. Agent-maintained:
 rows are added when a journey exists to fill them, and gap rows are
-candidates only — a gap is built when a real need names it (no
-speculative coverage). The journeys themselves are described in
-[Integrated Testing](integrated-testing.md) and
-`tests/integrated/journeys/README.md`.
+candidates only — a gap is built when the user names it . The journeys themselves 
+are described in [Integrated Testing](integrated-testing.md) and `tests/integrated/journeys/README.md`.
 
 | Surface | Single-node | Two-node |
 |---------|-------------|----------|
 | Fresh install, prerequisite remediation, test pools | j01 | j05 (storage role; installer drives both) |
 | Installer failure paths (declined remediation, dead apt) | j08, j09 | — |
 | Uninstall / reinstall / install over leftovers | j02, j03 | j24 (live LUNs byte-survive the `--all-nodes` purge; recurrence-fence reinstall; both SW sources once releases carry the F-049 menu fix) |
-| Post-install baseline (wiring, pools, product surface) | j04 | j05 verify stages |
+| Post-install baseline (wiring, pools, ZFSutilities surface) | j04 | j05 verify stages |
 | Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy), j19 (trust-on-first-upgrade baseline capture) | j23 (remote scan/salvage/baseline over per-host SSH masters, deploy.conf group targets, per-host switch-version output; dev-tarball only), j25 (interrupted on the encrypted lab with keys pending: SIGTERM at the scan marker, SIGKILL mid-local-deploy, SIGKILL aimed at the remote sync; recovery leaves the iSCSI records byte-identical and so does activation — the fence tick the timer restart fires is waited out first, its documented saveconfig re-save tolerated in the absent-link shape; key ceremony on the upgraded tree; dev-tarball only) |
 | GUI payload e2e matrix (offsite chain, backup/prune/rsync orchestrators, restore payloads incl. receive-as-encrypted) | j11 (+dev-container/dev-host contexts) | — |
 | Backup property fidelity (manifest capture, offsite travel, replay, retention lockstep, sendstream `.props` consumption, standalone replay, receive-as-encrypted restore + FATAL guard) | j20 (incl. the offsite-onward + restore payload pairs) | — |
@@ -27,14 +25,12 @@ speculative coverage). The journeys themselves are described in
 | Interrupted & contradictory operations: SIGINT half states, collisions, concurrent mutators (fenced), mistyped input | — | j17 (S10–S14, S12 fence, M2, M3, M5) |
 | Compute & power events: compute reboot, both-node cycle with unreachable storage, orphan LUN teardown | — | j18 (S15–S17) |
 
-Scenario IDs (S/M) are specified in the campaign plan and asserted by the
-journeys; `export-iscsi-state --check` stands in for Dashboard data in the
-recovery scenarios (the blind-recovery rule).
+Scenario IDs (S/M) are specified in the campaign plan and tested by the
+journeys.
 
 ## Gap rows (future candidates — built only when a real need names them)
 
-None open. The last one — the two-node interrupted upgrade with keys
-pending — is j25.
+None open. 
 
 ## Parked (standing policy)
 
@@ -48,11 +44,11 @@ pending — is j25.
   GUI on the two-node compute host has no journey coverage; requirement
   R-10 in `tests/integrated/REQUIREMENTS.md` records it.
 - The 17 test-exempt legacy `bin/` commands are permanently excluded
-  from journey scope (closed list, user decision 2026-10-26).
+  from journey scope.
 
 ## Companion registers
 
-Product defects found by journeys live in `tests/integrated/FINDINGS.md`
+ZFSutilities defects found by journeys live in `tests/integrated/FINDINGS.md`
 (each row ends in exactly one terminal state); UX gaps and design
 directions live in `tests/integrated/REQUIREMENTS.md`. Both are linked
 from `tests/integrated/README.md`.

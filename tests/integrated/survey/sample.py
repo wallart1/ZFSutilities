@@ -42,6 +42,7 @@ SURVEY_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILES = ("accept", "decline", "cancel", "invalid")
 DEFAULT_FRACTION = 0.5
 RELEASE_WINDOW = 5  # the five most recent published releases
+WORLDS = ("thin", "lived-in", "busy")  # closed world-variant list
 
 # ---------------------------------------------------------------------------
 # CLI universe manifest
@@ -268,6 +269,42 @@ def fetch_release_tree(sw, dest_dir):
 
 
 # ---------------------------------------------------------------------------
+# World variant (the guest state a run surveys)
+# ---------------------------------------------------------------------------
+
+
+def resolve_world(spec):
+    """Validate a world-variant name against the closed list.
+
+    Returns the variant string ("" / None mean the default, thin);
+    raises ValueError naming the known variants — resolve_sw's refusal
+    style.  busy stays a recognized-but-reserved name (Phase 5);
+    staging the variants is the journey library's call, not the
+    sampler's.
+    """
+    spec = (spec or "thin").strip()
+    if spec not in WORLDS:
+        raise ValueError(f"bad world variant: {spec!r} ({' | '.join(WORLDS)})")
+    return spec
+
+
+def world_digest(variant, seed, anchor=None):
+    """Stable digest over the world plan document (delegates to world.py).
+
+    thin's document is the (variant, seed) pair alone — byte-identical
+    to the Phase-1 formula — so thin digests stay valid as later phases
+    extend non-thin documents.  Non-thin documents pin the staging
+    anchor and the generated plan (Phase 2's ladder), so a planner
+    change or a different staging date is digest-visible on replay.
+    """
+    if SURVEY_DIR not in sys.path:
+        sys.path.insert(0, SURVEY_DIR)
+    import world
+
+    return world.world_digest(variant, seed, anchor)
+
+
+# ---------------------------------------------------------------------------
 # Sampling
 # ---------------------------------------------------------------------------
 
@@ -292,7 +329,7 @@ def build_sample(items, seed, fraction):
     return sampled
 
 
-def write_archive(path, sample, *, seed, fraction, sw, universe_items):
+def write_archive(path, sample, *, seed, fraction, sw, world, universe_items):
     counts = {}
     for it in sample:
         counts[it["kind"]] = counts.get(it["kind"], 0) + 1
@@ -302,6 +339,7 @@ def write_archive(path, sample, *, seed, fraction, sw, universe_items):
         "seed": seed,
         "fraction": fraction,
         "sw": sw,
+        "world": world,
         "universe_digest": universe_digest(universe_items),
         "universe_counts": {
             "total": len(universe_items),
@@ -327,6 +365,11 @@ def load_archive(path):
             raise ManifestError(f"archive missing key: {key}")
     if archive["format"] != 1:
         raise ManifestError(f"unknown archive format: {archive['format']}")
+    # Old archives predate the world axis: missing world means thin.
+    world = archive.get("world", {"variant": "thin"})
+    if not isinstance(world, dict) or world.get("variant") not in WORLDS:
+        raise ManifestError(f"bad world object in archive: {world!r}")
+    archive["world"] = world
     return archive
 
 
@@ -370,7 +413,7 @@ def main(argv=None):
     parser.add_argument("mode", choices=("new", "replay"))
     parser.add_argument(
         "--repo-root",
-        default=SURVEY_DIR + "/../..",
+        default=SURVEY_DIR + "/../../..",
         help="tree under test (default: this working tree)",
     )
     parser.add_argument("--seed", help="pin the RNG seed (default: random)")
@@ -383,6 +426,15 @@ def main(argv=None):
         "--sw",
         default=os.environ.get("ITF_SURVEY_SW", "tree"),
         help="tree | latest | prev:N | tag:<v>",
+    )
+    parser.add_argument(
+        "--world",
+        default=os.environ.get("ITF_SURVEY_WORLD", "thin"),
+        help="world variant (thin | lived-in | busy; busy is reserved for Phase 5)",
+    )
+    parser.add_argument(
+        "--world-seed",
+        help="pin the world seed (default: the run seed)",
     )
     parser.add_argument(
         "--no-gui", action="store_true", help="skip GUI enumeration (unit tests only)"
@@ -413,6 +465,11 @@ def main(argv=None):
             return 2
     try:
         sw = resolve_sw(args.sw, releases)
+    except ValueError as exc:
+        print(f"FATAL: {exc}", file=sys.stderr)
+        return 2
+    try:
+        world_variant = resolve_world(args.world)
     except ValueError as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
@@ -459,6 +516,18 @@ def main(argv=None):
                 file=sys.stderr,
             )
             return 2
+        # Replay fidelity, world axis: the archived world defines what
+        # the journey stages; a conflicting explicit ITF_SURVEY_WORLD
+        # is refused the same way (mirrors the SW rule above).
+        arch_world = archive["world"]["variant"]
+        if world_variant != "thin" and world_variant != arch_world:
+            print(
+                f"FATAL: archive surveyed world {arch_world!r} but "
+                f"ITF_SURVEY_WORLD={args.world} asks for {world_variant!r} — "
+                "replay must use the archived world",
+                file=sys.stderr,
+            )
+            return 2
         if arch_sw.get("mode") == "release":
             try:
                 extract_dir = args.extract_dir or tempfile.mkdtemp(prefix="survey-sw-")
@@ -477,6 +546,11 @@ def main(argv=None):
         print(f"# replay {os.path.basename(args.archive)}{note}")
         print(f"# seed {archive['seed']}")
         print(f"# sw {sw_label}")
+        print(f"# world {arch_world}")
+        if archive["world"].get("seed"):
+            print(f"# world-seed {archive['world']['seed']}")
+        if archive["world"].get("anchor"):
+            print(f"# world-anchor {archive['world']['anchor']}")
         print(f"# enum-root {enum_root}")
         if missing:
             print(f"# missing-from-universe: {','.join(missing)}")
@@ -490,6 +564,18 @@ def main(argv=None):
     except ValueError as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
+    world_seed = args.world_seed or seed
+    world_anchor = int(time.time())
+    try:
+        world = {
+            "variant": world_variant,
+            "seed": world_seed,
+            "anchor": world_anchor,
+            "digest": world_digest(world_variant, world_seed, world_anchor),
+        }
+    except ValueError as exc:  # PlanError: recognized but unplannable (busy)
+        print(f"FATAL: {exc}", file=sys.stderr)
+        return 2
     archive_path = args.archive or os.path.join(
         SURVEY_DIR,
         "archives",
@@ -501,12 +587,16 @@ def main(argv=None):
         seed=seed,
         fraction=args.fraction,
         sw=sw,
+        world=world,
         universe_items=items,
     )
     sw_label = sw.get("tag") or sw.get("mode", "tree")
     print(f"# archive {archive_path}")
     print(f"# seed {seed}")
     print(f"# sw {sw_label}")
+    print(f"# world {world['variant']}")
+    print(f"# world-seed {world['seed']}")
+    print(f"# world-anchor {world['anchor']}")
     print(f"# enum-root {enum_root}")
     print(f"# sampled {len(sample)}/{len(items)}")
     _emit(sample)

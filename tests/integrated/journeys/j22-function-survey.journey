@@ -26,7 +26,10 @@
 # tree is the repair verification.
 #
 # Env knobs: ITF_SURVEY_SEED, ITF_SURVEY_FRACTION (>=0.5),
-# ITF_SURVEY_SW, ITF_SURVEY_ARCHIVE.
+# ITF_SURVEY_SW, ITF_SURVEY_ARCHIVE, ITF_SURVEY_WORLD (+ seed) — the
+# world variant the run surveys (thin | lived-in; the archive records
+# variant/seed/anchor/digest and replay refuses a conflicting explicit
+# variant or an unreproducible digest — planner drift).
 #
 # Template profile: the driver's --template knob (storage by default;
 # mint for the bare-desktop leg — the storage guest then comes from the
@@ -95,6 +98,11 @@ journey_main() {
         j05_two_node_lab_main --storage-template "$s_template" || return 1
         guest_ip="$(awk '{print $3}' "$ITF_RUN_DIR/guest-storage.txt")"
     else
+        # The single-node lab stage (and the bare-desktop install leg
+        # below) live in common.sh; the two-node shape gets it
+        # transitively through j05, so this branch sources it directly.
+        # shellcheck source=common.sh
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
         local -a lab_args=(--template "$s_template")
         [[ "$profile" == mint ]] && lab_args+=(--bare-baseline)
         itf_single_node_lab_main j22-function-survey "${lab_args[@]}" || return 1
@@ -106,7 +114,8 @@ journey_main() {
     fi
 
     # ------------------------------------------------------------------
-    # Stage T + P + G: the enumerated tree, scratch playground, GUI env
+    # Stage T + W + G: the enumerated tree, the world variant's stage
+    # (thin = the scratch playground), GUI env
     # ------------------------------------------------------------------
 
     itf_survey_stage_tree "$guest_ip" || return 1
@@ -120,7 +129,7 @@ journey_main() {
         # shape already installed via install-two-node).
         itf_survey_install_baseline "$guest_ip" || return 1
     fi
-    itf_survey_stage_playground "$guest_ip" || return 1
+    itf_survey_stage_world "$guest_ip" || return 1
     itf_survey_stage_gui_env "$guest_ip" || return 1
 
     # ------------------------------------------------------------------

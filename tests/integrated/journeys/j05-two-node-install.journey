@@ -279,22 +279,29 @@ j05_two_node_lab_main() {
     # how the host-key prompts get answered); install-two-node's Step 4
     # checks use plain BatchMode ssh with no host-key options and rely
     # on that.  The gates below mirror the installer verbatim, so this
-    # one-time accept-new pair is the modeled user pre-work.
+    # one-time accept-new pair is the modeled user pre-work.  A freshly
+    # booted peer can need tens of seconds before sshd answers on the
+    # P2P link (observed 2 of 4 gate attempts, 2026-11-18, under
+    # concurrent-lab load), and the modeled user retries — so the step
+    # retries too, bounded: after two minutes the failure is real.
+    local fc_deadline=$(( SECONDS + 120 ))
     # shellcheck disable=SC2029  # expansions run on the guests
-    if itf_guest_exec "$s_ip" "
+    until itf_guest_exec "$s_ip" "
             ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \\
                 root@${c_hostname} true \\
             && ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \\
                 root@${c_hostname} \\
                 'ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \\
                     root@${s_hostname} true'
-        " > "$ITF_RUN_DIR/p2p-first-connect.log" 2>&1; then
-        itf_step pass "P2P first connections accepted" \
-            "host keys recorded both directions (user pre-work)"
-    else
-        itf_step fail "P2P first connections accepted" "see p2p-first-connect.log"
-        return 1
-    fi
+        " > "$ITF_RUN_DIR/p2p-first-connect.log" 2>&1; do
+        if (( SECONDS >= fc_deadline )); then
+            itf_step fail "P2P first connections accepted" "see p2p-first-connect.log"
+            return 1
+        fi
+        sleep 5
+    done
+    itf_step pass "P2P first connections accepted" \
+        "host keys recorded both directions (user pre-work)"
 
     # Reachability gates, mirroring the installer's Step 4 checks.
     local ssh_log="$ITF_RUN_DIR/p2p-gates.log"

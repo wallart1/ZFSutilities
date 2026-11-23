@@ -30,6 +30,12 @@
 #   itf_survey_stage_playground <guest-ip>
 #       Survey-owned scratch state + the pinned payload config
 #       (ZFSCONFIG_PATH) every CLI recipe runs under.
+#   itf_survey_stage_world <guest-ip>
+#       World-variant dispatcher: stages the world the archive names
+#       (ITF_SURVEY_WORLD, default thin — the playground above; lived-in
+#       adds the aged, product-named snapshot ladder via the guest clock
+#       walk; busy is reserved for Phase 5) and reports the variant +
+#       stage elapsed time (cost visibility).
 #   itf_survey_stage_gui_env <guest-ip>
 #       In-guest Xvfb (the product's GUI deps are already installed).
 #   itf_survey_run_cli_item <guest-ip> <id> <command> <depth> <invoke>
@@ -47,11 +53,14 @@
 #       survey-results.tsv artifact, pool-residue check, profile and
 #       depth distribution summary.  Returns 1 when any item failed.
 
-# Survey state lives in run-dir files; the couple of globals below are
+# Survey state lives in run-dir files; the few globals below are
 # declared -g so set -u callers can reference them unconditionally.
 declare -g SURVEY_ITEMS=""
 declare -g SURVEY_ARCHIVE=""
 declare -g SURVEY_SW=""
+declare -g SURVEY_WORLD=""
+declare -g SURVEY_WORLD_SEED=""
+declare -g SURVEY_WORLD_ANCHOR=""
 
 # ---------------------------------------------------------------------------
 # Selection
@@ -93,11 +102,14 @@ itf_survey_select() {
     local repo_root="${SURVEY_REPO_ROOT:-$ITF_ROOT/../..}"
     local -a sampler_args=(--repo-root "$repo_root" "$mode"
         --sw "${ITF_SURVEY_SW:-tree}"
+        --world "${ITF_SURVEY_WORLD:-thin}"
         --github-repo "${ITF_GITHUB_REPO:-}"
         --extract-dir "$ITF_RUN_DIR/survey-tree")
     [[ -n "${ITF_SURVEY_SEED:-}" ]] && sampler_args+=(--seed "$ITF_SURVEY_SEED")
     [[ -n "${ITF_SURVEY_FRACTION:-}" ]] \
         && sampler_args+=(--fraction "$ITF_SURVEY_FRACTION")
+    [[ -n "${ITF_SURVEY_WORLD_SEED:-}" ]] \
+        && sampler_args+=(--world-seed "$ITF_SURVEY_WORLD_SEED")
     if [[ "$mode" == "replay" ]]; then
         sampler_args+=(--archive "$ITF_SURVEY_ARCHIVE")
     else
@@ -115,6 +127,23 @@ itf_survey_select() {
 
     first_line="$(grep -m1 '^# ' "$ITF_RUN_DIR/survey-select.out")"
     SURVEY_SW="$(sed -n 's/^# sw //p' "$ITF_RUN_DIR/survey-select.out" | head -1)"
+    SURVEY_WORLD="$(sed -n 's/^# world //p' "$ITF_RUN_DIR/survey-select.out" | head -1)"
+    SURVEY_WORLD_SEED="$(sed -n 's/^# world-seed //p' \
+        "$ITF_RUN_DIR/survey-select.out" | head -1)"
+    SURVEY_WORLD_ANCHOR="$(sed -n 's/^# world-anchor //p' \
+        "$ITF_RUN_DIR/survey-select.out" | head -1)"
+    # The sampler always prints the world line; a missing one is the same
+    # missing-world-is-thin rule the archive loader applies.
+    [[ -n "$SURVEY_WORLD" ]] || SURVEY_WORLD=thin
+
+    # Phase fence: busy is the one variant this tree cannot stage yet
+    # (Phase 5).  Refusing here — before any lab is cloned — beats
+    # failing at the world stage minutes later.
+    if [[ "$SURVEY_WORLD" != "thin" && "$SURVEY_WORLD" != "lived-in" ]]; then
+        itf_step fail "survey world variant" \
+            "world '$SURVEY_WORLD' is not implemented in this tree (busy lands in Phase 5)"
+        return 1
+    fi
 
     if [[ "$mode" == "new" ]]; then
         SURVEY_ARCHIVE="$ITF_RUN_DIR/survey-archive.json"
@@ -132,6 +161,40 @@ itf_survey_select() {
             "$(basename "$SURVEY_ARCHIVE") — $first_line"
     fi
     itf_artifact "survey-archive" "$SURVEY_ARCHIVE"
+
+    # World digest guard: recompute the digest from the (variant, seed,
+    # anchor) the sampler reported and compare with the archived one.
+    # A fresh run self-checks; a replay proves the current planner can
+    # still rebuild the recorded world — a mismatch means planner drift,
+    # and the run refuses rather than surveying a different world than
+    # the archive names.  Pre-world archives (no digest field) replay as
+    # thin, whose staging has no planner to drift.
+    local digest_arch digest_now
+    digest_arch="$(python3 - "$SURVEY_ARCHIVE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("world", {}).get("digest", ""))
+PYEOF
+    )" || digest_arch=""
+    if [[ -n "$digest_arch" ]]; then
+        if [[ -z "$SURVEY_WORLD_SEED" ]]; then
+            itf_step fail "survey world digest" \
+                "archive carries a world digest but the selection reported no world seed"
+            return 1
+        fi
+        local -a digest_args=(--variant "$SURVEY_WORLD" --seed "$SURVEY_WORLD_SEED")
+        [[ -n "$SURVEY_WORLD_ANCHOR" ]] \
+            && digest_args+=(--anchor "$SURVEY_WORLD_ANCHOR")
+        digest_now="$(python3 "$ITF_ROOT/survey/world.py" digest \
+            "${digest_args[@]}" 2>/dev/null || true)"
+        if [[ "$digest_now" != "$digest_arch" ]]; then
+            itf_step fail "survey world digest" \
+                "archived $digest_arch != planner's $digest_now — planner drift; stage a new run instead of replaying this archive"
+            return 1
+        fi
+        itf_step pass "survey world digest" \
+            "world=$SURVEY_WORLD digest=$digest_arch (planner match)"
+    fi
 
     # The ordered item list (sampler TSV, comments stripped).
     grep -v '^#' "$ITF_RUN_DIR/survey-select.out" \
@@ -157,7 +220,7 @@ itf_survey_select() {
     # shellcheck disable=SC2034  # consumed by the journey
     SURVEY_NEEDS_TWO=$needs_two
     itf_step info "survey lab shape" \
-        "$n items; needs-two-node=$needs_two; sw=$SURVEY_SW"
+        "$n items; needs-two-node=$needs_two; sw=$SURVEY_SW; world=$SURVEY_WORLD"
     return 0
 }
 
@@ -261,6 +324,37 @@ itf_survey_install_baseline() {
 # Playground: survey-owned scratch state + the pinned payload config
 # ---------------------------------------------------------------------------
 
+# _survey_config_version — the pinned payload config must carry the
+# enumerated tree's schema version.  A stale constant silently re-runs the
+# migration chain (or mislabels seeded rows written in the current
+# schema), so the version is read from the tree the sampler enumerated —
+# working tree or fetched release.  Step-free by design: callers run this
+# inside $( ), where an itf_step would vanish with the subshell; the
+# caller validates the (numeric) output and owns the failure step.
+_survey_config_version() {
+    local enum_root out
+    enum_root="$(sed -n 's/^# enum-root //p' "$ITF_RUN_DIR/survey-select.out" \
+        2>/dev/null | head -1 | tr -d '\r')"
+    if [[ -z "$enum_root" || ! -d "$enum_root/python" ]]; then
+        echo "survey config version: no enumerated tree in survey-select.out" >&2
+        return 1
+    fi
+    out="$(python3 - "$enum_root" <<'PYEOF'
+import sys
+
+sys.path.insert(0, sys.argv[1] + "/python")
+from config_migrations import CONFIG_VERSION
+
+print(CONFIG_VERSION)
+PYEOF
+    )" || out=""
+    if [[ ! "$out" =~ ^[0-9]+$ ]]; then
+        echo "survey config version: no CONFIG_VERSION under $enum_root/python" >&2
+        return 1
+    fi
+    printf '%s' "$out"
+}
+
 itf_survey_stage_playground() {
     local guest_ip="$1"
     local rid
@@ -285,6 +379,11 @@ SURVEY_WORK=/root/survey-$rid
 SURVEY_VMID=101
 SURVEY_VDISK=9
 SURVEY_CONFIG=/root/survey-config.json
+# Survey-owned state dir: schedule profiles (and any other runtime state
+# the product writes) stay inside the run's footprint — the same
+# no-operator-state premise as the pinned config, and the teardown
+# deletes it wholesale.  Every reader honors this env (paths.py).
+export ZFSUTILITIES_STATE_DIR=/root/survey-state
 EOF
     # shellcheck disable=SC1090
     source "$env_script"
@@ -314,14 +413,21 @@ EOF
 
     # The pinned payload config (e2e_support premise): every recipe runs
     # under ZFSCONFIG_PATH so config-reading commands see the test pools
-    # and the product defaults, never an operator's saved state.
-    local cfg
+    # and the product defaults, never an operator's saved state.  The
+    # schema version comes from the enumerated tree — never a constant.
+    local cfg cfgver
+    cfgver="$(_survey_config_version)" || true
+    if [[ ! "$cfgver" =~ ^[0-9]+$ ]]; then
+        itf_step fail "survey config version" \
+            "could not pin the tree's CONFIG_VERSION (select must run first; the enum tree needs python/config_migrations.py)"
+        return 1
+    fi
     cfg="$ITF_RUN_DIR/survey-config.json"
-    python3 - "$cfg" <<'PYEOF'
+    python3 - "$cfg" "$cfgver" <<'PYEOF'
 import json, sys
 
 cfg = {
-    "config_version": 12,
+    "config_version": int(sys.argv[2]),
     "pools": [
         {"name": p, "offsite_candidate": p == "zfstest3"}
         for p in ("zfstest1", "zfstest2", "zfstest3")
@@ -334,11 +440,464 @@ PYEOF
     if itf_guest_put "$guest_ip" "$cfg" /root/survey-config.json \
             > /dev/null 2>&1; then
         itf_step pass "survey config pinned" \
-            "ZFSCONFIG_PATH=/root/survey-config.json (three test pools)"
+            "ZFSCONFIG_PATH=/root/survey-config.json (three test pools, schema v$cfgver)"
     else
         itf_step fail "survey config pinned"
         return 1
     fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Lived-in world (playground + the aged snapshot ladder)
+# ---------------------------------------------------------------------------
+
+itf_survey_stage_lived_in() {
+    local guest_ip="$1"
+    # The thin playground first: every CLI recipe's {DS}/{SNAP}/{STREAM}
+    # prey and the pinned config are variant-independent.
+    itf_survey_stage_playground "$guest_ip" || return 1
+
+    # The plan is a pure function of (variant, seed, anchor); the anchor
+    # comes from the archive via select (direct stage calls fall back to
+    # reading it from the archive the same way).
+    if [[ -z "$SURVEY_WORLD_ANCHOR" ]]; then
+        SURVEY_WORLD_ANCHOR="$(python3 - "$SURVEY_ARCHIVE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("world", {}).get("anchor", ""))
+PYEOF
+        )"
+    fi
+    if [[ -z "$SURVEY_WORLD_SEED" || -z "$SURVEY_WORLD_ANCHOR" ]]; then
+        itf_step fail "survey world plan" \
+            "world seed/anchor unknown - select must run first (seed='${SURVEY_WORLD_SEED:-}' anchor='${SURVEY_WORLD_ANCHOR:-}')"
+        return 1
+    fi
+    local -a plan_args=(--variant lived-in --seed "$SURVEY_WORLD_SEED"
+        --anchor "$SURVEY_WORLD_ANCHOR")
+    local plan_json="$ITF_RUN_DIR/survey-world-plan.json"
+    local ladder_raw="$ITF_RUN_DIR/survey-world-ladder.tsv"
+    local ladder="$ITF_RUN_DIR/survey-world-ladder.run.tsv"
+    local plan_out
+    if ! plan_out="$(python3 "$ITF_ROOT/survey/world.py" plan "${plan_args[@]}" \
+            --out-json "$plan_json" --out-tsv "$ladder_raw" 2>&1)"; then
+        itf_step fail "survey world plan" "world.py refused: $plan_out"
+        return 1
+    fi
+    # Defense in depth behind select's guard: the plan's digest must be
+    # the archived one, or this tree stages a different world than the
+    # archive names.
+    local digest_arch digest_now
+    digest_arch="$(python3 - "$SURVEY_ARCHIVE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("world", {}).get("digest", ""))
+PYEOF
+    )"
+    digest_now="$(printf '%s\n' "$plan_out" | sed -n 's/^digest //p')"
+    if [[ "$digest_now" != "$digest_arch" ]]; then
+        itf_step fail "survey world plan" \
+            "plan digest $digest_now != archived $digest_arch - planner drift"
+        return 1
+    fi
+    itf_step pass "survey world plan" \
+        "$(printf '%s\n' "$plan_out" | tr '\n' ' ')"
+
+    # Render the rid-relative placeholders and push plan + interpreter.
+    local recv_ds="zfstest2/survey-$SURVEY_RID-recv"
+    sed -e "s|{BASE}|$SURVEY_DS|g" -e "s|{DS2BASE}|$recv_ds|g" \
+        "$ladder_raw" > "$ladder"
+    itf_guest_exec "$guest_ip" 'rm -rf /root/survey-harness && mkdir -p /root/survey-harness' \
+        > /dev/null 2>&1
+    if ! itf_guest_put "$guest_ip" "$ladder" /root/survey-world-ladder.tsv \
+            > /dev/null 2>&1 \
+        || ! itf_guest_put "$guest_ip" "$ITF_ROOT/survey/world-stage.sh" \
+            /root/survey-harness/world-stage.sh > /dev/null 2>&1; then
+        itf_step fail "survey world plan" "could not push ladder/world-stage.sh"
+        return 1
+    fi
+
+    # Freeze the walk guest(s): storage always; the compute guest too in
+    # two-node labs (its iSCSI fence timer must not tick against a
+    # walked-back storage clock).
+    local -a walk_ips=("$guest_ip")
+    if [[ -f "$ITF_RUN_DIR/guest-compute.txt" ]]; then
+        walk_ips+=("$(awk '{print $3}' "$ITF_RUN_DIR/guest-compute.txt")")
+    fi
+    if ! itf_guest_time_freeze "${walk_ips[@]}"; then
+        itf_step fail "survey clock walk" "freeze failed on $(printf '%s ' "${walk_ips[@]}")"
+        return 1
+    fi
+    local walk_rc=0
+    _survey_walk_ladder "$guest_ip" "$ladder" "$recv_ds" || walk_rc=1
+    # The clock ALWAYS comes back — a lab left 100 days in the past is
+    # the one unrecoverable staging failure.
+    if ! itf_guest_time_restore "${walk_ips[@]}"; then
+        itf_step fail "survey clock restore" \
+            "guest clock may be left walked on $(printf '%s ' "${walk_ips[@]}") - manual restore needed"
+        walk_rc=1
+    fi
+    (( walk_rc )) && return 1
+
+    # Verification against the plan (real clock again): every planned
+    # snapshot exists with its planned creation, holds are in place, and
+    # the two real zfsdailybackup runs added their product snapshots.
+    local verify_log="$ITF_RUN_DIR/survey-world-verify.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$guest_ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        zfs list -Hp -t snapshot -o name,creation -s creation -r "$SURVEY_DS"
+        echo "== holds =="
+        zfs list -H -t snapshot -o name -r "$SURVEY_DS" | while read -r s; do
+            zfs holds -H "$s" 2>/dev/null || true
+        done
+        echo "== recv =="
+        zfs list -Hp -t snapshot -o name,creation -s creation -r "'"$recv_ds"'" 2>/dev/null || true
+    ' > "$verify_log" 2>&1
+    itf_artifact "survey-world-verify" "$verify_log"
+    local verify_out
+    if ! verify_out="$(python3 - "$plan_json" "$verify_log" "$SURVEY_DS" "$recv_ds" <<'PYEOF'
+import json, sys
+
+plan = json.load(open(sys.argv[1]))
+base, recv = sys.argv[3], sys.argv[4]
+names = {}
+holds = set()
+section = None
+recv_snaps = 0
+for line in open(sys.argv[2]):
+    fields = line.split()
+    if line.startswith("=="):
+        section = line.strip()
+        continue
+    if section == "== holds ==" and len(fields) >= 2:
+        holds.add((fields[0], fields[1]))
+    elif section == "== recv ==" and len(fields) >= 2 and "@" in fields[0]:
+        recv_snaps += 1
+    elif not section and len(fields) >= 2 and "@" in fields[0]:
+        names[fields[0]] = int(fields[1])
+problems = []
+# The count expectation: every planned ladder row, the snapshots the two
+# product runs created on backup-src, and the playground's own snapshot
+# on the base dataset (the -r listing includes the base itself).
+for r in plan["ladder"]:
+    full = f"{base}/{r['dataset']}@{r['name']}"
+    if full not in names:
+        problems.append(f"missing {full}")
+    elif abs(names[full] - r["epoch"]) > 5:
+        problems.append(f"{full} creation {names[full]} != planned {r['epoch']}")
+    if r["hold"] and (full, r["hold"]) not in holds:
+        problems.append(f"hold {r['hold']} missing on {full}")
+want = len(plan["ladder"]) + len(plan["dailybackup"]) + 1
+if len(names) != want:
+    problems.append(f"{len(names)} snapshots under base, planned {want}")
+if recv_snaps < len(plan["dailybackup"]):
+    problems.append(f"receive tree carries {recv_snaps} snapshots")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"ladder={len(plan['ladder'])} holds={sum(1 for r in plan['ladder'] if r['hold'])} "
+      f"product_runs={len(plan['dailybackup'])} recv={recv_snaps}")
+PYEOF
+    )"; then
+        itf_step fail "survey world verified" "${verify_out:-see survey-world-verify.log}"
+        return 1
+    fi
+    itf_step pass "survey world verified" "$verify_out"
+
+    # Teardown knowledge: the lived-in extras the wrap must release
+    # (holds/clone/recv tree) beyond the playground's own destroys.
+    cat >> "$ITF_RUN_DIR/survey-env.sh" <<EOF
+SURVEY_RECV_DS=$recv_ds
+SURVEY_CLONE_DS=$SURVEY_DS/clone-work
+EOF
+    # shellcheck disable=SC1090
+    source "$ITF_RUN_DIR/survey-env.sh"
+    itf_guest_put "$guest_ip" "$ITF_RUN_DIR/survey-env.sh" \
+        /root/survey-env.sh > /dev/null 2>&1
+
+    # Phase 3 config rows, deliberately AFTER the walk: the ladder's two
+    # zfsdailybackup directive runs happen under the minimal config, so
+    # the seeded steps and the directive sends never interact.
+    itf_survey_stage_config_rows "$guest_ip" || return 1
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Lived-in config rows (populated retention/backup/offsite config + the
+# schedule profiles; the GUI pages stop rendering cold-start emptiness)
+# ---------------------------------------------------------------------------
+
+itf_survey_stage_config_rows() {
+    local guest_ip="$1"
+    local start=$SECONDS
+    local cfgver
+    cfgver="$(_survey_config_version)" || true
+    if [[ ! "$cfgver" =~ ^[0-9]+$ ]]; then
+        itf_step fail "survey config version" \
+            "could not pin the tree's CONFIG_VERSION (select must run first; the enum tree needs python/config_migrations.py)"
+        return 1
+    fi
+
+    # The enriched pinned config replaces the playground's minimal one
+    # (same premise: config-reading surfaces see the test pools, never
+    # operator state).  Rows use the schemas the GUI's own collect_*
+    # functions write (backup_page/offsite_page) and the retention
+    # resolution zfsconfig documents (pool -> <offsite> -> default).
+    # Deterministic in the run's scratch names and deliberately OUTSIDE
+    # the world digest — the digest pins the ladder plan, this staging is
+    # a pure function of names the archive already implies, so replays
+    # rebuild it identically and pre-Phase-3 archives stay valid.
+    local cfg="$ITF_RUN_DIR/survey-config-rows.json"
+    # shellcheck disable=SC2153  # SURVEY_DS2 is real (sourced survey env)
+    python3 - "$cfg" "$cfgver" "$SURVEY_DS" "$SURVEY_DS2" <<'PYEOF'
+import json, sys
+
+path, cfg_version, ds, ds2 = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+
+
+def buckets(d, w, m, s):
+    return [
+        {"name": "d", "retain": d, "minage": 0},
+        {"name": "w", "retain": w, "minage": 0},
+        {"name": "m", "retain": m, "minage": 0},
+        {"name": "s", "retain": s, "minage": 65},
+    ]
+
+
+cfg = {
+    "config_version": cfg_version,
+    "pools": [
+        {"name": p, "offsite_candidate": p == "zfstest3"}
+        for p in ("zfstest1", "zfstest2", "zfstest3")
+    ],
+    # Pool-specific policies carry distinct counts so the Retention page
+    # shows real non-default rows; "<offsite>" serves offsite-candidate
+    # pools (zfstest3) per zfsconfig's resolution order.
+    "retention": {
+        "default": buckets(3, 2, 2, 4),
+        "zfstest1": buckets(4, 3, 3, 6),
+        "zfstest2": buckets(2, 2, 1, 3),
+        "<offsite>": buckets(3, 2, 2, 4),
+    },
+    "backup": {
+        "send_receive_steps": [
+            {"active": True, "source": ds, "dest": ds2 + "-recv"},
+        ],
+        "pull_steps": [
+            {"active": False, "source": ds, "dest": ds2 + "-pull", "excludes": []},
+        ],
+    },
+    # Offsite includes/excludes are STRINGS here (offsite_page's own
+    # storage shape; the profile runner shlex-splits them).
+    "offsite": {
+        "steps": [
+            {
+                "active": False,
+                "source": ds,
+                "dest": "<offsite>/survey",
+                "includes": "backup-src",
+                "excludes": "clone-work",
+            },
+        ],
+    },
+}
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=1)
+PYEOF
+    if ! itf_guest_put "$guest_ip" "$cfg" /root/survey-config.json \
+            > /dev/null 2>&1; then
+        itf_step fail "survey config rows staged"
+        return 1
+    fi
+
+    # Schedule profiles in the survey-owned state dir (the playground env
+    # already pins ZFSUTILITIES_STATE_DIR there).  profile_manager's own
+    # create_profile schema; all inactive so nothing fires via cron — the
+    # rows render on the Schedule page and the per-tab profile dialogs.
+    # The product has no past-due schedule state (cron_manager computes
+    # forward next-runs only), so variety comes from real cron shapes,
+    # including the ordinal weekday form the Next-Run renderer parses.
+    local pdir="$ITF_RUN_DIR/survey-state-profiles"
+    rm -rf "$pdir"
+    mkdir -p "$pdir"
+    python3 - "$pdir" "$SURVEY_DS" "$SURVEY_DS2" "$SURVEY_WORLD_ANCHOR" <<'PYEOF'
+import json, os, sys
+
+outdir, ds, ds2, anchor = sys.argv[1:5]
+created = f"{anchor}T00:00:00"
+
+
+def cron(minute="0", hour="2", day="*", month="*", weekday="*", condition=""):
+    return {"minute": minute, "hour": hour, "day": day,
+            "month": month, "weekday": weekday, "condition": condition}
+
+
+def profile(name, tab, config, cron_fields):
+    return {
+        "profile_name": name,
+        "tab_type": tab,
+        "created_at": created,
+        "config": config,
+        "dry_run": True,
+        "cron": cron(**cron_fields),
+        "active": False,
+        "comment": "seeded by the j22 lived-in world",
+    }
+
+
+profiles = [
+    profile("root-backup-survey", "backup", {
+        "variables": {"label": "dailybackup"},
+        "pull_steps": [],
+        "pull_steps_active": True,
+        "send_receive_steps": [
+            {"active": True, "source": ds, "dest": ds2 + "-recv"},
+        ],
+        "post_steps": {"remove_snapfile": True, "run_retention": True},
+    }, {"minute": "30", "hour": "1"}),
+    profile("root-offsite-survey", "offsite", {
+        "variables": {"includes": "backup-src", "excludes": "clone-work"},
+        "steps": [
+            {"active": False, "source": ds, "dest": "<offsite>/survey",
+             "includes": "backup-src", "excludes": "clone-work"},
+        ],
+        "pause_scrubs": False,
+    }, {"minute": "0", "hour": "3", "day": "1"}),
+    profile("root-retention-survey", "retention", {
+        "prune_label": "dailybackup",
+        "prune_pools": ["zfstest1"],
+    }, {"minute": "45", "hour": "2"}),
+    # First Saturday of the month — the ordinal weekday form
+    # (cron_manager._parse_weekday / profile_runner's runtime guard).
+    profile("root-scrub-survey", "scrub", {
+        "pools": ["zfstest2"],
+        "simultaneous": 1,
+    }, {"weekday": "6#1"}),
+]
+for p in profiles:
+    with open(os.path.join(outdir, p["profile_name"] + ".json"), "w") as f:
+        json.dump(p, f, indent=2)
+PYEOF
+    itf_guest_exec "$guest_ip" 'mkdir -p /root/survey-state/profiles' \
+        > /dev/null 2>&1
+    local f
+    for f in "$pdir"/*.json; do
+        [[ -e "$f" ]] || continue
+        if ! itf_guest_put "$guest_ip" "$f" \
+                "/root/survey-state/profiles/$(basename "$f")" > /dev/null 2>&1; then
+            itf_step fail "survey schedule profiles staged" \
+                "$(basename "$f") push failed"
+            return 1
+        fi
+    done
+    itf_step pass "survey config rows staged" \
+        "retention default+2 pools+<offsite>, send/receive+pull steps, offsite step, 4 inactive schedule profiles (schema v$cfgver, $(( SECONDS - start ))s)"
+    return 0
+}
+
+# _survey_walk_ladder <ip> <rendered-ladder> <recv-ds> — the clock walk.
+# Runs between freeze and restore; any failure bubbles up so the caller
+# can still restore the clock.
+_survey_walk_ladder() {
+    local guest_ip="$1" ladder="$2" recv_ds="$3"
+    local tree=/root/ZFSutilities
+    local stage='bash /root/survey-harness/world-stage.sh'
+    local tsv=/root/survey-world-ladder.tsv
+    local walk_log="$ITF_RUN_DIR/survey-world-walk.log"
+    : > "$walk_log"
+    # zfsdailybackup's one interactive prompt (Press enter) reads this.
+    local db_feed="$ITF_RUN_DIR/survey-db.feed"
+    printf '\n' > "$db_feed"
+
+    if ! itf_guest_exec "$guest_ip" "$stage tree $tree $tsv" \
+            > "$ITF_RUN_DIR/survey-world-tree.log" 2>&1; then
+        itf_step fail "survey world tree" "see survey-world-tree.log"
+        return 1
+    fi
+    itf_step pass "survey world tree" "datasets, files, zvols per the plan"
+
+    local epoch src dst
+    # The walk visits every plan moment: ladder-row epochs plus the
+    # dailybackup run points (their own moments, so the snapshots those
+    # runs create age with the walk's later points).
+    while IFS= read -r epoch; do
+        [[ -n "$epoch" ]] || continue
+        if ! itf_guest_time_set "$guest_ip" "$epoch"; then
+            itf_step fail "survey clock walk" \
+                "forward-only fence refused epoch $epoch - see survey-world-walk.log"
+            return 1
+        fi
+        if awk -F'\t' -v e="$epoch" '$1 == e' "$ladder" | grep -q .; then
+            if ! itf_guest_exec "$guest_ip" "$stage group $tree $tsv $epoch" \
+                    >> "$walk_log" 2>&1; then
+                itf_step fail "survey world ladder" \
+                    "group at epoch $epoch failed - see survey-world-walk.log"
+                return 1
+            fi
+        fi
+        # Directive fields: '#', 'dailybackup', <epoch>, <src>, <dest>.
+        while read -r _ _ _ src dst; do
+            if ! itf_guest_exec_feed "$guest_ip" "$db_feed" \
+                    "cd $tree && $stage dailybackup $tree $tsv $src $dst" \
+                    >> "$walk_log" 2>&1; then
+                itf_step fail "survey world dailybackup" \
+                    "run at epoch $epoch for $src failed - see survey-world-walk.log"
+                return 1
+            fi
+        done < <(grep -F "# dailybackup $epoch " "$ladder" || true)
+        if grep -qF "# clone $epoch " "$ladder"; then
+            if ! itf_guest_exec "$guest_ip" "$stage clone $tree $tsv $epoch" \
+                    >> "$walk_log" 2>&1; then
+                itf_step fail "survey world clone" \
+                    "clone at epoch $epoch failed - see survey-world-walk.log"
+                return 1
+            fi
+        fi
+    done < <(
+        {
+            grep -v '^#' "$ladder" | cut -f1
+            grep '^# dailybackup ' "$ladder" | awk '{print $3}'
+        } | sort -n -u
+    )
+    itf_step pass "survey world ladder" "walk complete - see survey-world-walk.log"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# World staging (variant dispatcher)
+# ---------------------------------------------------------------------------
+
+itf_survey_stage_world() {
+    local guest_ip="$1"
+    # The sampler reported the world in select (replay follows the
+    # archive, not the env); the env fallback covers direct calls.
+    local variant="${SURVEY_WORLD:-${ITF_SURVEY_WORLD:-thin}}"
+    local start=$SECONDS
+    case "$variant" in
+        thin)
+            itf_survey_stage_playground "$guest_ip" || return 1
+            ;;
+        lived-in)
+            itf_survey_stage_lived_in "$guest_ip" || return 1
+            ;;
+        busy)
+            # Recognized name reserved for Phase 5; select's fence
+            # normally refuses it before any lab spend.
+            itf_step fail "survey world staged" \
+                "world 'busy' is not implemented in this tree (Phase 5)"
+            return 1
+            ;;
+        *)
+            itf_step fail "survey world staged" "unknown world variant: '$variant'"
+            return 1
+            ;;
+    esac
+    # Cost visibility: the world axis is budgeted, so the report shows
+    # what each variant's staging actually took.
+    itf_step info "survey world staged" \
+        "variant=$variant elapsed=$(( SECONDS - start ))s"
     return 0
 }
 
@@ -440,11 +999,16 @@ itf_survey_run_cli_item() {
     local log="$ITF_RUN_DIR/items/$id.log"
     mkdir -p "$ITF_RUN_DIR/items"
 
-    # Bespoke recipes own the whole invocation.
-    if [[ "$depth" == "bespoke" ]] \
-            && declare -f "survey_recipe_$command" > /dev/null; then
+    # Bespoke recipes own the whole invocation.  Recipe functions follow
+    # bash's underscore convention (survey_recipe_<name with _>), so the
+    # dash-named commands map over before the lookup — without the
+    # mapping, dash commands silently fell through to the generic path
+    # (invoke "-" + rcs "-" + assert "-" = a vacuous pass) while their
+    # recipes never ran.
+    local recipe="survey_recipe_${command//-/_}"
+    if [[ "$depth" == "bespoke" ]] && declare -f "$recipe" > /dev/null; then
         itf_step_start "survey item $id" "bespoke $command [$profile]"
-        "survey_recipe_$command" "$target_ip" "$id" "$profile" "$log" \
+        "$recipe" "$target_ip" "$id" "$profile" "$log" \
             && return 0 || return 1
     fi
 
@@ -718,6 +1282,305 @@ survey_recipe_remove_vm_disk() {
     return 1
 }
 
+survey_recipe_zfsresume() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    # invalid keeps the argument-validation surface; every other profile
+    # runs the real thing: a truncated stream received with -s leaves a
+    # receive_resume_token, and zfsresume validates that token (it
+    # inspects; it does not complete the transfer).
+    if [[ "$profile" == "invalid" ]]; then
+        _survey_guest_run "$ip" "-" './bin/zfsresume' "$log"
+        local rc=$?
+        itf_artifact "item-$id" "$log"
+        if (( rc == 8 )) \
+                && grep -q "FATAL: A resumable destination dataset" "$log"; then
+            itf_step pass "item $id" \
+                "[bespoke/$profile] zfsresume argument validation (rc 8)"
+            return 0
+        fi
+        itf_step fail "item $id" \
+            "[bespoke/$profile] expected the no-argument FATAL; see items/$id.log"
+        return 1
+    fi
+    # Prey: cut the playground stream and receive -s into a scratch
+    # dataset, halving until the receive is genuinely partial (the token
+    # property is set).  A complete receive or a too-small cut both just
+    # retry smaller; exhaustion is an honest item failure.
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if ! itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        res="${SURVEY_DS2}-res"
+        zfs receive -A "$res" 2>/dev/null || true
+        zfs destroy -r "$res" 2>/dev/null || true
+        size=$(stat -c %s "$SURVEY_STREAM")
+        n=$(( size * 3 / 5 ))
+        while (( n >= 4096 )); do
+            head -c "$n" "$SURVEY_STREAM" | zfs receive -s "$res" 2>&1 || true
+            tok=$(zfs get -H -o value receive_resume_token "$res" 2>/dev/null)
+            if [[ -n "$tok" && "$tok" != "-" ]]; then
+                echo "resumable-at=$n"
+                exit 0
+            fi
+            zfs receive -A "$res" 2>/dev/null || true
+            zfs destroy -r "$res" 2>/dev/null || true
+            n=$(( n / 2 ))
+        done
+        echo "no-resumable-state"
+        exit 1
+    ' > "$log.prey" 2>&1; then
+        itf_artifact "item-$id-prey" "$log.prey"
+        itf_step fail "item $id" \
+            "[bespoke/$profile] could not create resumable receive state; see items/$id.log.prey"
+        return 1
+    fi
+    itf_artifact "item-$id-prey" "$log.prey"
+    _survey_guest_run "$ip" "-" './bin/zfsresume "${SURVEY_DS2}-res"' "$log"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    # Converge: abort any remaining partial receive, then destroy.
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        zfs receive -A "${SURVEY_DS2}-res" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS2}-res" 2>/dev/null || true
+    ' > /dev/null 2>&1
+    if (( rc == 0 )) && grep -qE "seems valid|WARN: Resume token" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] zfsresume validated a real resume token (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
+survey_recipe_zfsdelallsnaps() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    # Self-sufficient holds+clone prey under the scratch dataset's own
+    # label: an offsite-* hold and a clone dependent exercise the
+    # releaseholds path and the clone-skip WARN that empty-state runs can
+    # never reach.  The aged ladder (label dailybackup) is untouched.
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if ! itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        zfs release offsite-survey "${SURVEY_DS}@delme" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS}/delme-clone" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS}@delme" 2>/dev/null || true
+        zfs snapshot "${SURVEY_DS}@delme"
+        zfs hold offsite-survey "${SURVEY_DS}@delme"
+        zfs clone "${SURVEY_DS}@delme" "${SURVEY_DS}/delme-clone"
+    ' > "$log.prey" 2>&1; then
+        itf_artifact "item-$id-prey" "$log.prey"
+        itf_step fail "item $id" \
+            "[bespoke/$profile] holds+clone prey staging failed; see items/$id.log.prey"
+        return 1
+    fi
+    itf_artifact "item-$id-prey" "$log.prey"
+    local feed="\\n"
+    [[ "$profile" == "decline" ]] && feed="n\\n"
+    _survey_guest_run "$ip" "$feed" \
+        './bin/zfsdelallsnaps "$SURVEY_DS" delme releaseholds recursive' "$log"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    # Converge: release whatever survived (a decline leaves hold+snap),
+    # then drop the clone and the snapshot.
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        zfs release offsite-survey "${SURVEY_DS}@delme" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS}/delme-clone" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS}@delme" 2>/dev/null || true
+    ' > /dev/null 2>&1
+    # releaseholds releases the offsite-* tag, and the clone dependent
+    # then skips that snapshot with a WARN (delsnap returns 1 for it, so
+    # the script may legitimately exit 1 on the accept path).
+    if grep -qE "clone dependents|INFO" "$log" && (( rc == 0 || rc == 1 )); then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] zfsdelallsnaps releaseholds+clone flow (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
+# --- shared vm-disk prey/convergence (two-node rows, compute guest) ------
+
+# _survey_vmdisk_ensure_scratch <ip> — the survey's scratch disk slot 9 on
+# lab VM 101, created through the product (two-node wiring included).
+# "Already exists" is as good as created; both leave prey in place.
+_survey_vmdisk_ensure_scratch() {
+    local ip="$1"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        cd /root/ZFSutilities
+        printf "y\\ny\\n" | timeout 300 ./bin/new-vm-disk \
+            "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 1G \
+            > /root/survey-vmd-setup.log 2>&1 || true
+    ' > /dev/null 2>&1
+}
+
+# _survey_vmdisk_ensure_vm <ip> <vmid> — an EMPTY survey VM (no disks,
+# never started): instant to create and destroy, unlike a ~12-minute full
+# clone.  Only used where a command genuinely needs a second VM.
+_survey_vmdisk_ensure_vm() {
+    local ip="$1" vmid="$2"
+    # shellcheck disable=SC2016  # SURVEY_RID expands on dev
+    itf_guest_exec "$ip" \
+        "qm status $vmid >/dev/null 2>&1 || qm create $vmid --name survey-$SURVEY_RID --memory 64 > /root/survey-vmd-vm-$vmid.log 2>&1" \
+        > /dev/null 2>&1
+}
+
+# _survey_vmdisk_converge <ip> — remove every scratch disk slot the
+# recipes use (VM 101 slots 9/10, the moved disk on 9101) through the
+# product, then drop the empty survey VM itself.
+_survey_vmdisk_converge() {
+    local ip="$1"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        cd /root/ZFSutilities
+        for vm in "$SURVEY_VMID" 9101; do
+            for slot in 9 10; do
+                printf "y\\ny\\ny\\n" | timeout 300 ./bin/remove-vm-disk \
+                    "$SURVEY_POOL" "$vm" "$slot" \
+                    > "/root/survey-vmd-teardown-$vm-$slot.log" 2>&1 || true
+            done
+        done
+        qm status 9101 >/dev/null 2>&1 && \
+            qm destroy 9101 --purge > /root/survey-vmd-destroy-9101.log 2>&1 || true
+    ' > /dev/null 2>&1
+}
+
+survey_recipe_attach_vm_disk() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    _survey_vmdisk_ensure_scratch "$ip"
+    local feed="y\\ny\\n"   # Continue-anyway (running VM) + Proceed
+    [[ "$profile" == "decline" ]] && feed="n\\n"
+    [[ "$profile" == "cancel" ]] && feed="\\n"
+    [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
+    _survey_guest_run "$ip" "$feed" \
+        './bin/attach-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" "$SURVEY_VMID" "$SURVEY_VDISK"' \
+        "$log"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    _survey_vmdisk_converge "$ip"
+    if (( rc == 0 )) || grep -qE "INFO|Aborted|FATAL" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] attach-vm-disk flow + convergence (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
+survey_recipe_detach_vm_disk() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    _survey_vmdisk_ensure_scratch "$ip"
+    # Prey: the disk must be attached before it can detach — through the
+    # product's own attach, prompts answered accept.
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        cd /root/ZFSutilities
+        printf "y\\ny\\n" | timeout 300 ./bin/attach-vm-disk \
+            "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" \
+            "$SURVEY_VMID" "$SURVEY_VDISK" \
+            > /root/survey-vmd-attach-prey.log 2>&1 || true
+    ' > /dev/null 2>&1
+    local feed="y\\n"
+    [[ "$profile" == "decline" ]] && feed="n\\n"
+    [[ "$profile" == "cancel" ]] && feed="\\n"
+    [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
+    _survey_guest_run "$ip" "$feed" \
+        './bin/detach-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK"' "$log"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    _survey_vmdisk_converge "$ip"
+    if (( rc == 0 )) || grep -qE "INFO|Aborted|FATAL" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] detach-vm-disk flow + convergence (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
+survey_recipe_move_vm_disk() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    _survey_vmdisk_ensure_scratch "$ip"
+    # The move walks the disk reference, so the source disk is attached
+    # first (product attach, accept answers); the destination is the
+    # empty survey VM.  "Both VMs must be stopped" is the script's
+    # advisory WARN — the destination never started.
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        cd /root/ZFSutilities
+        printf "y\\ny\\n" | timeout 300 ./bin/attach-vm-disk \
+            "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" \
+            "$SURVEY_VMID" "$SURVEY_VDISK" \
+            > /root/survey-vmd-attach-prey.log 2>&1 || true
+    ' > /dev/null 2>&1
+    _survey_vmdisk_ensure_vm "$ip" 9101
+    local feed="y\\n"
+    [[ "$profile" == "decline" ]] && feed="n\\n"
+    [[ "$profile" == "cancel" ]] && feed="\\n"
+    [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
+    _survey_guest_run "$ip" "$feed" \
+        './bin/move-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK" 9101' "$log"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    _survey_vmdisk_converge "$ip"
+    if (( rc == 0 )) || grep -qE "Disk moved|Aborted|FATAL|INFO" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] move-vm-disk flow + convergence (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
+survey_recipe_rename_vm_disk() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    _survey_vmdisk_ensure_scratch "$ip"
+    local feed="y\\n"
+    [[ "$profile" == "decline" ]] && feed="n\\n"
+    [[ "$profile" == "cancel" ]] && feed="\\n"
+    [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
+    _survey_guest_run "$ip" "$feed" \
+        './bin/rename-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-10"' \
+        "$log"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    _survey_vmdisk_converge "$ip"
+    if (( rc == 0 )) || grep -qE "renamed|Aborted|FATAL|INFO" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] rename-vm-disk flow + convergence (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
+survey_recipe_resize_vm_disk() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    _survey_vmdisk_ensure_scratch "$ip"
+    # Grow-only and promptless: the profile axis has nothing to answer.
+    _survey_guest_run "$ip" "-" \
+        './bin/resize-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 2G' \
+        "$log"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    _survey_vmdisk_converge "$ip"
+    if (( rc == 0 )) || grep -qE "Zvol resized|Done|FATAL|INFO" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] resize-vm-disk flow + convergence (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # GUI items
 # ---------------------------------------------------------------------------
@@ -877,26 +1740,70 @@ PYEOF
     itf_step info "survey verdict distribution" \
         "$(printf '%s\n' "$gui_counts" | head -1); $(printf '%s\n' "$gui_counts" | tail -1)"
 
+    # Depth distribution of the drawn CLI items (joined back to the
+    # universe's depth column): the run report's measure of what the
+    # world axis bought.  Report artifact only — these numbers never go
+    # into documentation.
+    local depth_counts
+    depth_counts="$(awk -F'\t' '
+        NR == FNR { if (!/^#/) depth[$1] = $5; next }
+        /^#/ || $1 == "" { next }
+        $1 ~ /^cli-/ { c[depth[$1]]++ }
+        END { for (k in c) printf "%s=%d\n", (k == "" ? "unknown" : k), c[k] }
+    ' "$ITF_ROOT/survey/universe.tsv" "$items" | sort | tr '\n' ' ')"
+    itf_step info "survey depth distribution" "${depth_counts:-none}"
+
     # Playground teardown first: the scratch state the recipes ran against
     # is the survey's own and must not outlive it (the residue gate below
     # then proves the pool is clean).
     # shellcheck disable=SC2016  # the $ expansions run in the guest
     itf_guest_exec "$guest_ip" '
         source /root/survey-env.sh 2>/dev/null || true
+        # Lived-in extras first: offsite holds and the clone block
+        # zfs destroy (and the receive tree is its own scratch root).
+        if [[ -n "${SURVEY_RECV_DS:-}" ]]; then
+            zfs list -H -t snapshot -o name -r "$SURVEY_DS" 2>/dev/null \
+                | while read -r s; do
+                    zfs holds -H "$s" 2>/dev/null || true
+                  done | while read -r snap tag _rest; do
+                    case "$tag" in
+                        offsite-*) zfs release "$tag" "$snap" 2>/dev/null || true ;;
+                    esac
+                  done
+            zfs destroy -r "$SURVEY_CLONE_DS" 2>/dev/null || true
+            zfs destroy -r "$SURVEY_RECV_DS" 2>/dev/null || true
+        fi
         # The scratch datasets are pool-root children (zfstest1/survey-<rid>),
         # not members of a zfstest1/survey subtree — destroy each by name.
+        # The -recv/-res siblings carry the same rid and are absent in runs
+        # that never created them (harmless destroys).
         zfs destroy -r "$SURVEY_DS" 2>/dev/null || true
         zfs destroy "$SURVEY_VOL" 2>/dev/null || true
         zfs destroy -r "$SURVEY_DS2" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS2}-recv" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS2}-res" 2>/dev/null || true
         rm -f "$SURVEY_STREAM" /root/survey-tree.tgz
+        # The survey-owned state dir (schedule profiles and any other
+        # runtime state written under the pinned ZFSUTILITIES_STATE_DIR).
+        rm -rf /root/survey-state
     ' > "$ITF_RUN_DIR/survey-teardown.log" 2>&1 || true
+
+    # Two-node labs: every vm-disk recipe converges itself, but the wrap
+    # re-runs the convergence on the compute guest so the residue gate
+    # below stays a gate, not a lottery.
+    if [[ -f "$ITF_RUN_DIR/guest-compute.txt" ]]; then
+        local c_ip
+        if c_ip="$(itf_survey_compute_ip)"; then
+            _survey_vmdisk_converge "$c_ip"
+        fi
+    fi
 
     # Residue: the survey must leave nothing of its own behind.
     local residue_log="$ITF_RUN_DIR/survey-residue.log"
     # shellcheck disable=SC2016  # the $ expansions run in the guest
     if itf_guest_exec "$guest_ip" \
             'zfs list -H -o name -r zfstest1 zfstest2 zfstest3 2>/dev/null \
-             | grep -E "survey-|9100"' \
+             | grep -E "survey-|9100|9101"' \
             > "$residue_log" 2>&1; then
         itf_step fail "survey residue check" \
             "survey-owned datasets/VMs left behind — see survey-residue.log"

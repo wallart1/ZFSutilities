@@ -441,17 +441,32 @@ echo ""
 echo "=== Verifying SSH Prerequisites ==="
 echo ""
 
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${compute_host}" true 2>/dev/null; then
-    die "Cannot SSH from $(hostname -s) to root@${compute_host}.\n" \
-        "  Fix: ssh-copy-id root@${compute_host}"
-fi
+# Each probe retries for up to 60 s: a peer that is still booting, or
+# briefly too busy to answer within one 5 s connect window, fails a
+# single attempt even though the wiring is correct — and a real user
+# retries.  A wiring failure that survives the window still dies with
+# the same message.
+ssh_probe_deadline=$(( SECONDS + 60 ))
+until ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${compute_host}" true 2>/dev/null; do
+    if (( SECONDS >= ssh_probe_deadline )); then
+        die "Cannot SSH from $(hostname -s) to root@${compute_host}.\n" \
+            "  Fix: ssh-copy-id root@${compute_host}"
+    fi
+    echo "  … root@${compute_host} not answering yet; retrying"
+    sleep 5
+done
 echo "  ✓ root@$(hostname -s) → root@${compute_host}"
 
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${compute_host}" \
-    "ssh -o ConnectTimeout=5 -o BatchMode=yes root@${storage_host} true" 2>/dev/null; then
-    die "Cannot SSH from ${compute_host} back to root@${storage_host}.\n" \
-        "  Fix: on ${compute_host}, run: ssh-copy-id root@${storage_host}"
-fi
+ssh_probe_deadline=$(( SECONDS + 60 ))
+until ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${compute_host}" \
+    "ssh -o ConnectTimeout=5 -o BatchMode=yes root@${storage_host} true" 2>/dev/null; do
+    if (( SECONDS >= ssh_probe_deadline )); then
+        die "Cannot SSH from ${compute_host} back to root@${storage_host}.\n" \
+            "  Fix: on ${compute_host}, run: ssh-copy-id root@${storage_host}"
+    fi
+    echo "  … root@${storage_host} not answering from ${compute_host} yet; retrying"
+    sleep 5
+done
 echo "  ✓ root@${compute_host} → root@${storage_host}"
 
 echo ""

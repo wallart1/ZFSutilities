@@ -86,6 +86,19 @@ failed job is normal triage, but the run recorded at a release tag is
 never redone or moved — "the tag run stays red by rule," because tags are
 history.
 
+## clock walk
+
+The survey's aging technique: ZFS records a snapshot's `creation` from
+the system clock at the moment it is taken, and that timestamp cannot
+be backdated — so to stage snapshots that are genuinely months old, the
+world staging walks the guest clock backward once (after freezing NTP)
+and then forward through each planned moment, creating snapshots with
+the product's own naming as it goes, and finally restores the clock
+from the dev host (the guests' time authority). A forward-only fence
+(the `itf_guest_time_*` helpers in `guest-lib.sh`) refuses any backward
+or lateral jump after that first deliberate rewind, so a walk can only
+age forward. Related: world variant.
+
 ## config version
 
 The saved configuration file (`/var/lib/zfsutilities/config.json`)
@@ -781,6 +794,16 @@ GUI half is enumerated at run time from the product code, so it can
 never drift from what the user actually sees; the CLI half is a
 manifest whose sync with the docs is enforced by a test.
 
+## schedule profile
+
+A saved, schedulable copy of one task page's settings (Backup, Offsite,
+Restore, Retention, or Scrub): a JSON file in the state dir's `profiles/`
+folder holding the task's variables plus the cron fields that decide when
+it runs. Active profiles are written into `/etc/cron.d/zfsutilities` by
+the GUI; inactive ones only render as rows on the Schedule page. The
+function survey seeds inactive ones so the page has real rows without
+anything firing.
+
 ## shadowed mount
 
 A dataset the kernel lists as mounted whose mountpoint path cannot be
@@ -824,6 +847,15 @@ per tick, which flooded the compute node's journal (~14,000 lines/hour at
 the 30 s default). With reuse plus the batched probe
 (`dashboard_page._probe_remote_host`), a refresh rides one existing
 connection and the poll becomes invisible in the remote journal.
+
+## state dir
+
+The product's persistent runtime-state directory (`/var/lib/zfsutilities`
+by default; `ZFSUTILITIES_STATE_DIR` overrides it everywhere the product
+reads or writes state). It holds things that must survive a reboot but
+are not user configuration — schedule profiles, snapshot bookkeeping,
+scrub state. The function survey pins it to a survey-owned directory so
+probed state never touches an operator's.
 
 ## sticky binding
 
@@ -961,6 +993,27 @@ requested root, which exposed suites whose worlds modeled only part of
 the tree (a destination that existed in the existence model but had no
 listing rows). Related: mock (the stand-in itself) and the standing
 mock-fidelity rule.
+
+## world variant
+
+The j22 function survey's name for the guest state a run surveys:
+which variant is staged plus the seed that makes it reproducible.
+`thin` (the default) is the scratch playground and pinned config;
+`lived-in` adds an aged, product-named snapshot ladder built by the
+clock walk, then populated config rows — per-pool retention policies,
+backup and offsite steps, and inactive schedule profiles — so the GUI
+pages have real rows; `busy` (lived-in plus background load) is
+reserved for a later phase. The survey archive records the variant,
+seed, staging
+anchor, and digest, so a replay rebuilds the same world — the anchor
+matters because snapshot buckets follow the calendar (Sundays are
+weekly days, month 1sts are monthly), so a plan is only deterministic
+against the date it was planned for. An explicit `ITF_SURVEY_WORLD`
+that conflicts with the archived variant is refused. Not the mock
+`world` above: that is the fake ZFS state a unit-test mock answers
+with, inside the bash suites — a world variant is real state built in
+the ITF lab guest. Related: function survey, clock walk, and sample
+archive.
 
 ## xdg-desktop-portal
 

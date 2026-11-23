@@ -253,7 +253,10 @@ The installer will:
     - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
     - Create links in the installing user's home directory:
       **ZFSutilities GUI** and **ZFSutilities Documentation**
-10. Verify SSH key authorization between hosts
+10. Verify SSH key authorization between hosts (each check retries for up
+    to a minute, so a peer host that is still booting does not fail the
+    verification; a failure that survives the retries stops the installer
+    with the key-setup fix)
 11. **Patch PVE's iSCSI rescan rate limit** on the compute host when PVE is
     detected — limits automatic `iscsiadm --rescan` to once per day, which
     eliminates repetitive kernel log spam on the storage host. If PVE is not

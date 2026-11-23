@@ -153,7 +153,7 @@ If it is stale, it is removed and acquisition is retried automatically.
 ##### Standalone CLI tool:
 
 ```text
-zfslockctl list [dataset]           List active locks (HOST column in two-node mode)
+zfslockctl list [dataset]           List active locks
 zfslockctl status <dataset>         Check lock status
 zfslockctl release <lock_id>        Force release a lock
 zfslockctl cleanup                  Remove stale locks
@@ -227,7 +227,7 @@ strength until both nodes run this version.
 
 ### Interactive Conflict Resolution
 
-When conflict detected, options are offered:
+When conflict is detected, options are offered:
 
 ```
 CONFLICT: A lock could not be acquired for 'fivebays/NVME1' because another task is using the dataset or a related dataset.

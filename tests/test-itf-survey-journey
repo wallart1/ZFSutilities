@@ -24,7 +24,8 @@ make_itf_root() {
     local root="$1"
     mkdir -p "$root/survey/archives" "$root/journeys"
     cp "$REAL_SURVEY"/universe.tsv "$REAL_SURVEY"/sample.py \
-        "$REAL_SURVEY"/gui_catalog.py "$REAL_SURVEY"/gui_probe.py \
+        "$REAL_SURVEY"/world.py "$REAL_SURVEY"/gui_catalog.py \
+        "$REAL_SURVEY"/gui_probe.py "$REAL_SURVEY"/world-stage.sh \
         "$root/survey/" 2>/dev/null || true
     echo "$root"
 }
@@ -64,6 +65,99 @@ _source_survey() {
 # ------------------------------------------------------------------------------
 # Selection: new mode
 # ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# Guest clock control: freeze / forward-only fence / restore (guest-lib)
+# ------------------------------------------------------------------------------
+
+test_guest_time_fence() {
+    test_start "guest time helpers: freeze, forward-only fence, restore"
+    local out
+    # The fake guest interprets the helpers' command shapes: freeze
+    # (set-ntp false) seeds the walk state, set-time mutates last=,
+    # restore (set-ntp true) clears it.  FAKE_TIMER=1 makes freeze take
+    # the mask branch (the fence timer present on that guest).
+    out="$(
+        (
+            # shellcheck disable=SC1090
+            source "$mydir/tests/integrated/lib/guest-lib.sh"
+            FAKE_STATE="" FAKE_TIMER=0 FAKE_LOG=""
+            itf_guest_exec() {
+                local cmd="$2" ep
+                case "$cmd" in
+                    *"set-ntp true"*)
+                        ep="$(printf '%s\n' "$cmd" \
+                            | grep -oE 'set-time @[0-9]+' | grep -oE '[0-9]+')"
+                        FAKE_LOG+="restore:@$ep;"
+                        FAKE_STATE=""
+                        ;;
+                    *"set-ntp false"*)
+                        FAKE_LOG+="freeze:masked=$FAKE_TIMER;"
+                        FAKE_STATE="$(printf 'frozen=1\nmasked=%s\nlast=' "$FAKE_TIMER")"
+                        ;;
+                    *"timedatectl set-time @"*)
+                        ep="$(printf '%s\n' "$cmd" \
+                            | grep -oE 'set-time @[0-9]+' | grep -oE '[0-9]+')"
+                        FAKE_LOG+="set:@$ep;"
+                        FAKE_STATE="$(printf 'frozen=1\nmasked=%s\nlast=%s' \
+                            "$FAKE_TIMER" "$ep")"
+                        ;;
+                    *"cat /run/itf/time-walk"*)
+                        printf '%s\n' "$FAKE_STATE"
+                        ;;
+                esac
+                return 0
+            }
+            itf_guest_time_freeze 10.0.0.1 || echo freeze-failed
+            itf_guest_time_set 10.0.0.1 1600000000 || echo rewind-failed
+            itf_guest_time_set 10.0.0.1 1590000000 2>/dev/null \
+                && echo BACKWARD-ALLOWED
+            itf_guest_time_set 10.0.0.1 1600000050 || echo forward-failed
+            itf_guest_time_set 10.0.0.1 1600000050 2>/dev/null \
+                && echo LATERAL-ALLOWED
+            itf_guest_time_restore 10.0.0.1 || echo restore-failed
+            itf_guest_time_set 10.0.0.1 1700000000 2>/dev/null \
+                && echo UNFROZEN-ALLOWED
+            echo "log=$FAKE_LOG"
+            echo "sets=$(printf '%s\n' "$FAKE_LOG" | grep -o 'set:@' | wc -l)"
+        ) 2>/dev/null
+    )"
+    case "$out" in
+        *failed*|*ALLOWED*) test_fail "fence sequence misbehaved: $out"; return ;;
+    esac
+    assert_contains "$out" "freeze:masked=0"
+    assert_contains "$out" "sets=2"   # the rewind + one forward set
+    if ! printf '%s\n' "$out" | grep -qE 'restore:@1[0-9]{9}'; then
+        test_fail "restore did not set-time from the dev host epoch: $out"
+        return
+    fi
+    # Timer-present guests take the mask branch on freeze.
+    out="$(
+        (
+            # shellcheck disable=SC1090
+            source "$mydir/tests/integrated/lib/guest-lib.sh"
+            FAKE_STATE="" FAKE_TIMER=1 FAKE_LOG=""
+            itf_guest_exec() {
+                local cmd="$2" ep
+                case "$cmd" in
+                    *"set-ntp true"*) FAKE_LOG+="restore;" ; FAKE_STATE="" ;;
+                    *"set-ntp false"*)
+                        FAKE_LOG+="freeze:masked=$FAKE_TIMER;"
+                        FAKE_STATE="$(printf 'frozen=1\nmasked=%s\nlast=' "$FAKE_TIMER")" ;;
+                esac
+                return 0
+            }
+            itf_guest_time_freeze 10.0.0.2 || echo freeze-failed
+            itf_guest_time_restore 10.0.0.2 || echo restore-failed
+            echo "log=$FAKE_LOG"
+        ) 2>/dev/null
+    )"
+    case "$out" in
+        *failed*) test_fail "mask-branch freeze/restore failed: $out"; return ;;
+    esac
+    assert_contains "$out" "freeze:masked=1"
+    test_pass
+}
 
 test_select_new_creates_archive_and_half_sample() {
     test_start "select (new) archives the list and samples at least half"
@@ -328,6 +422,674 @@ test_journey_profile_gates() {
     test_pass
 }
 
+# ------------------------------------------------------------------------------
+# World axis: stage dispatch + refusal, knob forwarding, replay conflict
+# ------------------------------------------------------------------------------
+
+test_world_stage_dispatches_thin() {
+    test_start "world stage: thin dispatches the playground + reports cost"
+    local root run
+    root="$(make_itf_root "$tmp_root/root11")"
+    run="$tmp_root/run11"; mkdir -p "$run"
+    # The playground pins the payload config's schema version from the
+    # enumerated tree, so a fabricated selection marker stands in for a
+    # real select here.
+    printf '# enum-root %s\n' "$REAL_REPO" > "$run/survey-select.out"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_put() { return 0; }
+        itf_guest_exec() { return 0; }
+        SURVEY_WORLD=thin
+        itf_survey_stage_world 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey playground staged"
+    assert_contains "$out" "info:survey world staged"
+    assert_contains "$out" "variant=thin"
+    assert_contains "$out" "elapsed="
+    test_pass
+}
+
+test_world_stage_refuses_unimplemented() {
+    test_start "world stage: busy/unknown fail closed (lived-in dispatches)"
+    local root run
+    root="$(make_itf_root "$tmp_root/root12")"
+    run="$tmp_root/run12"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_put() { return 0; }
+        itf_guest_exec() { return 0; }
+        SURVEY_WORLD=busy
+        itf_survey_stage_world 10.0.0.1 > /dev/null 2>&1
+        echo "rc-busy=$? steps-busy=$_steps"
+        _steps=""
+        SURVEY_WORLD=bogus
+        itf_survey_stage_world 10.0.0.1 > /dev/null 2>&1
+        echo "rc-bogus=$? steps-bogus=$_steps"
+    ')"
+    assert_contains "$out" "rc-busy=1"
+    assert_contains "$out" "rc-bogus=1"
+    assert_contains "$out" "Phase 5"
+    assert_contains "$out" "unknown world variant"
+    test_pass
+}
+
+test_world_stage_dispatches_lived_in() {
+    test_start "world stage: lived-in = playground + plan + clock walk + verify"
+    local root run anchor
+    root="$(make_itf_root "$tmp_root/root12b")"
+    run="$tmp_root/run12b"; mkdir -p "$run"
+    # Phase A: a real selection pins the world (seed, anchor, archive).
+    _source_survey "$root" "$run" '
+        ITF_SURVEY_WORLD=lived-in ITF_SURVEY_SEED=unitseed \
+            itf_survey_select > /dev/null 2>&1' \
+        || { test_fail "selection failed"; return; }
+    anchor="$(sed -n 's/^# world-anchor //p' "$run/survey-select.out" | head -1)"
+    # Phase B: precompute what the guest will be asked to prove — the
+    # plan for the pinned seed/anchor, rendered as the verify pull the
+    # stage's comparison consumes (plus the two product runs).
+    python3 - "$root/survey/world.py" "$run" "$anchor" <<'PYPRE'
+import json, subprocess, sys
+
+world_py, run, anchor = sys.argv[1], sys.argv[2], sys.argv[3]
+subprocess.run(
+    [sys.executable, world_py, "plan", "--variant", "lived-in",
+     "--seed", "unitseed", "--anchor", anchor,
+     "--out-json", f"{run}/pre-plan.json", "--out-tsv", f"{run}/pre.tsv"],
+    check=True,
+)
+plan = json.load(open(f"{run}/pre-plan.json"))
+base = "zfstest1/survey-run12b"   # rid derives from the run-dir basename
+lines = [f'{base}/{r["dataset"]}@{r["name"]} {r["epoch"]}' for r in plan["ladder"]]
+last = max(r["epoch"] for r in plan["ladder"]) + 60
+for i in range(len(plan["dailybackup"])):
+    lines.append(f"{base}/backup-src@dailybackup-run{i} {last + i}")
+# The playground's own snapshot on the base dataset (counts in -r).
+lines.append(f"{base}@survey-playground {last + 90}")
+lines.append("== holds ==")
+lines += [
+    f'{base}/{r["dataset"]}@{r["name"]} {r["hold"]}'
+    for r in plan["ladder"] if r["hold"]
+]
+lines.append("== recv ==")
+for i, e in enumerate(plan["dailybackup"]):
+    lines.append(f"{base}-recv@snap{i} {e['epoch']}")
+with open(f"{run}/fake-verify.txt", "w") as f:
+    f.write("\n".join(lines) + "\n")
+PYPRE
+    # Phase C: the stage against stubbed transports; dev-side planning
+    # (world.py) and the fence run for real.
+    local out
+    out="$(_source_survey "$root" "$run" '
+        # shellcheck disable=SC1090
+        source "'"$mydir"'/tests/integrated/lib/guest-lib.sh"
+        SURVEY_WORLD=lived-in SURVEY_WORLD_SEED=unitseed
+        SURVEY_WORLD_ANCHOR='"$anchor"'
+        SURVEY_ARCHIVE="'"$run"'/survey-archive.json"
+        FAKE_STATE="" FAKE_LOG="" PUTS=""
+        itf_guest_put() { PUTS+="$(basename "$3");"; return 0; }
+        itf_guest_exec_feed() { FAKE_LOG+="dailybackup;"; return 0; }
+        itf_guest_exec() {
+            local cmd="$2" ep
+            case "$cmd" in
+                *"set-ntp false"*)
+                    FAKE_LOG+="freeze;"
+                    FAKE_STATE="frozen=1
+masked=0
+last=" ;;
+                *"set-ntp true"*) FAKE_LOG+="restore;"; FAKE_STATE="" ;;
+                *"timedatectl set-time @"*)
+                    ep="$(printf "%s\n" "$cmd" \
+                        | grep -oE "set-time @[0-9]+" | grep -oE "[0-9]+")"
+                    FAKE_LOG+="set:$ep;"
+                    FAKE_STATE="frozen=1
+masked=0
+last=$ep" ;;
+                *"cat /run/itf/time-walk"*) printf "%s\n" "$FAKE_STATE" ;;
+                *"world-stage.sh tree"*) FAKE_LOG+="tree;" ;;
+                *"world-stage.sh group"*) FAKE_LOG+="group;" ;;
+                *"world-stage.sh clone"*) FAKE_LOG+="clone;" ;;
+                *"zfs list -H -t snapshot"*) cat "'"$run"'/fake-verify.txt" ;;
+            esac
+            return 0
+        }
+        itf_survey_stage_world 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+        echo "log=$FAKE_LOG"
+        echo "puts=$PUTS"
+        echo "ladder-epochs=$(grep -v "^#" "'"$run"'/survey-world-ladder.run.tsv" \
+            2>/dev/null | cut -f1 | sort -nu | wc -l)"
+        echo "walk-epochs=$(
+            {
+                grep -v "^#" "'"$run"'/survey-world-ladder.run.tsv" 2>/dev/null | cut -f1
+                grep "^# dailybackup " "'"$run"'/survey-world-ladder.run.tsv" \
+                    2>/dev/null | awk "{print \$3}"
+            } | sort -nu | wc -l)"
+        echo "sets=$(printf "%s" "$FAKE_LOG" | grep -o "set:[0-9]*" | wc -l)"
+        echo "groups=$(printf "%s" "$FAKE_LOG" | grep -o "group;" | wc -l)"
+        echo "dbs=$(printf "%s" "$FAKE_LOG" | grep -o "dailybackup;" | wc -l)"
+        grep -q "{BASE}" "'"$run"'/survey-world-ladder.run.tsv" 2>/dev/null \
+            && echo TOKENS-REMAIN || echo tokens-rendered
+        grep -q "SURVEY_RECV_DS=" "'"$run"'/survey-env.sh" && echo env-extended
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey playground staged"
+    assert_contains "$out" "pass:survey world plan"
+    assert_contains "$out" "pass:survey world tree"
+    assert_contains "$out" "pass:survey world ladder"
+    assert_contains "$out" "pass:survey world verified"
+    assert_contains "$out" "info:survey world staged"
+    assert_contains "$out" "variant=lived-in"
+    # One clock set + one group per unique ladder epoch.
+    local le we ss gs
+    le="$(printf '%s\n' "$out" | sed -n 's/^ladder-epochs=//p')"
+    we="$(printf '%s\n' "$out" | sed -n 's/^walk-epochs=//p')"
+    ss="$(printf '%s\n' "$out" | sed -n 's/^sets=//p')"
+    gs="$(printf '%s\n' "$out" | sed -n 's/^groups=//p')"
+    assert_equals "$we" "$ss" "one clock set per walk epoch (ladder + runs)"
+    assert_equals "$le" "$gs" "one group per ladder epoch"
+    assert_contains "$out" "freeze;"
+    assert_contains "$out" "restore;"
+    local dbs
+    dbs="$(printf '%s\n' "$out" | sed -n 's/^dbs=//p')"
+    assert_equals "2" "$dbs" "exactly two real dailybackup runs"
+    assert_contains "$out" "clone;"
+    assert_contains "$out" "tokens-rendered"
+    assert_contains "$out" "env-extended"
+    # Phase 3 adds the config-rows stage after the walk: the enriched
+    # pinned config overwrite plus the four schedule profiles.
+    assert_contains "$out" "pass:survey config rows staged"
+    assert_contains "$out" \
+        "puts=survey-env.sh;survey-config.json;survey-world-ladder.tsv;world-stage.sh;survey-env.sh;survey-config.json;root-backup-survey.json;root-offsite-survey.json;root-retention-survey.json;root-scrub-survey.json;"
+    test_pass
+}
+
+test_wrap_lived_in_teardown_order() {
+    test_start "wrap: lived-in teardown releases holds/clone/recv before destroys"
+    local root run
+    root="$(make_itf_root "$tmp_root/root12c")"
+    run="$tmp_root/run12c"; mkdir -p "$run"
+    printf 'id\tkind\tname\tpage\tprofile\n' > "$run/survey-items.tsv"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        TEARDOWN_CMD=""
+        itf_guest_exec() {
+            case "$2" in
+                *"zfs release"*|*"zfs destroy"*) TEARDOWN_CMD="$2" ;;
+            esac
+            return 1   # residue grep: nothing left behind
+        }
+        SURVEY_DS=zfstest1/survey-t1 SURVEY_VOL=zfstest1/survey-vol-t1
+        SURVEY_DS2=zfstest2/survey-t1 SURVEY_STREAM=/root/survey-t1.stream
+        SURVEY_RECV_DS=zfstest2/survey-t1-recv
+        SURVEY_CLONE_DS=zfstest1/survey-t1/clone-work
+        itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        # Order inside the single teardown script: holds released, then
+        # clone, then the receive tree, and only then the base destroys.
+        case "$TEARDOWN_CMD" in
+            *"zfs release"*"zfs destroy -r \"\$SURVEY_CLONE_DS\""*\
+*"zfs destroy -r \"\$SURVEY_RECV_DS\""*"zfs destroy -r \"\$SURVEY_DS\""*)
+                echo order-ok ;;
+            *) echo "ORDER-BROKEN: $TEARDOWN_CMD" ;;
+        esac
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "order-ok"
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
+# Phase 3: config rows + CLI depth upgrades
+# ------------------------------------------------------------------------------
+
+_repo_config_version() {
+    python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1] + "/python")
+from config_migrations import CONFIG_VERSION
+
+print(CONFIG_VERSION)
+' "$REAL_REPO"
+}
+
+test_playground_config_version_dynamic() {
+    test_start "playground: config_version follows the tree; state dir pinned; fail-closed"
+    local root run repo_ver out
+    root="$(make_itf_root "$tmp_root/root16")"
+    run="$tmp_root/run16"; mkdir -p "$run"
+    repo_ver="$(_repo_config_version)"
+    printf '# enum-root %s\n' "$REAL_REPO" > "$run/survey-select.out"
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_put() { return 0; }
+        itf_guest_exec() { return 0; }
+        itf_survey_stage_playground 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey config pinned"
+    assert_contains "$out" "schema v$repo_ver"
+    grep -q "\"config_version\": $repo_ver" "$run/survey-config.json" \
+        || { test_fail "pinned config_version is not the tree's $repo_ver"; return; }
+    grep -q "export ZFSUTILITIES_STATE_DIR=/root/survey-state" \
+        "$run/survey-env.sh" \
+        || { test_fail "survey-env.sh does not pin the state dir"; return; }
+    # Fail closed: no enumerated tree means no version to pin.
+    out="$(_source_survey "$root" "$run" '
+        rm -f "'"$run"'/survey-select.out"
+        itf_guest_put() { return 0; }
+        itf_guest_exec() { return 0; }
+        itf_survey_stage_playground 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=1"
+    assert_contains "$out" "fail:survey config version"
+    test_pass
+}
+
+test_config_rows_seeded() {
+    test_start "config rows: enriched config + four inactive schedule profiles"
+    local root run repo_ver out
+    root="$(make_itf_root "$tmp_root/root17")"
+    run="$tmp_root/run17"; mkdir -p "$run"
+    repo_ver="$(_repo_config_version)"
+    printf '# enum-root %s\n' "$REAL_REPO" > "$run/survey-select.out"
+    out="$(_source_survey "$root" "$run" '
+        PUTS=""
+        itf_guest_put() { PUTS+="$(basename "$3");"; return 0; }
+        itf_guest_exec() { return 0; }
+        SURVEY_DS=zfstest1/survey-cfg
+        SURVEY_DS2=zfstest2/survey-cfg
+        SURVEY_WORLD_ANCHOR=2026-11-01
+        itf_survey_stage_config_rows 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+        echo "puts=$PUTS"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey config rows staged"
+    assert_contains "$out" \
+        "puts=survey-config.json;root-backup-survey.json;root-offsite-survey.json;root-retention-survey.json;root-scrub-survey.json;"
+    python3 - "$run" "$repo_ver" <<'PYEOF' \
+        || { test_fail "config/profile JSON assertions failed"; return; }
+import json
+import os
+import sys
+
+run, want_ver = sys.argv[1], int(sys.argv[2])
+cfg = json.load(open(f"{run}/survey-config-rows.json"))
+assert cfg["config_version"] == want_ver, cfg["config_version"]
+assert set(cfg["retention"]) == {"default", "zfstest1", "zfstest2", "<offsite>"}
+assert all(
+    set(b) == {"name", "retain", "minage"} for b in cfg["retention"]["zfstest1"]
+)
+sr = cfg["backup"]["send_receive_steps"][0]
+assert sr == {"active": True, "source": "zfstest1/survey-cfg",
+              "dest": "zfstest2/survey-cfg-recv"}, sr
+pull = cfg["backup"]["pull_steps"][0]
+assert pull["active"] is False and pull["excludes"] == []
+off = cfg["offsite"]["steps"][0]
+assert isinstance(off["includes"], str) and off["includes"] == "backup-src"
+assert off["excludes"] == "clone-work" and off["dest"] == "<offsite>/survey"
+
+pdir = f"{run}/survey-state-profiles"
+names = sorted(os.listdir(pdir))
+assert len(names) == 4, names
+ordinal = False
+for n in names:
+    p = json.load(open(os.path.join(pdir, n)))
+    assert p["active"] is False, n
+    assert p["dry_run"] is True
+    assert p["created_at"] == "2026-11-01T00:00:00"
+    assert set(p["cron"]) == {
+        "minute", "hour", "day", "month", "weekday", "condition",
+    }
+    if p["cron"]["weekday"] == "6#1":
+        ordinal = True
+assert ordinal, "no ordinal-weekday profile"
+backup = json.load(open(os.path.join(pdir, "root-backup-survey.json")))
+assert backup["tab_type"] == "backup" and "variables" in backup["config"]
+retention = json.load(open(os.path.join(pdir, "root-retention-survey.json")))
+assert retention["config"]["prune_pools"] == ["zfstest1"]
+scrub = json.load(open(os.path.join(pdir, "root-scrub-survey.json")))
+assert scrub["config"]["pools"] == ["zfstest2"]
+PYEOF
+    test_pass
+}
+
+test_recipe_zfsresume() {
+    test_start "zfsresume recipe: resumable prey, token validation, argcheck kept"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root18")"
+    run="$tmp_root/run18"; mkdir -p "$run"
+    out="$(_source_survey "$root" "$run" '
+        SURVEY_DS2=zfstest2/survey-rz
+        EXECS=""
+        itf_guest_exec() {
+            EXECS+="$2|"
+            case "$2" in *"stat -c %s"*) echo "resumable-at=999" ;; esac
+            return 0
+        }
+        itf_guest_exec_feed() {
+            echo "INFO: Resume token for zfstest2/survey-rz-res seems valid."
+            return 0
+        }
+        survey_recipe_zfsresume 10.0.0.1 cli-zfsresume accept "'"$run"'/rz.log"
+        echo "steps=$_steps"
+        echo "execs=$EXECS"
+    ')"
+    assert_contains "$out" "pass:item cli-zfsresume"
+    assert_contains "$out" "validated a real resume token"
+    printf '%s\n' "$out" | grep -q "head -c" \
+        || { test_fail "prey never truncated the stream"; return; }
+    printf '%s\n' "$out" | grep -q "zfs receive -A" \
+        || { test_fail "prey/converge never aborted the partial receive"; return; }
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_exec() { return 0; }
+        itf_guest_exec_feed() {
+            printf "FATAL: A resumable destination dataset must be given in \\$1.\n"
+            return 8
+        }
+        survey_recipe_zfsresume 10.0.0.1 cli-zfsresume invalid "'"$run"'/rz2.log"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "pass:item cli-zfsresume"
+    assert_contains "$out" "argument validation"
+    test_pass
+}
+
+test_recipe_zfsdelallsnaps() {
+    test_start "zfsdelallsnaps recipe: holds+clone prey, releaseholds flow"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root19")"
+    run="$tmp_root/run19"; mkdir -p "$run"
+    out="$(_source_survey "$root" "$run" '
+        SURVEY_DS=zfstest1/survey-da
+        EXECS=""
+        FEEDS=""
+        itf_guest_exec() { EXECS+="$2|"; return 0; }
+        itf_guest_exec_feed() {
+            FEEDS+="$3|"
+            echo "INFO: About to delete the following 1 snapshots"
+            echo "WARN: Snapshot zfstest1/survey-da@delme has clone dependents. Skipping deletion."
+            return 1
+        }
+        survey_recipe_zfsdelallsnaps 10.0.0.1 cli-zfsdelallsnaps accept "'"$run"'/da.log"
+        echo "steps=$_steps"
+        echo "execs=$EXECS"
+        echo "feeds=$FEEDS"
+    ')"
+    assert_contains "$out" "pass:item cli-zfsdelallsnaps"
+    printf '%s\n' "$out" | grep -q "zfs hold offsite-survey" \
+        || { test_fail "prey never placed the offsite hold"; return; }
+    printf '%s\n' "$out" | grep -q "zfs clone" \
+        || { test_fail "prey never cloned"; return; }
+    printf '%s\n' "$out" | grep -q "zfs release offsite-survey" \
+        || { test_fail "converge never released the hold"; return; }
+    printf '%s\n' "$out" | grep -qF \
+        'zfsdelallsnaps "$SURVEY_DS" delme releaseholds recursive' \
+        || { test_fail "item invocation is not the releaseholds recursive form"; return; }
+    test_pass
+}
+
+test_recipe_vmdisk_flows() {
+    test_start "vm-disk recipes: scratch prey, empty-VM 9101, product convergence"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root20")"
+    run="$tmp_root/run20"; mkdir -p "$run"
+    out="$(_source_survey "$root" "$run" '
+        SURVEY_POOL=zfstest1 SURVEY_VMID=101 SURVEY_VDISK=9 SURVEY_RID=abc123
+        EXECS=""
+        FEEDS=""
+        itf_guest_exec() { EXECS+="$2|"; return 0; }
+        itf_guest_exec_feed() {
+            FEEDS+="$3|"
+            echo "INFO: canned vm-disk output"
+            return 0
+        }
+        survey_recipe_resize_vm_disk 10.0.0.1 cli-resize-vm-disk accept "'"$run"'/rz.log"
+        survey_recipe_attach_vm_disk 10.0.0.1 cli-attach-vm-disk decline "'"$run"'/at.log"
+        survey_recipe_move_vm_disk 10.0.0.1 cli-move-vm-disk accept "'"$run"'/mv.log"
+        echo "steps=$_steps"
+        echo "execs=$EXECS"
+        echo "feeds=$FEEDS"
+        # Dispatch proof: the DASH-named command must reach the
+        # underscore-named recipe through the runner (the old verbatim
+        # lookup silently fell through to the generic path).
+        _steps=""
+        itf_survey_run_cli_item 10.0.0.1 cli-resize-vm-disk resize-vm-disk \
+            bespoke "-" "-" "-" "-" "-" accept storage
+        echo "dispatch-steps=$_steps"
+    ')"
+    assert_contains "$out" "pass:item cli-resize-vm-disk"
+    assert_contains "$out" "pass:item cli-attach-vm-disk"
+    assert_contains "$out" "pass:item cli-move-vm-disk"
+    assert_contains "$out" "resize-vm-disk flow + convergence"
+    printf '%s\n' "$out" | grep -q "new-vm-disk" \
+        || { test_fail "recipes never created scratch prey"; return; }
+    printf '%s\n' "$out" | grep -q "qm create 9101" \
+        || { test_fail "move never created the empty survey VM"; return; }
+    printf '%s\n' "$out" | grep -q "qm destroy 9101 --purge" \
+        || { test_fail "converge never destroyed the survey VM"; return; }
+    printf '%s\n' "$out" | grep -q "remove-vm-disk" \
+        || { test_fail "converge never used the product teardown"; return; }
+    printf '%s\n' "$out" | grep -qF \
+        './bin/resize-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 2G' \
+        || { test_fail "resize invocation shape drifted"; return; }
+    printf '%s\n' "$out" | grep -qF \
+        './bin/move-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK" 9101' \
+        || { test_fail "move invocation shape drifted"; return; }
+    test_pass
+}
+
+test_table_overrides_invokes() {
+    test_start "table invokes: overrides strings reach the guest intact"
+    local root run db_row cl_row out
+    root="$(make_itf_root "$tmp_root/root21")"
+    run="$tmp_root/run21"; mkdir -p "$run"
+    db_row="$(awk -F'\t' '$1=="cli-zfsdailybackup"' "$root/survey/universe.tsv")"
+    cl_row="$(awk -F'\t' '$1=="cli-zfscleanup"' "$root/survey/universe.tsv")"
+    [[ -n "$db_row" && -n "$cl_row" ]] \
+        || { test_fail "universe rows missing"; return; }
+    # The rows carry single quotes (the overrides strings), so they cross
+    # the eval boundary via files, not interpolated heredoc words.
+    printf '%s\n' "$db_row" > "$run/db.row"
+    printf '%s\n' "$cl_row" > "$run/cl.row"
+    out="$(_source_survey "$root" "$run" '
+        SURVEY_POOL=zfstest1 SURVEY_DS=zfstest1/survey-ov SURVEY_DS2=zfstest2/survey-ov
+        CAP=""
+        itf_guest_exec_feed() { CAP="$3"; echo "INFO: canned"; return 0; }
+        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert < "'"$run"'/db.row"
+        itf_survey_run_cli_item 10.0.0.1 cli-zfsdailybackup "$_cmd" "$depth" \
+            "$invoke" "$profiles" "$rcs" "$feeds" "$assert" accept storage
+        echo "cap-db=$CAP"
+        CAP=""
+        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert < "'"$run"'/cl.row"
+        itf_survey_run_cli_item 10.0.0.1 cli-zfscleanup "$_cmd" "$depth" \
+            "$invoke" "$profiles" "$rcs" "$feeds" "$assert" accept storage
+        echo "cap-cl=$CAP"
+    ')"
+    printf '%s\n' "$out" | grep -qF \
+        "sourcefs=zfstest1/survey-ov;destfs=zfstest2/survey-ov-recv;send-receive" \
+        || { test_fail "zfsdailybackup overrides invoke lost its shape: $out"; return; }
+    printf '%s\n' "$out" | grep -qF "pull_rocky='N'" \
+        || { test_fail "site pulls are not disabled in the invoke"; return; }
+    printf '%s\n' "$out" | grep -qF \
+        "./bin/zfscleanup zfstest1 '' dailybackup \"dryrun='Y';retain_verb='Y'\"" \
+        || { test_fail "zfscleanup dry-run invoke lost its shape: $out"; return; }
+    test_pass
+}
+
+test_wrap_depth_distribution() {
+    test_start "wrap: depth distribution, Phase-3 teardown names, compute convergence"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root22")"
+    run="$tmp_root/run22"; mkdir -p "$run"
+    printf 'id\tkind\tname\tpage\tprofile\n' > "$run/survey-items.tsv"
+    printf 'cli-zfscleanup\tcli\tzfscleanup\t-\taccept\n' >> "$run/survey-items.tsv"
+    printf 'cli-zfsresume\tcli\tzfsresume\t-\tinvalid\n' >> "$run/survey-items.tsv"
+    printf 'gui-b-x\tgui-button\tx\tpage\taccept\n' >> "$run/survey-items.tsv"
+    printf '%s\n' \
+        '{"id": "gui-b-x", "verdict": "pass", "detail": "ok", "duration": 1}' \
+        > "$run/survey-gui-results.jsonl"
+    printf 'base.invalid 8001 10.9.9.9\n' > "$run/guest-compute.txt"
+    out="$(_source_survey "$root" "$run" '
+        TEARDOWN=""
+        VMD=""
+        RESIDUE=""
+        itf_guest_exec() {
+            case "$2" in
+                *"zfs destroy"*) TEARDOWN="$2" ;;
+                *"remove-vm-disk"*) VMD+="$1:" ;;
+                *"zfs list"*) RESIDUE="$2" ;;
+            esac
+            return 1   # residue grep: nothing left behind
+        }
+        SURVEY_DS=zfstest1/survey-t2 SURVEY_VOL=v
+        SURVEY_DS2=zfstest2/survey-t2 SURVEY_STREAM=/root/s
+        itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+        echo "vmd=$VMD"
+        echo "teardown-recv=$(printf "%s" "$TEARDOWN" | grep -cF "zfs destroy -r \"\${SURVEY_DS2}-recv\"")"
+        echo "teardown-state=$(printf "%s" "$TEARDOWN" | grep -c "rm -rf /root/survey-state")"
+        echo "residue-vm=$(printf "%s" "$RESIDUE" | grep -c "9101")"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "info:survey depth distribution"
+    assert_contains "$out" "deep=1"
+    assert_contains "$out" "bespoke=1"
+    assert_contains "$out" "vmd=10.9.9.9:"
+    assert_contains "$out" "teardown-recv=1"
+    assert_contains "$out" "teardown-state=1"
+    assert_contains "$out" "residue-vm=1"
+    test_pass
+}
+
+test_select_forwards_world_knob() {
+    test_start "select forwards the world knob; archive carries the world"
+    local root run
+    root="$(make_itf_root "$tmp_root/root13")"
+    run="$tmp_root/run13"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        ITF_SURVEY_SEED=unitseed itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "world=thin"   # lab-shape info step
+    grep -q '^# world thin$' "$run/survey-select.out" \
+        || { test_fail "select.out missing '# world thin'"; return; }
+    grep -q '^# world-seed unitseed$' "$run/survey-select.out" \
+        || { test_fail "world seed did not default to the run seed"; return; }
+    grep -q '"variant": "thin"' "$run/survey-archive.json" \
+        || { test_fail "archive missing world.variant"; return; }
+    test_pass
+}
+
+test_select_lived_in_passes_with_digest_guard() {
+    test_start "select: lived-in passes the fence; digest guard self-checks"
+    local root run
+    root="$(make_itf_root "$tmp_root/root14")"
+    run="$tmp_root/run14"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        ITF_SURVEY_WORLD=lived-in ITF_SURVEY_SEED=unitseed \
+            itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey world digest"
+    assert_contains "$out" "world=lived-in"
+    grep -q '"variant": "lived-in"' "$run/survey-archive.json" \
+        || { test_fail "archive missing lived-in world"; return; }
+    grep -q '^# world-anchor ' "$run/survey-select.out" \
+        || { test_fail "select.out missing the anchor line"; return; }
+    test_pass
+}
+
+test_select_busy_still_refused() {
+    test_start "select refuses busy (Phase 5) before any lab spend"
+    local root run
+    root="$(make_itf_root "$tmp_root/root14b")"
+    run="$tmp_root/run14b"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        ITF_SURVEY_WORLD=busy ITF_SURVEY_SEED=unitseed \
+            itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    # The refusal now fires inside the sampler (new-mode busy has no
+    # plan to digest), so select reports the sampler's FATAL — still
+    # before any lab is cloned; select's own fence stays as the
+    # defense-in-depth layer behind it.
+    assert_contains "$out" "rc=1"
+    assert_contains "$out" "fail:survey selection"
+    grep -q "Phase 5" "$run/survey-select.log" \
+        || { test_fail "sampler busy FATAL missing from survey-select.log"; return; }
+    test_pass
+}
+
+test_select_digest_guard_refuses_drift() {
+    test_start "select: a tampered world digest is planner drift, refused"
+    local root run_new run_rep
+    root="$(make_itf_root "$tmp_root/root14c")"
+    run_new="$tmp_root/run14cnew"; mkdir -p "$run_new"
+    run_rep="$tmp_root/run14crep"; mkdir -p "$run_rep"
+    _source_survey "$root" "$run_new" '
+        ITF_SURVEY_WORLD=lived-in ITF_SURVEY_SEED=unitseed \
+            itf_survey_select > /dev/null 2>&1'
+    # Corrupt the archived digest only — the seed/anchor stay honest.
+    python3 - "$run_new/survey-archive.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]
+with open(p) as f:
+    a = json.load(f)
+a["world"]["digest"] = "0" * 16
+with open(p, "w") as f:
+    json.dump(a, f, indent=1)
+PYEOF
+    local out
+    out="$(_source_survey "$root" "$run_rep" '
+        ITF_SURVEY_ARCHIVE="'"$run_new"'/survey-archive.json" \
+            itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=1"
+    assert_contains "$out" "fail:survey world digest"
+    assert_contains "$out" "planner drift"
+    test_pass
+}
+
+test_select_replay_world_conflict_refused() {
+    test_start "select propagates the sampler's world-conflict refusal"
+    local root run_new run_rep
+    root="$(make_itf_root "$tmp_root/root15")"
+    run_new="$tmp_root/run15new"; mkdir -p "$run_new"
+    run_rep="$tmp_root/run15rep"; mkdir -p "$run_rep"
+    _source_survey "$root" "$run_new" '
+        ITF_SURVEY_SEED=unitseed itf_survey_select > /dev/null 2>&1'
+    local out
+    out="$(_source_survey "$root" "$run_rep" '
+        ITF_SURVEY_ARCHIVE="'"$run_new"'/survey-archive.json" \
+        ITF_SURVEY_WORLD=busy itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+    ')"
+    assert_contains "$out" "rc=1"
+    grep -q "must use the archived world" "$run_rep/survey-select.log" \
+        || { test_fail "sampler FATAL missing from survey-select.log"; return; }
+    test_pass
+}
+
 test_select_new_creates_archive_and_half_sample
 test_select_new_deterministic
 test_select_replay_reproduces_the_list
@@ -338,6 +1100,23 @@ test_cli_item_verdicts_and_routing
 test_baseline_install_stage_shape
 test_journey_profile_gates
 test_wrap_residue_gate_and_summary
+test_guest_time_fence
+test_world_stage_dispatches_thin
+test_world_stage_refuses_unimplemented
+test_world_stage_dispatches_lived_in
+test_wrap_lived_in_teardown_order
+test_playground_config_version_dynamic
+test_config_rows_seeded
+test_recipe_zfsresume
+test_recipe_zfsdelallsnaps
+test_recipe_vmdisk_flows
+test_table_overrides_invokes
+test_wrap_depth_distribution
+test_select_forwards_world_knob
+test_select_lived_in_passes_with_digest_guard
+test_select_busy_still_refused
+test_select_digest_guard_refuses_drift
+test_select_replay_world_conflict_refused
 
 rm -rf "$tmp_root"
 teardown_test_env

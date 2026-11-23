@@ -528,48 +528,63 @@ class GuiProbe:
         if role == "toggle-active":
             if not views:
                 raise RuntimeError(f"no treeview on page ({self._census(page)})")
-            view = views[0]
-            store = view.get_model()
-            if store is None or store.iter_n_children(None) == 0:
+            # Pages can stack several views whose rows differ (Check
+            # Against: derived read-only views plus the USER view) — walk
+            # them until one carries an activatable cell.
+            saw_rows = False
+            for view in views:
+                store = view.get_model()
+                if store is None or store.iter_n_children(None) == 0:
+                    continue
+                saw_rows = True
+                for col in view.get_columns():
+                    for rend in col.get_cells():
+                        if isinstance(rend, Gtk.CellRendererToggle) and rend.get_activatable():
+                            # The canonical click equivalent: GTK emits "toggled"
+                            # on the renderer and the page's callback writes the
+                            # store — exactly what a real click does.
+                            path = store.get_path(store.iter_nth_child(None, 0))
+                            rend.emit("toggled", path.to_string())
+                            self.pump(5)
+                            return "toggled first activatable cell"
+            if not saw_rows:
                 return "blocked: no rows to toggle"
-            for col in view.get_columns():
-                for rend in col.get_cells():
-                    if isinstance(rend, Gtk.CellRendererToggle) and rend.get_activatable():
-                        # The canonical click equivalent: GTK emits "toggled"
-                        # on the renderer and the page's callback writes the
-                        # store — exactly what a real click does.
-                        path = store.get_path(store.iter_nth_child(None, 0))
-                        rend.emit("toggled", path.to_string())
-                        self.pump(5)
-                        return "toggled first activatable cell"
             raise RuntimeError("no activatable toggle renderer on page")
         if role == "edit-cell":
             if not views:
                 raise RuntimeError(f"no treeview on page ({self._census(page)})")
-            view = views[0]
-            store = view.get_model()
-            if store is None or store.iter_n_children(None) == 0:
+            saw_rows = False
+            for view in views:
+                store = view.get_model()
+                if store is None or store.iter_n_children(None) == 0:
+                    continue
+                saw_rows = True
+                for col in view.get_columns():
+                    for rend in col.get_cells():
+                        # "editable" is a readable property but has no C
+                        # getter, so PyGObject never generates get_editable
+                        # (unlike Toggle's get_activatable) — read it through
+                        # the property interface.
+                        if isinstance(rend, Gtk.CellRendererText) and rend.get_property("editable"):
+                            # Commit through the same signal a real edit
+                            # commits through: the renderer's "edited" carries
+                            # the final text to the page's store callback.
+                            it = store.iter_nth_child(None, 0)
+                            path = store.get_path(it)
+                            col_idx = self._text_column_index(view, col)
+                            current = (
+                                store.get_value(it, col_idx)
+                                if col_idx is not None and col_idx >= 0
+                                else ""
+                            )
+                            new_text = (
+                                f"{current}-survey" if isinstance(current, str) else "survey-edit"
+                            )
+                            rend.emit("edited", path.to_string(), new_text)
+                            self.pump(5)
+                            return f"committed edit on first editable cell ({new_text!r})"
+            if not saw_rows:
                 return "blocked: no rows to edit"
-            for col in view.get_columns():
-                for rend in col.get_cells():
-                    if isinstance(rend, Gtk.CellRendererText) and rend.get_editable():
-                        # Commit through the same signal a real edit commits
-                        # through: the renderer's "edited" carries the final
-                        # text to the page's store callback.
-                        it = store.iter_nth_child(None, 0)
-                        path = store.get_path(it)
-                        col_idx = self._text_column_index(view, col)
-                        current = (
-                            store.get_value(it, col_idx)
-                            if col_idx is not None and col_idx >= 0
-                            else ""
-                        )
-                        new_text = (
-                            f"{current}-survey" if isinstance(current, str) else "survey-edit"
-                        )
-                        rend.emit("edited", path.to_string(), new_text)
-                        self.pump(5)
-                        return f"committed edit on first editable cell ({new_text!r})"
             raise RuntimeError("no editable text renderer on page")
         if role == "cycle-combo":
             combo = self.combos(page)[0] if self.combos(page) else None

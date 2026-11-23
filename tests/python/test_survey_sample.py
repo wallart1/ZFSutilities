@@ -80,6 +80,27 @@ def test_manifest_parses_with_expected_columns():
         assert row["depth"] in ("deep", "argcheck", "bespoke"), row
 
 
+def test_manifest_rows_carry_exactly_the_header_columns():
+    """Raw-line column count, the way the journey reads the manifest.
+
+    parse_universe_tsv zip-pairs fields with headers (extra columns
+    silently drop), but the journey reads raw lines with bash `read`,
+    where a surplus field glues onto the LAST column — observed live:
+    an 11-field bespoke row turned assert into "-\\t-" and failed the
+    item through the generic path.  The raw file is the contract; count
+    it here.
+    """
+    with open(os.path.join(SURVEY_DIR, "universe.tsv"), encoding="utf-8") as f:
+        lines = [ln.rstrip("\n") for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    header, rows = lines[0], lines[1:]
+    want = len(header.split("\t"))
+    for line in rows:
+        got = len(line.split("\t"))
+        assert got == want, (
+            f"{line.split(chr(9))[0]}: {got} tab-separated fields, header has {want}"
+        )
+
+
 def test_manifest_commands_exist_in_bin():
     for row in _manifest_rows()[0]:
         assert os.access(os.path.join(REPO_ROOT, "bin", row["command"]), os.X_OK), (
@@ -187,11 +208,22 @@ def test_archive_round_trip(tmp_path):
     sample = sampler.build_sample(items, "arch-seed", 0.5)
     path = tmp_path / "survey.json"
     archive = sampler.write_archive(
-        str(path), sample, seed="arch-seed", fraction=0.5, sw={"mode": "tree"}, universe_items=items
+        str(path),
+        sample,
+        seed="arch-seed",
+        fraction=0.5,
+        sw={"mode": "tree"},
+        world={
+            "variant": "thin",
+            "seed": "arch-seed",
+            "digest": sampler.world_digest("thin", "arch-seed"),
+        },
+        universe_items=items,
     )
     loaded = sampler.load_archive(str(path))
     assert loaded["seed"] == "arch-seed"
     assert loaded["sw"] == {"mode": "tree"}
+    assert loaded["world"] == archive["world"]
     assert [i["id"] for i in loaded["items"]] == [i["id"] for i in sample]
     assert loaded["items"][0]["profile"] == sample[0]["profile"]
     assert archive["universe_counts"]["total"] == len(items)
@@ -207,6 +239,11 @@ def test_replay_drift_reports_missing_ids(tmp_path):
         seed="drift-seed",
         fraction=0.5,
         sw={"mode": "tree"},
+        world={
+            "variant": "thin",
+            "seed": "drift-seed",
+            "digest": sampler.world_digest("thin", "drift-seed"),
+        },
         universe_items=items,
     )
     # Shrink the universe: one selected id disappears.
@@ -225,6 +262,173 @@ def test_load_archive_rejects_bad_format(tmp_path):
     path.write_text(json.dumps({"format": 99, "items": []}))
     with pytest.raises(sampler.ManifestError):
         sampler.load_archive(str(path))
+
+
+# ---------------------------------------------------------------------------
+# World axis: closed variant list, digest, archive field, replay refusal
+# ---------------------------------------------------------------------------
+
+
+def _sampler_run(*extra_args):
+    """Run the sampler CLI against the real tree (no GUI, offline)."""
+    return subprocess.run(
+        [
+            sys.executable,
+            os.path.join(SURVEY_DIR, "sample.py"),
+            "--repo-root",
+            REPO_ROOT,
+            "--no-gui",
+            *extra_args,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_resolve_world_accepts_closed_list():
+    for variant in sampler.WORLDS:
+        assert sampler.resolve_world(variant) == variant
+    assert sampler.resolve_world("") == "thin"  # unset knob = default
+    assert sampler.resolve_world(None) == "thin"
+
+
+def test_resolve_world_refusals_name_the_list():
+    with pytest.raises(ValueError) as exc:
+        sampler.resolve_world("bogus")
+    for variant in sampler.WORLDS:
+        assert variant in str(exc.value)
+
+
+def test_world_digest_deterministic_and_sensitive():
+    digest = sampler.world_digest("thin", "ws-1")
+    assert digest == sampler.world_digest("thin", "ws-1")
+    assert digest != sampler.world_digest("thin", "ws-2")
+    assert digest != sampler.world_digest("lived-in", "ws-1", 1765756800)
+    assert len(digest) == 16
+    # Non-thin documents pin the staging anchor; without one there is no
+    # plan to digest (the planner's own refusal, surfaced as ValueError).
+    with pytest.raises(ValueError):
+        sampler.world_digest("lived-in", "ws-1")
+    ld = sampler.world_digest("lived-in", "ws-1", 1765756800)
+    assert ld == sampler.world_digest("lived-in", "ws-1", 1765756800)
+    assert ld != sampler.world_digest("lived-in", "ws-1", 1765756800 + 7 * 86400)
+
+
+def test_load_archive_missing_world_is_thin(tmp_path):
+    """Old archives (pre-world) replay as thin — the format-1 rule."""
+    items = _fake_items()
+    sample = sampler.build_sample(items, "old-seed", 0.5)
+    path = tmp_path / "old.json"
+    sampler.write_archive(
+        str(path),
+        sample,
+        seed="old-seed",
+        fraction=0.5,
+        sw={"mode": "tree"},
+        world={"variant": "thin", "seed": "old-seed", "digest": "x" * 16},
+        universe_items=items,
+    )
+    data = json.loads(path.read_text())
+    del data["world"]
+    path.write_text(json.dumps(data))
+    loaded = sampler.load_archive(str(path))
+    assert loaded["world"] == {"variant": "thin"}
+
+
+def test_load_archive_rejects_unknown_world_variant(tmp_path):
+    items = _fake_items()
+    sample = sampler.build_sample(items, "s", 0.5)
+    path = tmp_path / "badworld.json"
+    sampler.write_archive(
+        str(path),
+        sample,
+        seed="s",
+        fraction=0.5,
+        sw={"mode": "tree"},
+        world={"variant": "bogus", "seed": "s", "digest": "x" * 16},
+        universe_items=items,
+    )
+    with pytest.raises(sampler.ManifestError):
+        sampler.load_archive(str(path))
+
+
+def test_new_mode_cli_emits_world_lines(tmp_path):
+    """The sampler→shell channel carries the world (new and replay)."""
+    archive = tmp_path / "w.json"
+    out1 = _sampler_run(
+        "new", "--seed", "cli-world", "--fraction", "1.0", "--archive", str(archive)
+    )
+    assert out1.returncode == 0
+    assert "# world thin" in out1.stdout
+    assert "# world-seed cli-world" in out1.stdout  # defaults to the run seed
+    world = json.loads(archive.read_text())["world"]
+    assert world["variant"] == "thin"
+    assert world["seed"] == "cli-world"
+    assert world["digest"] == sampler.world_digest("thin", "cli-world")
+    assert isinstance(world["anchor"], int)
+    assert f"# world-anchor {world['anchor']}" in out1.stdout
+    out2 = _sampler_run("replay", "--archive", str(archive))
+    assert out2.returncode == 0
+    assert "# world thin" in out2.stdout
+    assert "# world-seed cli-world" in out2.stdout
+    assert f"# world-anchor {world['anchor']}" in out2.stdout
+
+
+def test_new_mode_lived_in_archives_anchor_pinned_digest(tmp_path):
+    """A lived-in archive pins its staging anchor; the digest covers it."""
+    archive = tmp_path / "li.json"
+    out = _sampler_run(
+        "new",
+        "--seed",
+        "li-1",
+        "--fraction",
+        "1.0",
+        "--archive",
+        str(archive),
+        "--world",
+        "lived-in",
+    )
+    assert out.returncode == 0, out.stderr
+    world = json.loads(archive.read_text())["world"]
+    assert world["variant"] == "lived-in"
+    assert world["seed"] == "li-1"
+    assert world["digest"] == sampler.world_digest("lived-in", "li-1", world["anchor"])
+    assert f"# world-anchor {world['anchor']}" in out.stdout
+    # Replay rebuilds against the archived anchor — same digest.
+    out2 = _sampler_run("replay", "--archive", str(archive), "--world", "lived-in")
+    assert out2.returncode == 0
+    assert "# world lived-in" in out2.stdout
+    assert f"# world-anchor {world['anchor']}" in out2.stdout
+
+
+def test_new_mode_refuses_busy_world(tmp_path):
+    """busy is a recognized replay-conflict name but not plannable yet."""
+    refused = _sampler_run(
+        "new", "--seed", "s", "--archive", str(tmp_path / "b.json"), "--world", "busy"
+    )
+    assert refused.returncode == 2
+    assert "Phase 5" in refused.stderr
+
+
+def test_replay_world_conflict_refused(tmp_path):
+    """A thin archive replayed under an explicit other variant: rc 2."""
+    archive = tmp_path / "c.json"
+    assert _sampler_run("new", "--seed", "s", "--archive", str(archive)).returncode == 0
+    refused = _sampler_run("replay", "--archive", str(archive), "--world", "lived-in")
+    assert refused.returncode == 2
+    assert "thin" in refused.stderr and "lived-in" in refused.stderr
+    # The matching explicit variant still replays.
+    assert _sampler_run("replay", "--archive", str(archive), "--world", "thin").returncode == 0
+
+
+def test_new_mode_refuses_unknown_world(tmp_path):
+    refused = _sampler_run(
+        "new", "--seed", "s", "--archive", str(tmp_path / "x.json"), "--world", "bogus"
+    )
+    assert refused.returncode == 2
+    for variant in sampler.WORLDS:
+        assert variant in refused.stderr
 
 
 # ---------------------------------------------------------------------------

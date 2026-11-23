@@ -151,6 +151,14 @@ run_installer() {
                 && [[ "$all" == *" root@ztestcomp true" ]]; then
                 return 1
             fi
+            # Transient boot-readiness shape: the first N direct
+            # compute-host probes fail, every later call succeeds — the
+            # retry window in Step 4 must absorb exactly this.
+            if [[ "${_mock_ssh_transient:-0}" -gt 0 ]] \
+                    && [[ "$all" == *" root@ztestcomp true" ]]; then
+                _mock_ssh_transient=$(( _mock_ssh_transient - 1 ))
+                return 1
+            fi
             case "$all" in
                 *"ssh -o"*"root@zteststor true") return 0 ;;
                 *" root@ztestcomp true") return 0 ;;
@@ -211,6 +219,9 @@ run_installer() {
             printf 'SCP:%s\n' "$*" >> "$_capture_dir/scp"
             return 0
         }
+        # The Step-4 SSH probes retry on a bounded window; the mock
+        # harness collapses those waits so failure paths stay fast.
+        sleep() { :; }
 
         source "$fixture/mirror/bin/install-${which}-node"
     ) <<< "$stdin_input" 2>&1
@@ -227,9 +238,9 @@ run_installer() {
 
 reset_installer_mocks() {
     unset _mock_stdin _mock_root_fstype _mock_hostname _mock_ssh_fail \
-        _mock_patch_rc _mock_pve_present _mock_remote_node_conf_present \
-        _mock_probe_refs _mock_probe_sessions _mock_probe_unreachable \
-        _mock_live_targets
+        _mock_ssh_transient _mock_patch_rc _mock_pve_present \
+        _mock_remote_node_conf_present _mock_probe_refs _mock_probe_sessions \
+        _mock_probe_unreachable _mock_live_targets
 }
 
 node_conf_path() {
@@ -832,6 +843,35 @@ test_two_node_ssh_probe_failure_fatals() {
     test_pass
 }
 
+test_two_node_ssh_probe_transient_recovers() {
+    reset_installer_mocks
+    test_start "two-node: transient compute SSH failure recovers after retries"
+
+    local fixture="$_mock_zfs_state_dir/two-sshtransient"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_ssh_transient=2
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Transient SSH failure not retried through; rc=$rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"not answering yet; retrying"* ]]; then
+        test_fail "Retry progress line missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ root@zteststor → root@ztestcomp"* ]]; then
+        test_fail "Probe success line missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 test_two_node_pve_patch_applied() {
     reset_installer_mocks
     test_start "two-node: PVE rescan rate-limit patch applied on compute"
@@ -1204,6 +1244,7 @@ test_two_node_iqn_drift_unreachable_refused
 test_two_node_kept_config_completes
 test_two_node_storage_host_mismatch_fatals
 test_two_node_ssh_probe_failure_fatals
+test_two_node_ssh_probe_transient_recovers
 test_two_node_pve_patch_applied
 test_two_node_pve_absent_skips_patch
 test_two_node_existing_deploy_conf_left_alone

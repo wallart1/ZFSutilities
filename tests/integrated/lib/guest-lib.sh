@@ -1551,3 +1551,105 @@ ubiquity ubiquity/minimal_install boolean false
 ubiquity ubiquity/poweroff boolean true
 PRESEED
 }
+
+# ---------------------------------------------------------------------------
+# Guest clock control (the world-survey clock walk)
+#
+# The j22 lived-in world ages snapshots product-authenticly: ZFS creation
+# cannot be backdated, so staging walks the guest clock backward once and
+# then forward through the ladder's epochs.  The walk state lives on the
+# guest's tmpfs (/run/itf/time-walk: frozen=, masked=, last=), so a reboot
+# clears it.  Helpers are silent primitives like the rest of this library:
+# refusals explain themselves on stderr and return nonzero; journeys
+# record the steps.
+# ---------------------------------------------------------------------------
+
+# itf_guest_time_freeze <ip> [<ip>...]
+#
+# Per guest: stop NTP from fighting the manual sets, and neutralize the
+# iSCSI fence timer when that guest runs one (compute nodes in two-node
+# labs; the walk guest is the storage node, but a fence tick against a
+# walked-back storage clock is exactly the confusion to avoid).  The
+# timer's unit file lives in /etc/systemd/system, where systemctl mask
+# cannot place its /dev/null symlink — disable --now is the honest
+# neutralization (stop + unlink the wiring); restore re-enables it,
+# matching the installer's enabled+active end state.  The first set
+# after a freeze is the deliberate rewind; later sets must move
+# forward only.
+itf_guest_time_freeze() {
+    local ip
+    for ip in "$@"; do
+        # shellcheck disable=SC2016  # the $ expansions run in the guest
+        itf_guest_exec "$ip" '
+            mkdir -p /run/itf
+            timedatectl set-ntp false
+            masked=0
+            if systemctl list-unit-files zfsutilities-iscsi-fence.timer \
+                    2>/dev/null | grep -q zfsutilities-iscsi-fence; then
+                systemctl disable --now zfsutilities-iscsi-fence.timer \
+                    2>/dev/null \
+                    || systemctl stop zfsutilities-iscsi-fence.timer 2>/dev/null
+                masked=1
+            fi
+            printf "frozen=1\nmasked=%s\nlast=\n" "$masked" > /run/itf/time-walk
+        ' || return 1
+    done
+}
+
+# itf_guest_time_set <ip> <epoch>
+#
+# Forward-only fence: refuses unless the clock was frozen, and refuses
+# any epoch <= the last set (the one deliberate rewind is the first set
+# after freeze, while the state's last= is still empty).
+itf_guest_time_set() {
+    local ip="$1" epoch="$2" state last
+    if [[ ! "$epoch" =~ ^[0-9]+$ ]]; then
+        echo "itf_guest_time_set: epoch must be an integer, got '$epoch'" >&2
+        return 1
+    fi
+    state="$(itf_guest_exec "$ip" \
+        'cat /run/itf/time-walk 2>/dev/null || true')" || return 1
+    if [[ "$(printf '%s\n' "$state" | sed -n 's/^frozen=//p')" != "1" ]]; then
+        echo "itf_guest_time_set: $ip clock is not frozen - freeze first" >&2
+        return 1
+    fi
+    last="$(printf '%s\n' "$state" | sed -n 's/^last=//p')"
+    if [[ -n "$last" && "$epoch" -le "$last" ]]; then
+        echo "itf_guest_time_set: $ip refuses $epoch <= last set $last (forward-only)" >&2
+        return 1
+    fi
+    # shellcheck disable=SC2016  # the $ expansion runs in the guest
+    itf_guest_exec "$ip" '
+        timedatectl set-time @'"$epoch"' \
+            && sed -i "s/^last=.*/last='"$epoch"'/" /run/itf/time-walk
+    ' || { echo "itf_guest_time_set: timedatectl set-time @$epoch failed on $ip" >&2; return 1; }
+    return 0
+}
+
+# itf_guest_time_restore <ip> [<ip>...]
+#
+# The dev host is the time authority (guests have no reachable NTP):
+# one epoch, captured once, is applied to every guest so a two-node pair
+# stays consistent.  Re-enables NTP, re-enables (and restarts) the fence
+# timer where freeze disabled it — the installer's enabled+active end
+# state — and clears the walk state.  Best-effort across guests: every
+# guest gets its restore attempt even if an earlier one failed (a
+# left-walked clock is the worst outcome).
+itf_guest_time_restore() {
+    local ip epoch rc=0
+    epoch="$(date +%s)"
+    for ip in "$@"; do
+        # shellcheck disable=SC2016  # the $ expansion runs in the guest
+        itf_guest_exec "$ip" '
+            timedatectl set-time @'"$epoch"'
+            timedatectl set-ntp true
+            masked=$(sed -n "s/^masked=//p" /run/itf/time-walk 2>/dev/null || true)
+            if [ "$masked" = "1" ]; then
+                systemctl enable --now zfsutilities-iscsi-fence.timer \
+                    2>/dev/null || true
+            fi
+            rm -f /run/itf/time-walk
+        ' || { echo "itf_guest_time_restore: restore failed on $ip" >&2; rc=1; }
+    done
+    return $rc
+}

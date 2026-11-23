@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.143.0
+
+*Released 2026-11-23*
+
+### Added
+
+- **Function-survey world variants (test framework).** The randomized
+  function survey now names and seeds the guest state it surveys:
+  `thin` (the cold-start scratch world every earlier run used) and the
+  new `lived-in`. A lived-in run stages an aged, product-named snapshot
+  ladder — over-retained snapshots, an offsite pair old enough to be
+  removal-eligible, selective holds, a clone, and two real backup runs —
+  by walking the lab guest's clock backward and forward, then seeds
+  populated config rows (per-pool retention policies, backup and offsite
+  steps, inactive schedule profiles) so the surveyed pages and commands
+  meet real state instead of cold-start emptiness. The world is archived
+  with its seed, staging date, and a digest over the plan; a replay
+  rebuilds the identical world, a conflicting explicit variant is
+  refused, and a digest the current planner cannot reproduce is refused
+  as planner drift.
+- **Deeper survey coverage for eight commands (test framework).**
+  `zfsresume` validates a real resume token from a truncated receive,
+  `zfsdelallsnaps` runs its hold-release flow against a held-and-cloned
+  snapshot, the two-node VM-disk commands run full flows on lab scratch
+  disks, and `zfscleanup` / `zfsdailybackup` run a real retention
+  dry-run and a real send — where earlier surveys exercised only those
+  commands' argument validation.
+
+### Fixed
+
+- **Two-node installer SSH verification retries.** The installer's
+  SSH-key verification between the storage and compute hosts now retries
+  each probe for up to a minute, so a peer host that is still booting no
+  longer fails the installation; a wiring failure that survives the
+  window still stops the installer with the key-setup fix. The test
+  framework's two-node lab wiring gained the same bounded retry for its
+  first-connection step, which showed the same boot-readiness race
+  under load.
+- **Survey tooling fixes (test framework).** Dash-named commands'
+  bespoke recipes dispatch now (their earlier green verdicts were
+  vacuous); the GUI probe reads the editable-cell property through
+  GTK's property interface and walks every view on stacked pages; the
+  single-node survey journey sources its lab library again; and the
+  survey sampler's default tree resolves to the repository root.
+
 ## 0.142.0
 
 *Released 2026-11-17*
