@@ -226,6 +226,8 @@ Above the text view, a search bar provides:
 - Search text is **case-insensitive**.
 - Navigation keeps working while new log lines arrive: matches in newly added lines are folded into
   the highlight set and counter automatically.
+- Toggling **Short prefix** or changing the **Log** level rebuilds every line;
+  the search re-marks all matches at their new positions.
 
 A **Clear** button next to the **Input** entry empties the log buffer, clears
 search highlights, and resets the warning/error indicator.
@@ -1477,6 +1479,9 @@ daily self-truncation (`rsync`), like the cron log.
     **Previous / Next** keep working and matches in the newly arrived lines are
     added to the highlights and counter without disturbing your scroll
     position.
+  - A very long running log forces the viewer to trim its oldest text; the
+    search re-marks the remaining matches, so highlights and the counter stay
+    correct.
 
 ### Retention control
 
@@ -1864,10 +1869,10 @@ least one sample, the dialog explains that instead.
 
 ## Disks Tab
 
-The **Disks** tab shows the physical storage layer underneath your ZFS pools:
-the Disk Inventory, Enclosures, and Pool Topology sections. The pool drop-down
-inside the Pool Topology section marks the selected pool, which the tab's pool
-actions and disk highlights follow. The tab content scrolls
+The **Disks** tab shows the physical storage layer underneath your ZFS pools in
+three sections, top to bottom: Enclosures, Disk Inventory, and Pool Topology.
+The pool drop-down inside the Pool Topology section marks the selected pool,
+which the tab's pool actions and disk highlights follow. The tab content scrolls
 vertically as a whole when the window is too short; it also keeps a minimum
 height so it stays usable instead of being squashed.
 
@@ -1973,12 +1978,14 @@ stays collapsed; a pool expands automatically when it is the selected pool,
 when it contains the topology selection, or when one of its devices is
 tinted, and collapses again when none of that applies. Selecting a node
 clears the selected rows in the Disk Inventory and Enclosures panes and
-highlights the corresponding member disks in the inventory (their text is
+highlights the corresponding members in the inventory (their text is
 drawn in teal): the pool node highlights every device in the pool, a vdev
 node highlights every device in that vdev, and a device node highlights just
-that device. A member that is a partition highlights its whole disk — the
-tint always lands on a physical-disk row, never on a partition row; the pool
-drop-down follows the selection's pool. Clearing the
+that device. Devices always correspond with devices and partitions with
+partitions: a member that is a partition highlights that partition's row,
+and a whole-disk member highlights the disk row — the tint lands on the row
+that is the member, the same row that carries the pool name in the Pools
+column. The pool drop-down follows the selection's pool. Clearing the
 topology selection restores the pool-wide highlight. Selecting a disk or
 partition in the inventory switches the pool selector to that disk's pool and
 tints every topology device that resides on the selected disk (a whole disk

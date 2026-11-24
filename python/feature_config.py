@@ -391,6 +391,17 @@ def _reverse_checkagainst_row(source_root, dest_root, label):
     }
 
 
+def _dataset_at_or_under(dataset, root):
+    """True when *dataset* is *root* itself or a child dataset of it."""
+    return dataset == root or dataset.startswith(root + "/")
+
+
+def _propmanifest_store(dest, source):
+    """Dest-side property-manifest store for a backup step (propmanifest_dataset math)."""
+    source_pool = str(source).split("/")[0]
+    return f"{dest}/{source_pool}/zfsutilities-manifests"
+
+
 def derive_checkagainst_entries(config):
     """Derive checkagainst rows from active Backup and Offsite steps.
 
@@ -416,6 +427,24 @@ def derive_checkagainst_entries(config):
             }
         )
         backup_derived.append(_reverse_checkagainst_row(source, dest_root, backup_label))
+
+        # The step's property-manifest store sits at the destination as a
+        # sibling of the mapped datasets — created there by capture, with
+        # nothing on the source side — so the reverse row above covers it
+        # only for pool-level steps. Give the store its own row: the
+        # counterpart never exists by design, which checkagainst resolves
+        # to the decisive absent (rc 4) verdict instead of the no-entry
+        # (rc 5) confirm that stalls non-interactive prunes.
+        store = _propmanifest_store(dest, source)
+        if not _dataset_at_or_under(store, dest_root):
+            source_pool = source.split("/")[0]
+            backup_derived.append(
+                {
+                    "source_root": store,
+                    "dest_root": f"{source_pool}/zfsutilities-manifests",
+                    "label": backup_label,
+                }
+            )
 
     offsite_derived = []
     for step in config.get("offsite", {}).get("steps", []):

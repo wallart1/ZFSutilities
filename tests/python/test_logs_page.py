@@ -910,11 +910,17 @@ class TestRefreshLogSearch(unittest.TestCase):
         lp._refresh_log_search(app, "ordinary log line\n")
         app.logs_search.refresh.assert_not_called()
 
+    def test_forces_refresh_when_content_was_dropped(self):
+        """A buffer trim shifts stored offsets, so the search must resync."""
+        app = self._make_app("needle")
+        lp._refresh_log_search(app, "ordinary log line\n", force=True)
+        app.logs_search.refresh.assert_called_once_with()
+
 
 class TestTailLogFileSearchRefresh(unittest.TestCase):
     """_tail_log_file keeps the viewer search current while a log is running."""
 
-    def _make_app(self, path, file_size, read_offset, query):
+    def _make_app(self, path, file_size, read_offset, query, char_count=0):
         app = MagicMock()
         app._logs_current_path = path
         app._logs_file_size = file_size
@@ -924,7 +930,7 @@ class TestTailLogFileSearchRefresh(unittest.TestCase):
         app._log_index = None
         app.logs_search.entry.get_text.return_value = query
         buf = MagicMock()
-        buf.get_char_count.return_value = 0
+        buf.get_char_count.return_value = char_count
         app.logs_text.get_buffer.return_value = buf
         vadj = MagicMock()
         vadj.get_value.return_value = 0
@@ -954,6 +960,20 @@ class TestTailLogFileSearchRefresh(unittest.TestCase):
             app = self._make_app(path, size - 1, 0, "needle")
             self.assertTrue(lp._tail_log_file(app))
             app.logs_search.refresh.assert_not_called()
+
+    def test_refreshes_search_after_buffer_trim_even_without_new_match(self):
+        """The trim deletes leading text, shifting every stored offset."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "growing.log")
+            with open(path, "w") as fh:
+                fh.write("old text\n")
+                fh.write("new tail line\n")
+            size = os.path.getsize(path)
+            app = self._make_app(path, size - 1, 0, "needle", char_count=lp.MAX_VIEWER_BUFFER_CHARS)
+            self.assertTrue(lp._tail_log_file(app))
+            buf = app.logs_text.get_buffer.return_value
+            buf.delete.assert_called_once()
+            app.logs_search.refresh.assert_called_once_with()
 
 
 class TestLoadFullLogClicked(unittest.TestCase):

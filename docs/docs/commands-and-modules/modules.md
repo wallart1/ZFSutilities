@@ -1038,10 +1038,27 @@ fivebays/threeamigos/proxmox threeamigos/proxmox           dailybackup
 - **Reverse row**: the source and destination roots are swapped, so the
   reverse path can also be safety-checked.
 
-For an Offsite step with label `offsite`, the same rules apply. If the
-Destination column contains `<offsite>`, the derived row keeps the
-placeholder literal; `zfscheckagainst` expands it to each offsite-candidate
-pool at run time.
+A Backup step whose source is deeper than its pool also derives a
+**manifest-store row** for the step's property-manifest store. The store
+sits at the destination as a sibling of the mapped datasets, so the reverse
+row cannot cover it. The store row names the source-side counterpart that
+never exists (the store is created at the first hop by capture), which
+resolves to the decisive absent verdict instead of the no-entry confirm.
+For a step sending `threeamigos/proxmox` to `fivebays`, the store row is:
+
+```
+fivebays/threeamigos/zfsutilities-manifests    threeamigos/zfsutilities-manifests    dailybackup
+```
+
+Pool-level steps (for example `NVME1` to `fivebays/NVME1`) need no store
+row: their reverse row already covers the store. Duplicate rows from steps
+sharing a source pool are collapsed.
+
+For an Offsite step with label `offsite`, the same forward/reverse rules
+apply, with no store row (offsite legs carry stores along as ordinary
+datasets). If the Destination column contains `<offsite>`, the derived row
+keeps the placeholder literal; `zfscheckagainst` expands it to each
+offsite-candidate pool at run time.
 
 Derived rows are stored separately in the JSON config under
 `checkagainst.backup_derived` and `checkagainst.offsite_derived`. They are
@@ -1108,7 +1125,7 @@ locked — those still block for safety (return 6).
 | ---- | ----------------------------------------------------------------- |
 | 0    | Safe to delete (includes hold-verified offline counterpart)       |
 | 4    | Not common with any counterpart — includes every matched counterpart dataset being absent (missing on an online pool) |
-| 5    | No entry in `fss` table matched the snapshot — no check performed |
+| 5    | No entry in `fss` table matched the snapshot — no check performed; the warning logs once per dataset per run |
 | 6    | Counterpart pool offline and no hold tag — blocked for safety     |
 | 7    | Last remaining common snapshot — deletion blocked                 |
 | 8    | Fatal error                                                       |

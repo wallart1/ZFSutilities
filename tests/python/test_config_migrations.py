@@ -181,8 +181,59 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_32(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 32)
+    def test_config_version_is_33(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 33)
+
+    def test_migrate_32_to_33_derives_manifest_store_rows(self):
+        config = {
+            "config_version": 32,
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
+                ],
+            },
+            "checkagainst": {
+                "backup_derived_active": True,
+                "offsite_derived_active": True,
+                "backup_derived": [
+                    {"source_root": "stale", "dest_root": "stale", "label": "dailybackup"}
+                ],
+                "offsite_derived": [],
+                "user_entries": [],
+            },
+        }
+        result = config_migrations._migrate_32_to_33(config)
+        self.assertEqual(result["config_version"], 33)
+        store_rows = [
+            row
+            for row in result["checkagainst"]["backup_derived"]
+            if row["source_root"].endswith("/zfsutilities-manifests")
+        ]
+        self.assertEqual(
+            store_rows,
+            [
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
+                    "label": "dailybackup",
+                }
+            ],
+        )
+
+    def test_migrate_32_to_33_is_idempotent(self):
+        config = {
+            "config_version": 32,
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
+                ],
+            },
+        }
+        result1 = config_migrations._migrate_32_to_33(dict(config))
+        result2 = config_migrations._migrate_32_to_33(result1)
+        self.assertEqual(result1, result2)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -774,6 +825,11 @@ class TestRunMigrations(unittest.TestCase):
                 {
                     "source_root": "fivebays/threeamigos/proxmox",
                     "dest_root": "threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
                     "label": "dailybackup",
                 },
             ],

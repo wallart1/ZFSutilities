@@ -693,13 +693,13 @@ test_dryrun_caveat_names_unmodeled_residuals() {
     retain "pool/fs" "dailybackup" 2>"$_logfile"
     msg_level="FATAL"
     dryrun="N"
-    test_start "Dry run prints the short plain-language banner"
+    test_start "Dry run does not print the removed dry-run banner"
     if grep -q -- "Dry run: shows what a real run would delete" "$_logfile"; then
-        test_pass
+        test_fail "Dry run carried the removed banner, got: $(cat "$_logfile")"
     else
-        test_fail "Expected the dry-run banner, got: $(cat "$_logfile")"
+        test_pass
     fi
-    # A real run must not carry the preview banner.
+    # A real run must not carry the preview banner either.
     : > "$_logfile"
     msg_level="INFO"
     retain "pool/fs" "dailybackup" 2>>"$_logfile"

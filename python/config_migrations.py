@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 32
+CONFIG_VERSION = 33
 
 
 def _migrate_1_to_2(config):
@@ -444,6 +444,22 @@ def _migrate_31_to_32(config):
     return config
 
 
+def _migrate_32_to_33(config):
+    """Derive checkagainst rows for the backup steps' property-manifest stores.
+
+    Steps that map a sub-pool source (e.g. threeamigos/proxmox) produced
+    reverse rows covering only the mapped datasets; the step's manifest
+    store — a sibling at the destination — matched no row, so its snapshot
+    pruning stalled on the rc-5 no-entry confirm. Lazy import: config_core
+    imports this module at load time.
+    """
+    from feature_config import refresh_checkagainst_derived
+
+    refresh_checkagainst_derived(config)
+    config["config_version"] = 33
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -476,6 +492,7 @@ MIGRATIONS = [
     _migrate_29_to_30,
     _migrate_30_to_31,
     _migrate_31_to_32,
+    _migrate_32_to_33,
 ]
 
 

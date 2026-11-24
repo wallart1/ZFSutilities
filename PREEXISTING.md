@@ -2,6 +2,43 @@
 
 ---
 
+## Full-suite load failure: realized-check children race for a private Xvfb display
+
+`tests/python/test_alignment_realized.py::TestAlignmentScrollRealized::test_realized_check_is_immune_to_ambient_font_scaling`
+failed the 2026-11-24 full run-tests gate (xdist gw1): the spawned
+`alignment_realized_check.py` child exited 1 with EMPTY stdout and stderr
+— no traceback, not even its own `REALIZED-DISPLAY:` line. The suite passed
+solo right after, and the check never touches the code changed that day
+(the Disks-page section order).
+
+Root cause, reproduced deterministically: `_start_xvfb()` in
+`tests/python/alignment_realized_check.py` — the one private-display starter
+shared by every realized check (`_ensure_display` is imported by the backup,
+rolling, ctrl-click, datasets-banner, and disks-dialogs checks) — picks the
+first display number in 99..90 whose socket does not exist, starts Xvfb on
+it, and returns as soon as the socket APPEARS. It never checks that the
+server behind the socket is the one it started. When two children start in
+the same ~100 ms window, both pick :99; one Xvfb binds and the others die
+silently ("Server already active", stderr is DEVNULL), after which every
+loser adopts the winner's socket. The winner finishes and terminates ITS
+Xvfb; each borrower still running loses its display and dies hard — exit 1,
+buffered output lost. Probe (removed): five processes calling
+`_start_xvfb()` at one instant → three or four adopted a foreign server, in
+every round.
+
+The pytest harness's own starter, `conftest._start_private_xvfb` (numbers
+89..80), carries the same socket-exists logic but runs once per gate, so it
+races only against a concurrent gate from another session or lane.
+
+Fix shape: claim the display before trusting the socket. Hold a
+machine-global `flock` (the runlock-lib.sh pattern) across
+choose-number → start Xvfb → socket appears, then require the Xvfb still to
+be alive (`proc.poll() is None`), or better compare its PID against the PID
+in `/tmp/.X<n>-lock`; on a mismatch terminate and try the next number.
+Apply the same ownership check to the conftest copy. Until then treat a
+single full-run failure of ANY realized check whose child exited 1 with no
+output as this offender (rerun solo to confirm).
+
 ## Full-suite load failure: snapshot-dialog tooltip test (repeat offender)
 
 `tests/python/test_dataset_actions.py::TestSnapshot::test_snapshot_dialog_entry_carries_tooltip`

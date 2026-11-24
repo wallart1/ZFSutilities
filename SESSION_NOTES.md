@@ -1489,3 +1489,144 @@ desktop-menu and test-logging bashinit entries.)
   Suites: zfsresume/send-receive-resume/survey-journey/sampler/docs
   green; full suite once at wrap-up. Docs: messages/index.md rows +
   commands.md zfsresume narrative/flow updated.
+
+## 2026-11-23 (pub2) — Stewie 0.143.0 follow-up: manifest store rc-5 stall, WARN noise, dry-run banner
+
+- User-reported (live-verified against stewie config + prune_gui log):
+  `fivebays/threeamigos/zfsutilities-manifests` @dailybackup snapshots
+  never pruned; 36 repeated `No eligible enteries` WARNs per dry run; the
+  zfsretain dry-run banner printed once per dataset (46x).
+- Root cause: leaf-mapped backup steps (threeamigos/proxmox -> fivebays)
+  derive reverse rows that cover only the mapped datasets; the store is a
+  SIBLING at the dest, so no row matched -> rc-5 -> interactive confirm ->
+  GUI/scheduled prunes keep everything. NVME1 worked only because its
+  step is pool-level (reverse row covers its store -> absent -> rc-4).
+- Fix: derive a manifest-store row per sub-pool backup step (counterpart
+  = never-existing source-side store -> absent -> rc-4 auto-delete);
+  skipped when the reverse row already covers the store; migration
+  32->33 refreshes stored rows (stewie sits at v32). rc-5 WARN: typo
+  fixed, now once per dataset per run (/tmp/canoentryprinted.$PPID
+  marker, swept by zfsdelsnap/zfsretain exit traps). Dry-run banner line
+  removed from zfsretain.
+- End-user effect after deploy + one GUI launch: dry run shows the
+  store's snapshots as "Would: Remove"; the next real prune deletes them
+  and propmanifest_prune_files sweeps the orphaned manifest files. No
+  manual cleanup.
+- Full suite green once at wrap-up; derivation/migration/page/checkagainst/
+  delsnap/retain suites updated. No VERSION/changelog touch. Uncommitted.
+
+## 2026-11-24 (pub2) — Log-panel search desync after Short Prefix toggle
+
+- User-reported, both directions: search then toggle Short prefix off ->
+  highlights in wrong places; clear + re-search then toggle on -> no
+  highlights while the counter still claims matches.
+- Root cause (reproduced under real GTK 3.24 in Xvfb): the bottom log
+  panel's _render_info_panel rebuilds every line (prefix lengths change)
+  but never resynchronized info_search. Tags die with the deleted text;
+  the match list keeps offsets from the old layout, so the counter lies
+  and the next Previous/Next paints the current-match highlight at
+  offsets belonging to the other prefix mode. The Logs-tab viewer was
+  verified NOT affected (its toggle already re-runs search()).
+- Same-class latent find fixed in-pass: _tail_log_file's 2 MB buffer trim
+  shifts stored offsets; _refresh_log_search now takes force= for the
+  trim so the search resyncs even when the new text lacks the query.
+- Fix: TextViewSearch.refresh() handles the zero-match case ("0
+  matches", current=-1); _render_info_panel refreshes an active query
+  after re-rendering (covers short-prefix toggle AND level filter);
+  truncation flag passed to _refresh_log_search.
+- Tests: refresh zero-match (gui_helpers), render/resync + empty-query
+  guard (zfsutilities_gui), force-refresh + trim-driven refresh
+  (logs_page). Real-GTK Xvfb end-to-end run of the patched
+  _render_info_panel: highlights land on actual occurrences, counter and
+  current stay consistent through both toggle directions and navigation.
+- Docs: gtk-gui.md — panel search bullet (re-render resync) and Logs-tab
+  search bullet (trim resync). Full suite green once at wrap-up. No
+  VERSION/changelog touch. Uncommitted.
+
+## 2026-11-24 (pub2) — Disks tab: kind-for-kind tint law (user law override)
+
+- User-reported (not previously fixed): partition members under a vdev tint
+  whole-disk rows in the Disk Inventory — both the pool-selector baseline
+  and topology-node selection. User law: devices correspond with devices,
+  partitions with partitions. The 2026-11-17 design (partition tints its
+  parent disk) is overridden; the Pools COLUMN already followed the new law.
+- disks_page.py: _highlight_pool_disks tints {disk.path} (entry itself, no
+  parent resolution); _backing_disk_paths renamed _inventory_entry_paths
+  (target = disk.path); _path_matches_any_device lost the whole-disk-prefix
+  branch (disk row no longer matches a partition device). Unknown partition
+  leaf now tints nothing (its row does not exist) instead of the disk.
+- Kept: inventory->topology direction (_topology_node_matches_disk) —
+  partition row tints exactly its node; whole-disk row tints all leaves on
+  it (containment). Enclosure tint stays whole-disk (enclosure members are
+  physical disks). Docstrings updated; gtk-gui.md pool-topology paragraph
+  rewritten to the kind-for-kind law.
+- Tests: TestTopologySelectionHighlightsBackingDisk ->
+  TestTopologySelectionHighlightsMemberRow (partition rows tinted, disk rows
+  not; new whole-disk-member positive; unknown-leaf tints nothing); prefix
+  matcher tests inverted both directions. Full suite green once at wrap-up.
+  No VERSION/changelog touch. Uncommitted.
+
+## 2026-11-24 (pub2) — zfscheckagainst: rc-4 verdict INFO once per dataset
+
+- User-reported after manually adding Checkagainst-tab entries on stewie
+  (0.143.0): real prune swept the stale manifest files ("Pruned 712/4" —
+  propmanifest_prune_files IS dry-run aware; "Would: prune" under dry run,
+  so those lines prove a real run), but the log flooded with one rc-4
+  "All matched counterparts absent ... nothing to protect." INFO per
+  snapshot (~716 stale store snapshots).
+- Not previously addressed anywhere: the rc-5 WARN and fss-row absent INFO
+  got $PPID-keyed once-per-dataset markers; this third message had none.
+- Fix: _ca_log_all_absent (marker /tmp/caallabsentprinted.$PPID, keyed on
+  the snapshot's dataset; INFO first, VERB repeats) replaces the raw
+  log_msg at the rc-4 site; marker joins the exit-trap sweeps in
+  zfsdelsnap, zfsretain, and the test suite's own trap.
+- Tests: once-per-dataset-then-VERB + different-dataset-re-arms; the three
+  existing rc-4 tests hardened to rm the new marker. checkagainst, delsnap,
+  and retain suites green; python full suite green (one known
+  rolling-charts renderer flake, clean on rerun and second full run).
+- Docs: messages/index.md — rc-4 row notes once-per-run-per-dataset; the
+  rc-5 row updated to the corrected "entries" spelling (was still quoting
+  the old "enteries" typo, completing the earlier fix's doc trail).
+  No VERSION/changelog touch. Uncommitted.
+
+## 2026-11-24 (pub2) — Disks page: Enclosures section moved to the top (user request)
+
+- User request: "Disks page: Move the Enclosures section to the top." The
+  page reads Enclosures → Disk Inventory → Pool Topology.
+- disks_page.py: the Enclosures build block (box, title, description,
+  store, view, columns, tooltips, scroller) moved verbatim above the Disk
+  Inventory block in create_disks_page (cut-and-paste by marker lines, block
+  verified byte-identical to HEAD's); the content-box comment names the
+  order. No widget, text, or behavior change inside the block.
+- Deliberately unchanged: refresh_disks_page repopulation order (enclosure
+  selection restore runs LAST — load-bearing, see the 2026-11-17 one-selection
+  entry), the pool-selector tooltip ("table above" still true),
+  ENCLOSURES_MIN_HEIGHT.
+- Tests: new test_enclosures_section_is_packed_first (red-proven against the
+  old layout); the two order-pinned tests flipped (header-tooltip title
+  sequence; cell-tooltip offsets [1, 0, 0] with views/stores in page order).
+  Trap: under mock_gtk every Gtk.TreeView() is ONE shared instance, so a
+  "this box does not pack that pane's table" assertion is unfalsifiable
+  until the test hands out distinct TreeViews.
+- Real-GTK lock: disks_dialogs_realized_check._check_disks_page_panes now
+  asserts the Enclosures box is the content box's first child and sits above
+  the other two titles (private Xvfb).
+- Visual probe (private Xvfb, seeded data, 1024x768, script removed):
+  Enclosures section ~159 px tall with 0 or 1 enclosure row, ~165 px with 2;
+  the Disk Inventory title lands ~180 px below the top of the page. With NO
+  enclosures the section still shows (title + description + empty table) —
+  unchanged behavior, new position; no auto-hide was requested.
+- Docs: gtk-gui.md Disks-tab intro names the sections top to bottom
+  (subsections left in place — Disk inventory first, it introduces the shared
+  selection law; user may ask for the subsections to follow the page);
+  testing.md gained the previously missing test_disks_dialogs_realized row
+  (pre-existing catalog gap, closed in-task) and its test_disks_page row
+  names the section order.
+- Housekeeping: the rc-4 entry above recorded suite pass counts — removed
+  (notes files carry no test counts).
+- ruff clean; affected suites green. Full suite run once at wrap-up: ONE
+  failure, test_alignment_realized (Performance page) in the full gate
+  only — root-caused to the realized-check Xvfb adoption race (new
+  PREEXISTING.md entry; unrelated to this change), suite green on a solo
+  rerun; bash layer green.
+  No VERSION/changelog touch. Uncommitted.

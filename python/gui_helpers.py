@@ -2744,6 +2744,8 @@ class TextViewSearch:
         self._rescan()
 
         if not self.matches:
+            self.current = -1
+            self.counter.set_text("0 matches")
             return
         if old_offset is not None:
             self.current = len(self.matches) - 1

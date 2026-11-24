@@ -157,6 +157,19 @@ WARN: Cannot verify counterpart - pool(s) offline: z22tb
 Deletion blocked for safety. Bring the counterpart pool(s) online to verify.
 ```
 
+A counterpart can also be **absent**: its pool is online but the dataset does
+not exist. No incremental chain can run through a missing dataset, so an
+absent counterpart never blocks deletion. This is the normal verdict for
+the property-manifest store, whose snapshots ride the backup chain while
+the store itself exists only at the destination. When every matched entry
+is absent, the snapshot is safe to delete; the absent dataset is reported
+once per run at `INFO`.
+
+If no fss entry matches a snapshot at all, deletion needs a person's answer:
+an interactive run asks for confirmation, while a scheduled or GUI prune
+keeps the snapshot. The warning that explains this logs once per dataset
+per run, not once per snapshot.
+
 For the full safety-check algorithm, see the
 [`zfscheckagainst` module reference](../commands-and-modules/modules.md#zfscheckagainst).
 

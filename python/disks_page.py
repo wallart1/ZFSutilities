@@ -323,12 +323,71 @@ def create_disks_page(app):
     page_box.set_margin_top(10)
     page_box.set_margin_bottom(10)
 
-    # --- Disk Inventory and Pool Topology sections ---
+    # --- Page content, top to bottom: Enclosures, Disk Inventory, Pool Topology ---
     inventory_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
     # Minimum height keeps the panes usable on short windows and drives the
     # page-level vertical scrollbar instead of letting the content be squashed.
     inventory_box.set_size_request(-1, DISKS_TOPOLOGY_MIN_HEIGHT)
     page_box.pack_start(inventory_box, True, True, 0)
+
+    # --- Enclosures section: USB/eSATA enclosures and their rate caps ---
+    enclosures_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    enclosures_box.set_size_request(-1, ENCLOSURES_MIN_HEIGHT)
+    inventory_box.pack_start(enclosures_box, False, False, 0)
+
+    enc_title = bold_label("Enclosures")
+    enclosures_box.pack_start(enc_title, False, False, 0)
+
+    enc_desc = Gtk.Label(
+        label="Multi-bay USB and eSATA enclosures discovered on this system. "
+        "A max I/O rate caps every paced transfer that touches the "
+        "enclosure's disks (backups, archives, clones, restores); when an "
+        "activity limit also applies, the lower one wins. Blank means "
+        "unlimited. ZFSutilities does not have a way to control the "
+        "absolute I/O rate to any device. This section controls only the "
+        "rate at which ZFSutilities scripts issue I/Os at the program level."
+    )
+    enc_desc.set_halign(Gtk.Align.START)
+    enc_desc.set_line_wrap(True)
+    enclosures_box.pack_start(enc_desc, False, False, 0)
+
+    app.enclosures_store = Gtk.ListStore(str, str, str, str, str, str)
+    app.enclosures_view = Gtk.TreeView(model=app.enclosures_store)
+    app.enclosures_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    app.enclosures_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(app.enclosures_view)
+    app.enclosures_view.get_selection().connect("changed", _on_enclosure_selection_changed, app)
+
+    enclosure_cols = [
+        (COL_E_NAME, "Name", 190, "Enclosure display name (config name or kind/location)."),
+        (COL_E_KIND, "Kind/Location", 150, "Connection kind and where the enclosure sits."),
+        (COL_E_DISKS, "Disks", 60, "Number of disks inside."),
+        (COL_E_POOLS, "Pools", 170, "Pools with disks inside this enclosure."),
+        (
+            COL_E_RATE,
+            "Max I/O Rate",
+            110,
+            ("Per-enclosure transfer cap for paced operations; 'unlimited' when no cap is set."),
+        ),
+    ]
+    for col_idx, title_text, width, header_tip in enclosure_cols:
+        renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
+        col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title_text, header_tip)
+        app.enclosures_view.append_column(col)
+
+    app.enable_treeview_copy(app.enclosures_view)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    # Offset 1: the unrendered id column precedes the visible ones.
+    attach_cell_tooltips(app.enclosures_view, app.enclosures_store, 1)
+
+    enclosures_scrolled = capped_treeview_scroll(app.enclosures_view)
+    setup_row_scroll(enclosures_scrolled, app.enclosures_view)
+    enclosures_box.pack_start(enclosures_scrolled, False, False, 0)
+
+    inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
     title = bold_label("Disk Inventory")
     inventory_box.pack_start(title, False, False, 0)
@@ -423,65 +482,6 @@ def create_disks_page(app):
     # Non-expanding: the table is only as tall as its rows (up to the
     # 20-row cap).
     inventory_box.pack_start(disks_scrolled, False, False, 0)
-
-    inventory_box.pack_start(Gtk.Separator(), False, False, 0)
-
-    # --- Enclosures section: USB/eSATA enclosures and their rate caps ---
-    enclosures_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-    enclosures_box.set_size_request(-1, ENCLOSURES_MIN_HEIGHT)
-    inventory_box.pack_start(enclosures_box, False, False, 0)
-
-    enc_title = bold_label("Enclosures")
-    enclosures_box.pack_start(enc_title, False, False, 0)
-
-    enc_desc = Gtk.Label(
-        label="Multi-bay USB and eSATA enclosures discovered on this system. "
-        "A max I/O rate caps every paced transfer that touches the "
-        "enclosure's disks (backups, archives, clones, restores); when an "
-        "activity limit also applies, the lower one wins. Blank means "
-        "unlimited. ZFSutilities does not have a way to control the "
-        "absolute I/O rate to any device. This section controls only the "
-        "rate at which ZFSutilities scripts issue I/Os at the program level."
-    )
-    enc_desc.set_halign(Gtk.Align.START)
-    enc_desc.set_line_wrap(True)
-    enclosures_box.pack_start(enc_desc, False, False, 0)
-
-    app.enclosures_store = Gtk.ListStore(str, str, str, str, str, str)
-    app.enclosures_view = Gtk.TreeView(model=app.enclosures_store)
-    app.enclosures_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
-    app.enclosures_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
-    enable_ctrl_click_deselect(app.enclosures_view)
-    app.enclosures_view.get_selection().connect("changed", _on_enclosure_selection_changed, app)
-
-    enclosure_cols = [
-        (COL_E_NAME, "Name", 190, "Enclosure display name (config name or kind/location)."),
-        (COL_E_KIND, "Kind/Location", 150, "Connection kind and where the enclosure sits."),
-        (COL_E_DISKS, "Disks", 60, "Number of disks inside."),
-        (COL_E_POOLS, "Pools", 170, "Pools with disks inside this enclosure."),
-        (
-            COL_E_RATE,
-            "Max I/O Rate",
-            110,
-            ("Per-enclosure transfer cap for paced operations; 'unlimited' when no cap is set."),
-        ),
-    ]
-    for col_idx, title_text, width, header_tip in enclosure_cols:
-        renderer = Gtk.CellRendererText()
-        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
-        col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
-        configure_treeview_column(col, width=width)
-        set_column_header_tooltip(col, title_text, header_tip)
-        app.enclosures_view.append_column(col)
-
-    app.enable_treeview_copy(app.enclosures_view)
-    # Cells ellipsize; the shared handler shows the full text on hover.
-    # Offset 1: the unrendered id column precedes the visible ones.
-    attach_cell_tooltips(app.enclosures_view, app.enclosures_store, 1)
-
-    enclosures_scrolled = capped_treeview_scroll(app.enclosures_view)
-    setup_row_scroll(enclosures_scrolled, app.enclosures_view)
-    enclosures_box.pack_start(enclosures_scrolled, False, False, 0)
 
     inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
@@ -1077,13 +1077,13 @@ def _on_topology_selection_changed(selection, app):
 
     A device node highlights that device, a vdev node highlights every device
     in the vdev, and the pool node highlights every device in the pool. Every
-    member resolves to its backing physical disk, so the tint lands on disk
-    rows, never on partition rows. The selection clears the rows selected in
-    the Disk Inventory and Enclosures panes (one selection per page), the
-    pool selector follows the pool containing the selection, and an empty
-    selection (or a node with no devices) restores the pool-wide highlight.
-    No pane ever selects a row in another pane; the correlation is teal
-    foreground text only.
+    member tints the row that is the member, kind for kind — a partition
+    device its partition row, a whole-disk device its disk row. The selection
+    clears the rows selected in the Disk Inventory and Enclosures panes (one
+    selection per page), the pool selector follows the pool containing the
+    selection, and an empty selection (or a node with no devices) restores
+    the pool-wide highlight. No pane ever selects a row in another pane; the
+    correlation is teal foreground text only.
     """
     if getattr(app, "_disks_syncing_selection", False):
         return
@@ -1315,17 +1315,16 @@ def _selected_disk_is_wipeable(app) -> bool:
 
 
 def _highlight_pool_disks(app, pool_name):
-    """Set the highlight flag on every disk row that belongs to *pool_name*.
+    """Set the highlight flag on every inventory row that belongs to *pool_name*.
 
-    A member that is itself a partition tints its parent disk, so the tint
-    always lands on a physical-disk row. Passing *pool_name* as ``None`` or a
-    pool not present in the cached data clears all highlights.
+    The tint lands on the row that is the member — a partition member tints
+    its partition row, a whole-disk member its disk row — matching the row
+    that carries the pool name in the Pools column. Passing *pool_name* as
+    ``None`` or a pool not present in the cached data clears all highlights.
     """
     data = app._disks_inventory_cache.get()
     if pool_name:
-        pool_member_paths = {
-            disk.parent_path or disk.path for disk in data.disks if pool_name in disk.pools
-        }
+        pool_member_paths = {disk.path for disk in data.disks if pool_name in disk.pools}
     else:
         pool_member_paths = set()
 
@@ -1339,8 +1338,9 @@ def _highlight_pool_disks(app, pool_name):
 def _highlight_enclosure_disks(app, enclosure_id: str) -> None:
     """Tint the enclosure's member disks and their topology devices.
 
-    Members resolve to whole-disk rows — a partition follows its parent
-    disk, mirroring _highlight_pool_disks — and the topology tint marks
+    An enclosure holds physical disks, so members resolve to whole-disk rows
+    even when their partitions carry pool names — unlike the pool and
+    topology tints, which land kind for kind — and the topology tint marks
     every device residing on a member disk across all pools, so the pools
     that hold them expand (see _apply_topology_expansion).
     """
@@ -1377,11 +1377,13 @@ def _topology_cell_highlight_func(column, renderer, model, tree_iter, data=None)
 def _topology_node_matches_disk(node_name: str, disk_path: str) -> bool:
     """Return True if topology node *node_name* is *disk_path* or resides on it.
 
-    Mirrors _path_matches_any_device in the opposite direction: a whole-disk
+    The inventory-to-topology direction keeps containment: a whole-disk
     inventory row matches its own leaf and any partition leaf (``/dev/sda``
-    matches ``/dev/sda1``; ``/dev/nvme0n1`` matches ``/dev/nvme0n1p1``), plus
-    basename and realpath equality for by-id leaf names. Non-device node
-    names (pool, vdev) never match.
+    matches ``/dev/sda1``; ``/dev/nvme0n1`` matches ``/dev/nvme0n1p1``),
+    while a partition row matches only its own leaf — unlike
+    _path_matches_any_device, which is strictly kind for kind. Basename and
+    realpath equality cover by-id leaf names. Non-device node names (pool,
+    vdev) never match.
     """
     if not isinstance(node_name, str) or not node_name.startswith("/dev/"):
         return False
@@ -1529,12 +1531,11 @@ def _topology_subtree_device_paths(model, tree_iter) -> set[str]:
 def _path_matches_any_device(row_path: str, device_paths: set[str]) -> bool:
     """Return True if inventory *row_path* is one of the topology *device_paths*.
 
-    Matches exact paths, basenames, realpath-resolved paths (so a by-id
-    topology leaf matches the kernel device node), and whole-disk prefixes —
-    a whole-disk inventory row matches a partition leaf (``/dev/sda`` matches
-    ``/dev/sda1``; ``/dev/nvme0n1`` matches ``/dev/nvme0n1p1``). The prefix
-    remainder must be digits or ``p``+digits so ``/dev/sda`` does not match
-    ``/dev/sdaa``.
+    Matches exact paths, basenames, and realpath-resolved paths (so a by-id
+    topology leaf matches the kernel device node). Kind for kind only: a
+    whole-disk row never matches a partition device and a partition row
+    never matches a whole-disk device — ``/dev/sda`` does not match
+    ``/dev/sda1`` in either direction.
     """
     if row_path in device_paths:
         return True
@@ -1543,10 +1544,6 @@ def _path_matches_any_device(row_path: str, device_paths: set[str]) -> bool:
     for dev in device_paths:
         if dev == row_path or os.path.basename(dev) == row_base:
             return True
-        if dev.startswith(row_path):
-            rest = dev[len(row_path) :]
-            if rest.isdigit() or (rest.startswith("p") and rest[1:].isdigit()):
-                return True
         try:
             if os.path.realpath(dev) == row_real:
                 return True
@@ -1555,18 +1552,18 @@ def _path_matches_any_device(row_path: str, device_paths: set[str]) -> bool:
     return False
 
 
-def _backing_disk_paths(app, device_paths) -> set[str]:
-    """Resolve topology device paths to the physical disks that back them.
+def _inventory_entry_paths(app, device_paths) -> set[str]:
+    """Resolve topology device paths to the inventory entries they are.
 
     Each cached inventory entry is indexed by its kernel path, that path's
-    realpath, and its by-id name; a hit maps to the entry's parent disk
-    (partitions carry ``parent_path``) or to the entry itself. A device the
-    inventory does not know (unplugged, mid-refresh) keeps its own path, so
-    the highlight fails open to the raw-path matching.
+    realpath, and its by-id name; a hit maps to the entry itself — a
+    partition leaf to its partition row, a whole-disk leaf to its disk row.
+    A device the inventory does not know (unplugged, mid-refresh) keeps its
+    own path, so the highlight fails open to the raw-path matching.
     """
     index: dict[str, str] = {}
     for disk in app._disks_inventory_cache.get().disks:
-        target = disk.parent_path or disk.path
+        target = disk.path
         keys = [disk.path]
         if disk.by_id:
             # Inventory by-id names are bare basenames while topology leaves
@@ -1591,12 +1588,13 @@ def _backing_disk_paths(app, device_paths) -> set[str]:
 
 
 def _highlight_topology_devices(app, device_paths):
-    """Highlight the physical-disk row backing each of *device_paths*.
+    """Highlight the inventory row of each of *device_paths*, kind for kind.
 
-    Every member resolves to its whole disk first (see _backing_disk_paths),
-    so the tint lands on disk rows, never on partition rows.
+    Every member resolves to its own entry (see _inventory_entry_paths), so a
+    partition device tints its partition row and a whole-disk device its disk
+    row — never the other kind.
     """
-    disk_paths = _backing_disk_paths(app, device_paths)
+    disk_paths = _inventory_entry_paths(app, device_paths)
     it = app.disks_store.get_iter_first()
     while it:
         path = app.disks_store.get_value(it, COL_D_NAME)

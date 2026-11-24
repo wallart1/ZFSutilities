@@ -278,10 +278,10 @@ test_checkagainst_sources_cleanly() {
             }
             source "$mydir/zfscheckagainst"
             checkagainst "pool/fs@snap" >/dev/null 2>&1 || true
-            # The no-eligible-entry branch touches its print-once marker
-            # keyed on this shell $PPID; remove it so the test leaves no
+            # The no-eligible-entry branch touches its print-once markers
+            # keyed on this shell $PPID; remove them so the test leaves no
             # /tmp litter (the zfsdelsnap exit cleanup is not in play here).
-            rm -f "/tmp/fssalreadyprinted.$PPID"
+            rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/canoentryprinted.$PPID"
             if [[ $(type -t checkagainst) == "function" ]]; then
                 echo FUNCTION_DEFINED
             else
@@ -301,6 +301,64 @@ test_checkagainst_sources_cleanly() {
 }
 
 test_checkagainst_sources_cleanly
+
+# ------------------------------------------------------------------
+# Test: delsnap's exit trap removes the no-eligible-entry marker
+# ------------------------------------------------------------------
+test_exit_trap_removes_noentry_marker() {
+    test_start "Exit trap removes the no-eligible-entry print-once marker"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { return 5; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    local output rc=0
+    output=$(
+        env mydir="$tmpdir" mydir_test="$tmpdir" old_mydir="$old_mydir" bash -c '
+            # Pretend a previous snapshot on this dataset already armed the
+            # per-dataset marker: both $PPID and $$ keyings must be swept
+            # when this shell exits through the delsnap exit trap.
+            echo "$$"   > "$mydir_test/inner_pid"
+            echo "$PPID" > "$mydir_test/inner_ppid"
+            touch "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$"
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
+                    return 0
+                fi
+                return 0
+            }
+            source "$old_mydir/bin/zfsdelsnap"
+            delsnap "pool@snap" "0"
+        ' </dev/null 2>&1
+    ) || rc=$?
+
+    local _ipid _ippid
+    _ipid=$(cat "$tmpdir/inner_pid")
+    _ippid=$(cat "$tmpdir/inner_ppid")
+    if [[ $rc -eq 5 \
+        && ! -f "/tmp/canoentryprinted.$_ipid" \
+        && ! -f "/tmp/canoentryprinted.$_ippid" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc; markers not swept by the exit trap. output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_exit_trap_removes_noentry_marker
 
 # ------------------------------------------------------------------
 # Test: User holds block deletion when releaseholds is enabled

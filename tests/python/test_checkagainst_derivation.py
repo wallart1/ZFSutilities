@@ -207,10 +207,17 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
             "offsite": {"steps": []},
         }
         backup_derived, _ = derive_checkagainst_entries(config)
-        self.assertEqual(len(backup_derived), 2)
+        # Three unique rows (forward, reverse, and the manifest store —
+        # poolB/a/poolA/a does not cover poolB/a/poolA/zfsutilities-manifests)
+        # from six raw emissions proves the dedup.
+        self.assertEqual(len(backup_derived), 3)
 
     def test_reverse_row_computes_non_null_counterpart(self):
-        """When dest is just a pool root, reverse row still yields a valid path."""
+        """When dest is just a pool root, reverse row still yields a valid path.
+
+        The step's manifest store is a sibling of the mapped dataset, so it
+        gets its own row naming the never-existing source-side counterpart.
+        """
         config = {
             "backup": {
                 "variables": {"label": "dailybackup"},
@@ -232,6 +239,72 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
                 {
                     "source_root": "fivebays/threeamigos/proxmox",
                     "dest_root": "threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
+                    "label": "dailybackup",
+                },
+            ],
+        )
+
+    def test_manifest_store_row_for_sub_pool_steps(self):
+        """Sub-pool steps emit a store row; pool-level steps need none.
+
+        Production shape: the reverse row of a pool-level step (NVME1)
+        already covers its store, while leaf-mapped steps leave the store
+        (a sibling of the mapped datasets) uncovered without its own row.
+        """
+        config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
+                    {"active": True, "source": "threeamigos/zfsutilities", "dest": "fivebays"},
+                    {"active": True, "source": "NVME1", "dest": "fivebays"},
+                ],
+            },
+            "offsite": {"steps": []},
+        }
+        backup_derived, _ = derive_checkagainst_entries(config)
+        store_rows = [
+            row for row in backup_derived if row["source_root"].endswith("/zfsutilities-manifests")
+        ]
+        self.assertEqual(
+            store_rows,
+            [
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
+                    "label": "dailybackup",
+                },
+            ],
+        )
+
+    def test_store_under_dest_root_needs_no_row(self):
+        """A store already covered by the reverse row's source root is skipped."""
+        config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "NVME1", "dest": "fivebays"},
+                ],
+            },
+            "offsite": {"steps": []},
+        }
+        backup_derived, _ = derive_checkagainst_entries(config)
+        self.assertEqual(
+            backup_derived,
+            [
+                {
+                    "source_root": "NVME1",
+                    "dest_root": "fivebays/NVME1",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/NVME1",
+                    "dest_root": "NVME1",
                     "label": "dailybackup",
                 },
             ],
@@ -299,6 +372,11 @@ class TestRefreshCheckagainstDerived(unittest.TestCase):
                 {
                     "source_root": "fivebays/threeamigos/proxmox",
                     "dest_root": "threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
                     "label": "dailybackup",
                 },
             ],

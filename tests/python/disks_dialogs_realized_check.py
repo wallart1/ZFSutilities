@@ -14,7 +14,9 @@ dialog window itself carries the overflow.  Two further cases run the
 real Migrate Pool dialog resized short (the geometry where the dialog
 used to squeeze the new-disks picker toward its floor instead of
 scrolling) and the real Disks page's three panes (every renderer must
-END-ellipsize and every view must carry the cell-tooltip window).
+END-ellipsize and every view must carry the cell-tooltip window; the
+sections must stack Enclosures first, above the Disk Inventory and the
+Pool Topology).
 
 It runs as a child process on purpose: binding the GUI layer to real GTK
 inside the pytest process would poison the mock-bound module caches the
@@ -252,7 +254,9 @@ def _check_disks_page_panes():
     shown window: every column's header button — which spans the full
     heading width, unlike the header label GTK seats inside it at natural
     text width — must carry the heading tooltip, so hovering any part of
-    a heading explains the field.
+    a heading explains the field. The realized page must also stack its
+    sections in order: Enclosures is the first section of the page
+    content, above the Disk Inventory and the Pool Topology.
     """
     from test_support import import_gui_fresh
 
@@ -333,9 +337,44 @@ def _check_disks_page_panes():
                 f"{name} first column heading: label strip ({first_label_w}px) already "
                 f"covers the button ({first_button_w}px) — dead-zone law no longer holds"
             )
+
+        # Section order: Enclosures is the first section of the page. The
+        # bold section titles are Gtk.Labels carrying bold markup. The Disk
+        # Inventory and Pool Topology titles sit directly in the page
+        # content box; Enclosures is a box of its own inside it.
+        def _section_title(text):
+            label = _walk(
+                window,
+                lambda w: isinstance(w, dp.Gtk.Label) and w.get_label() == f"<b>{text}</b>",
+            )
+            assert label is not None, f"'{text}' section title not found"
+            return label
+
+        texts = ("Enclosures", "Disk Inventory", "Pool Topology")
+        titles = {text: _section_title(text) for text in texts}
+        enclosures_box = titles["Enclosures"].get_parent()
+        content_box = titles["Disk Inventory"].get_parent()
+        assert content_box is titles["Pool Topology"].get_parent(), (
+            "Disk Inventory and Pool Topology titles are not packed in the same box"
+        )
+        assert enclosures_box.get_parent() is content_box, (
+            "Enclosures section box is not packed in the page content box"
+        )
+        children = content_box.get_children()
+        assert children and children[0] is enclosures_box, (
+            "Enclosures is not the first section of the page content"
+        )
+        # Same parent, so the allocations compare directly.
+        inventory_y = titles["Disk Inventory"].get_allocation().y
+        topology_y = titles["Pool Topology"].get_allocation().y
+        assert enclosures_box.get_allocation().y < inventory_y, (
+            "Enclosures section does not sit above the Disk Inventory"
+        )
+        assert inventory_y < topology_y, "Disk Inventory does not sit above the Pool Topology"
         print(
             "PASS Disks-page panes: all three views END-ellipsize with cell "
-            "tooltips; every full-width header button carries the heading tooltip"
+            "tooltips; every full-width header button carries the heading tooltip; "
+            "Enclosures is the first section, above Disk Inventory and Pool Topology"
         )
     finally:
         window.destroy()
