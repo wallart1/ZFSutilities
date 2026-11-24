@@ -449,12 +449,19 @@ class TestConvergeSchedulerFiles(unittest.TestCase):
         # so the mtimes stay pinned where the test put them.  The runner
         # path is pinned because get_profile_runner_path() resolves its
         # caller's directory, which differs between cron_manager and this
-        # file in the repo layout.
+        # file in the repo layout; the backup-settings path is pinned for
+        # the same reason (find_script resolves the caller's layout too).
         with temp_config_dir():
             self._write_active_profile()
-            with patch.object(cron_manager, "get_profile_runner_path", return_value="/runner.py"):
+            with (
+                patch.object(cron_manager, "get_profile_runner_path", return_value="/runner.py"),
+                patch.object(cron_manager, "find_script", return_value="/backup-settings"),
+            ):
                 paths_cfg = get_paths_config({}, persist=False)
-                cron_manager.write_cron_file(list_profiles(), "/runner.py", paths_cfg["cron_log"])
+                settings_line = cron_manager.build_settings_backup_line({}, paths_cfg["cron_log"])
+                cron_manager.write_cron_file(
+                    list_profiles(), "/runner.py", paths_cfg["cron_log"], settings_line
+                )
                 cron_manager.write_logrotate_file(paths_cfg)
                 os.utime(cron_manager.CRON_FILE, (10**6, 10**6))
                 os.utime(paths_cfg["logrotate_file"], (10**6, 10**6))
@@ -478,10 +485,27 @@ class TestConvergeSchedulerFiles(unittest.TestCase):
                 self.assertEqual(f.read(), build_logrotate_content(paths_cfg))
 
     def test_missing_files_not_created_without_active_profiles(self):
-        # A host with no scheduled profiles (e.g. tweety) gains no drop-ins.
+        # A host with no scheduled profiles but the daily settings backup
+        # on (the default) gains the cron drop-in for that line alone — the
+        # logrotate drop-in still needs an active profile.
         with temp_config_dir():
             paths_cfg = get_paths_config({}, persist=False)
-            actions = cron_manager.converge_scheduler_files({})
+            with patch.object(cron_manager, "find_script", return_value="/backup-settings"):
+                actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [("cron", "rewritten")])
+            with open(cron_manager.CRON_FILE) as f:
+                content = f.read()
+            self.assertIn("17 0 * * * root mkdir -p", content)
+            self.assertIn("/backup-settings 2>&1", content)
+            self.assertNotIn("profile_runner", content)
+            self.assertFalse(os.path.exists(paths_cfg["logrotate_file"]))
+
+    def test_no_drop_ins_when_daily_backup_disabled(self):
+        # A host that opted out of the daily settings backup and has no
+        # scheduled profiles gains no drop-ins at all.
+        with temp_config_dir():
+            paths_cfg = get_paths_config({}, persist=False)
+            actions = cron_manager.converge_scheduler_files({"settings_backup": {"daily": False}})
             self.assertEqual(actions, [])
             self.assertFalse(os.path.exists(cron_manager.CRON_FILE))
             self.assertFalse(os.path.exists(paths_cfg["logrotate_file"]))
@@ -496,7 +520,7 @@ class TestConvergeSchedulerFiles(unittest.TestCase):
                 }
             )
             paths_cfg = get_paths_config({}, persist=False)
-            actions = cron_manager.converge_scheduler_files({})
+            actions = cron_manager.converge_scheduler_files({"settings_backup": {"daily": False}})
             self.assertEqual(actions, [])
             self.assertFalse(os.path.exists(cron_manager.CRON_FILE))
             self.assertFalse(os.path.exists(paths_cfg["logrotate_file"]))
@@ -527,9 +551,16 @@ class TestConvergeSchedulerFiles(unittest.TestCase):
                 f.write("# stale hand-written rotation\n/var/log/old.log {\n  monthly\n}\n")
             # Prime the cron file so only the logrotate half changes.  The
             # runner path is pinned to match converge_scheduler_files' view
-            # (get_profile_runner_path resolves its caller's directory).
-            with patch.object(cron_manager, "get_profile_runner_path", return_value="/runner.py"):
-                cron_manager.write_cron_file(list_profiles(), "/runner.py", paths_cfg["cron_log"])
+            # (get_profile_runner_path resolves its caller's directory), and
+            # so is the backup-settings path (find_script ditto).
+            with (
+                patch.object(cron_manager, "get_profile_runner_path", return_value="/runner.py"),
+                patch.object(cron_manager, "find_script", return_value="/backup-settings"),
+            ):
+                settings_line = cron_manager.build_settings_backup_line({}, paths_cfg["cron_log"])
+                cron_manager.write_cron_file(
+                    list_profiles(), "/runner.py", paths_cfg["cron_log"], settings_line
+                )
                 actions = cron_manager.converge_scheduler_files({})
             self.assertEqual(actions, [("logrotate", "rewritten")])
             with open(paths_cfg["logrotate_file"]) as f:

@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 32
+CONFIG_VERSION = 33
 
 
 def _migrate_1_to_2(config):
@@ -444,6 +444,21 @@ def _migrate_31_to_32(config):
     return config
 
 
+def _migrate_32_to_33(config):
+    """Seed the settings_backup section (pool-resident settings backups).
+
+    Adds the retention (days) and the daily automatic backup's schedule
+    keys consumed by backup-settings and cron_manager's settings line.
+    User-set values are preserved; only missing keys are seeded. Lazy
+    import: config_core imports this module at load time.
+    """
+    from config_core import get_settings_backup_config
+
+    get_settings_backup_config(config, persist=False)
+    config["config_version"] = 33
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -476,6 +491,7 @@ MIGRATIONS = [
     _migrate_29_to_30,
     _migrate_30_to_31,
     _migrate_31_to_32,
+    _migrate_32_to_33,
 ]
 
 

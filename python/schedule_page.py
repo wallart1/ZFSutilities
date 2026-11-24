@@ -17,6 +17,7 @@ import cron_manager
 from command_builders import _PV_RATE_RE
 from config_core import get_paths_config
 from cron_manager import (
+    build_settings_backup_line,
     format_next_runs,
     generate_cron_line,
     interpret_cron,
@@ -873,8 +874,9 @@ def _regenerate_cron(app):
     profiles = list_profiles()
     runner_path = get_profile_runner_path()
     paths_cfg = get_paths_config(app.config)
+    settings_line = build_settings_backup_line(app.config, paths_cfg["cron_log"])
     try:
-        write_cron_file(profiles, runner_path, paths_cfg["cron_log"])
+        write_cron_file(profiles, runner_path, paths_cfg["cron_log"], settings_line)
         write_logrotate_file(paths_cfg)
     except OSError as e:
         show_error_dialog(app, f"Failed to update scheduler configuration:\n{e}")

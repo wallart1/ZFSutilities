@@ -87,11 +87,40 @@ The menu bar runs across the top of the window and contains four menus:
     where you configure desktop and email notifications for finished runs.
   - **Documentation Editor...** — chooses the external editor used when you
     click the pencil icon in the documentation viewer.
+  - **Backup Settings...** — copies the settings files to every online pool
+    now (see [Settings backup and restore](#settings-backup-and-restore)).
+  - **Restore Settings...** — brings a pool-resident settings backup back
+    onto this host.
 - **Help**
   - **Documentation** — opens the built-in documentation viewer.
   - **Help with this page** — opens the viewer at the section for the currently
     selected tab.
   - **About** — shows the version, license, and credits.
+
+### Settings backup and restore
+
+**Settings → Backup Settings...** and **Settings → Restore Settings...**
+manage copies of the settings on the pools themselves. The settings — the
+main config, the backup profiles, and the administrator files under
+`/etc/zfsutilities` — normally live on the OS disk. If that disk is lost,
+the pools survive but the settings do not. These menu items put dated
+copies where a pool loss cannot take them.
+
+**Backup Settings...** asks for confirmation, then runs
+[`backup-settings`](../commands-and-modules/commands.md#backup-settings):
+one dated copy into `<pool>/zfsutilities/settings-backups/` on every
+online pool. Copies are kept for a configurable number of days (35 by
+default), and older ones are pruned automatically. The same backup also
+runs once a night by itself — the scheduler's cron drop-in carries a
+daily line for it — so the copies stay fresh without you.
+
+**Restore Settings...** lists the available backups (timestamp, pool, and
+file count), asks you to choose one, and warns before overwriting
+anything. The restore first stages your current settings aside — nothing
+is lost silently — then copies the chosen backup's files back. Profiles
+merge: a profile that exists only on disk is kept, and one that exists in
+both places takes the backup's copy. After a successful restore the GUI
+reloads its configuration; restart it to refresh every page for certain.
 
 ### Notifications dialog
 

@@ -2597,6 +2597,17 @@ def create_menu_bar(app):
     editor_item.connect("activate", app.on_set_docs_editor)
     settings_menu.append(editor_item)
 
+    settings_sep = Gtk.SeparatorMenuItem()
+    settings_menu.append(settings_sep)
+
+    backup_settings_item = Gtk.MenuItem(label="Backup Settings...")
+    backup_settings_item.connect("activate", app.on_backup_settings)
+    settings_menu.append(backup_settings_item)
+
+    restore_settings_item = Gtk.MenuItem(label="Restore Settings...")
+    restore_settings_item.connect("activate", app.on_restore_settings)
+    settings_menu.append(restore_settings_item)
+
     help_menu = Gtk.Menu()
     help_item = Gtk.MenuItem(label="Help")
     help_item.set_submenu(help_menu)

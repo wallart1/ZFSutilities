@@ -1594,3 +1594,113 @@ FULL-FUNCTION tests against it, and manage the world lifecycle
 - GREEN: run-20261124-052832 (172 steps, 158 pass / 0 fail / 2 skip,
   lab auto-destroyed) — both full-function legs + checkpoint/restore
   cycle live-proven.
+
+## 2026-11-24 (pub3) — Pool-resident settings backups (backup-settings + GUI menu pair)
+
+User request: back up ALL the ZFSutilities settings into the
+<pool>/zfsutilities datasets (the iscsi-state.json/node.conf pattern),
+keep copies 35 days, and add Settings-menu Backup/Restore items.
+User decisions taken at plan time: recurrence = a daily automatic line
+in the product's own cron drop-in (plus the manual menu items); the
+root-only smtp-credentials.json IS included (0600 preserved on the
+pools, same stance as iscsi-state.json).
+
+- bin/backup-settings (new): dated copies into
+  <pool>/zfsutilities/settings-backups/<YYYYmmddTHHMMSS>/ with
+  manifest.json (name/mode/bytes); writes to every online pool
+  (two-node = pool_list, single-node = all online); dataset created on
+  first use; prune at settings_backup.retention_days (default 35,
+  env SETTINGS_BACKUP_RETENTION_DAYS override, ≥1 enforced);
+  --list (ts|pool|files, newest first) and --restore <ts> (stages the
+  current settings to <state>/settings-pre-restore/<run-ts>/ first,
+  restores to canonical modern paths, profiles MERGE); flock
+  .settings_backup.lock serializes runs. iscsi-state.json deliberately
+  NOT in the set (its own freshness machinery + degraded-state fence).
+- state_dataset_mountpoint moved bin/export-iscsi-state →
+  lib/iscsi-lib.sh (shared pool-resident-files section) so both
+  writers land datasets the same way; export suite untouched-green.
+- Config: settings_backup {retention_days 35, daily true, daily_hour 0,
+  daily_minute 17} + get_settings_backup_config accessor;
+  CONFIG_VERSION 32→33 migration (config-key migration law).
+- cron_manager: build_settings_backup_line (abs path via find_script,
+  stamper + %-escape law, out-of-range schedule falls back to 00:17);
+  build_cron_content/write_cron_file take settings_line;
+  converge + schedule_page._regenerate_cron pass it. Drop-in creation
+  gate is now has_active OR daily-on (a daily host with no profiles
+  still gets the file) — three TestConvergeSchedulerFiles tests updated
+  to that contract, one new no-drop-ins-when-disabled test.
+- GUI: Settings menu gains separator + "Backup Settings..." /
+  "Restore Settings..." (gui_helpers.create_menu_bar) wired to
+  on_backup_settings / on_restore_settings (zfsutilities_gui.py,
+  _run_settings_script relays output lines verbatim; restore picker =
+  ComboBoxText + destructive confirm; on success self.config =
+  load_config() + page refresh + restart note — the
+  config-resurrection read-merge-write law is why the reload matters).
+- Tests: tests/test-backup-settings (bash, mirrors the export-iscsi
+  harness; subshell laws: create-log to a FILE, fresh pools root per
+  test, main only in $(...)); test_settings_actions.py (new python,
+  real-module eviction fixture copied from test_zfsutilities_gui;
+  patch-restore pitfall → asserts on mocks captured inside the patch
+  scope; TimeoutExpired needs the REAL class bound onto the patched
+  module mock).
+- Docs: commands.md entry, gtk-gui.md menu + "Settings backup and
+  restore" section, data-structures.md "Settings backups" layout
+  section, messages/index.md rows (script under Pool and System
+  Maintenance; GUI rows under zfsutilities_gui), GLOSSARY "settings
+  backup".
+- Full-suite fallout fixed after the first end run: universe.tsv gained
+  the cli-backup-settings row (documented commands must be sampled —
+  test_survey_sample law), requirements.manifest gained the gi entry for
+  test_settings_actions.py, write_cron_file now makedirs the drop-in's
+  parent (isolated/redirected layouts; the daily line means no-profile
+  hosts converge a drop-in too), and TestCronOutputSilencing seeds a
+  daily-off config (hermetic to the new default; the tests pin output
+  silencing, not backup policy). Final full run: all 116 suites green.
+
+## 2026-11-24 (pub3) — campaign-plan / repair-loop / requirements-register docs: re-request verdict + glossary
+
+User re-requested the three documentation items (items 1–3 of the
+2026-11-23/24 direction above), quoting the pre-9b9b3ff sentences.
+Verdict: all three were already documented and committed in 9b9b3ff and
+the working tree matched. The old sentences live on in every DEPLOYED
+tree (dev host, stewie, tweety — 0.143.0) and in pub/main (54cd0c0),
+all of which predate the lane commit — that is what was being read.
+Audit of the committed sections against journeys/README.md,
+FINDINGS.md, REQUIREMENTS.md, repair-plans/README.md: every claim
+holds; sections left word-for-word.
+
+- GLOSSARY.md: five entries added (campaign (campaign plan), finding,
+  journey, repair plan, requirements register) — the terms those
+  sections use, none of which the glossary defined. Prose style,
+  alphabetical positions, in-page anchors.
+- Stray-file cleanup (user-approved): 9b9b3ff had accidentally
+  committed `current` at the repo root (four lines of captured test
+  stdout from the restage-fallback block of test-itf-survey-journey).
+  Deleted from the working tree together with its two empty siblings
+  `world-staged` and `full-leg-product` (2026-11-23 23:37/23:40); the
+  `current` removal was then committed on the user's confirmation as
+  9f4bb5a (single path). PREEXISTING entry removed on fix.
+- PREEXISTING: one new entry filed and left open — FINDINGS.md's
+  stale "No rows remain" sentence over a non-empty table, plus its
+  status chain listing `accepted` as a step after `verified`.
+- Validation: glossary order/width/anchor checks + docs-integrity
+  suite. Full suite skipped at the user's choice (prose-only change;
+  no test reads GLOSSARY.md).
+- Disclosed, not changed: one ~50-word sentence in the campaign-plan
+  bullet of itf-coverage.md exceeds the writing-rules target — left
+  alone under notice 16 (offered a split into a list).
+- Root audit (user item, mid-session): every entry directly under the
+  repository root checked — all referenced and in place (spikes/ is the
+  documented home of the charting.md spike scripts; .dockerignore pairs
+  with .devcontainer/Dockerfile; the published 0.143.0 tree shipped no
+  stray). No further misplaced file and no code change needed.
+- Root-litter guard (user-approved plan): test_docs_integrity.py gains
+  `_untracked_root_entries` + TestRepositoryRoot — the live guard
+  (skips with git's message when git cannot enumerate the tree), a
+  fixture-repo self-test, and the outside-a-work-tree case. Red-proofed:
+  a temporary root file and folder fail the live test by name; green
+  again once removed. testing.md: coverage row + `git` dependency
+  bullet. LAW for every session: a new or private file directly under
+  the root must be staged, moved, or git-ignored, or the gate goes red
+  — and a hand-debug redirect must never write into the repository
+  root (that is how `current` and its two siblings were born).

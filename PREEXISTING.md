@@ -92,3 +92,22 @@ behavior matches for the asserted features. New tests must source
 does). Discovered during the log hostname-tag work (2026-11-18).
 
 ---
+
+## FINDINGS.md: stale "No rows remain" sentence over a non-empty table
+
+The narrative in `tests/integrated/FINDINGS.md` still ends "No rows
+remain; the table below is empty until the next journey files a
+finding." — but the table below it holds rows (F-052, F-053, F-054 at
+9b9b3ff; pub main carries the same mismatch with F-052 alone). The
+sentence dates from the 0.141.0 release prune (6a33526, 2026-11-12);
+the F-052 row landed in 23770ae (2026-11-23) without updating it. The
+same file's status line adds a second defect: `open → planned → fixed →
+verified (rerun green) → accepted (user waives)` presents the owner's
+waiver as a step after verification, contradicting the file's own
+"exactly ONE terminal state" rule and the developer-guide page, which
+lists `accepted` as a separate terminal state. Fix: state the pruning
+rule without claiming the table is empty, and detach `accepted` from
+the chain. Discovered during the campaign-plan documentation check
+(2026-11-24).
+
+---

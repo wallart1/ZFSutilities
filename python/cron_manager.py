@@ -10,9 +10,9 @@ import shlex
 from datetime import datetime, timedelta
 
 from backup_config import log_msg
-from config_core import get_paths_config
+from config_core import get_paths_config, get_settings_backup_config
 from logrotate_manager import build_logrotate_content, write_logrotate_file
-from path_utils import get_profile_runner_path
+from path_utils import find_script, get_profile_runner_path
 from paths import get_cron_file_path, get_profile_lock_dir
 from profile_manager import list_profiles
 
@@ -46,10 +46,13 @@ _HEADER = (
 )
 
 
-def build_cron_content(profiles, runner_path, cron_log):
+def build_cron_content(profiles, runner_path, cron_log, settings_line=None):
     """Build the full cron drop-in content for the given profiles.
 
-    Inactive profiles are skipped, matching write_cron_file's output.
+    Inactive profiles are skipped, matching write_cron_file's output.  The
+    optional *settings_line* (from build_settings_backup_line) is appended
+    after the profile lines so the daily settings backup rides the same
+    drop-in.
     """
     lines = [_HEADER]
     for profile in profiles:
@@ -58,20 +61,65 @@ def build_cron_content(profiles, runner_path, cron_log):
         line = generate_cron_line(profile, runner_path, cron_log)
         if line:
             lines.append(line + "\n")
+    if settings_line:
+        lines.append(settings_line + "\n")
     return "".join(lines)
 
 
-def write_cron_file(profiles, runner_path, cron_log):
+def build_settings_backup_line(config, cron_log):
+    """Build the daily backup-settings crontab line, or None when disabled.
+
+    The line runs the backup-settings script once a night at the
+    configured time (settings_backup.daily_hour/daily_minute, default
+    00:17 — off the top of the hour so profile schedules never collide
+    with it) through the same timestamp stamper into the cron log.  The
+    script path is absolute: the drop-in's PATH does not include the
+    deployment bin directory.  The command portion is % escaped like
+    every generated line (crontab(5)).
+    """
+    section = get_settings_backup_config(config, persist=False)
+    if not section.get("daily", False):
+        return None
+    try:
+        minute = int(section.get("daily_minute", 17))
+        hour = int(section.get("daily_hour", 0))
+    except (TypeError, ValueError):
+        log_msg("WARN: settings_backup schedule is not numeric; using default 00:17")
+        minute, hour = 17, 0
+    if not 0 <= minute <= 59 or not 0 <= hour <= 23:
+        log_msg(f"WARN: settings_backup schedule {hour}:{minute:02d} out of range; using 00:17")
+        minute, hour = 17, 0
+    script = find_script("backup-settings")
+    if not script:
+        log_msg("WARN: backup-settings not found; daily settings backup line skipped")
+        return None
+    log_dir = shlex_quote(os.path.dirname(cron_log))
+    quoted_log = shlex_quote(cron_log)
+    command = (
+        f"mkdir -p {log_dir} && {shlex_quote(script)} 2>&1 | {_TIMESTAMP_STAMPER} >> {quoted_log}"
+    )
+    return f"{minute} {hour} * * * root {_escape_cron_percent(command)}"
+
+
+def write_cron_file(profiles, runner_path, cron_log, settings_line=None):
     """Regenerate the cron drop-in file from scratch.
 
     Args:
         profiles: list of profile dicts
         runner_path: absolute path to profile_runner.py
         cron_log: absolute path to the cron output log
+        settings_line: optional daily backup-settings line (see
+            build_settings_backup_line)
     """
-    content = build_cron_content(profiles, runner_path, cron_log)
+    content = build_cron_content(profiles, runner_path, cron_log, settings_line)
     try:
         os.makedirs(PROFILE_LOCK_DIR, exist_ok=True)
+        # The drop-in's parent (normally /etc/cron.d) exists on any host
+        # with cron installed, but an isolated/redirected layout may point
+        # CRON_FILE at a directory tree that does not exist yet — and the
+        # daily settings line means a host with no active profiles still
+        # converges a drop-in, so the writer must be able to create it.
+        os.makedirs(os.path.dirname(CRON_FILE) or ".", exist_ok=True)
         with open(CRON_FILE, "w") as f:
             f.write(content)
         os.chmod(CRON_FILE, 0o644)
@@ -119,12 +167,16 @@ def converge_scheduler_files(config):
     paths_cfg = get_paths_config(config, persist=False)
     runner_path = get_profile_runner_path()
     has_active = any(profile.get("active", False) for profile in profiles)
+    settings_line = build_settings_backup_line(config, paths_cfg["cron_log"])
     actions = []
 
-    expected_cron = build_cron_content(profiles, runner_path, paths_cfg["cron_log"])
-    if _content_differs(CRON_FILE, expected_cron, has_active):
+    expected_cron = build_cron_content(profiles, runner_path, paths_cfg["cron_log"], settings_line)
+    # A daily-enabled settings backup needs the drop-in even when no
+    # profile is active yet.
+    create_cron = has_active or settings_line is not None
+    if _content_differs(CRON_FILE, expected_cron, create_cron):
         try:
-            write_cron_file(profiles, runner_path, paths_cfg["cron_log"])
+            write_cron_file(profiles, runner_path, paths_cfg["cron_log"], settings_line)
             actions.append(("cron", "rewritten"))
         except OSError as e:
             log_msg(f"WARN: Cron drop-in not converged: {e}")

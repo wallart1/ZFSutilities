@@ -4,8 +4,10 @@
 # parse_target_luns, parse_target_acls, discover_zvols, is_vm_backstore_name),
 # ACL MappedLUN binding after LUN (re)creation (iscsi_grant_lun_to_acls), the
 # detection helpers (detect_stale_lio_files, detect_manifest_without_zvols,
-# detect_vm_refs_missing_live, detect_pool_identity), and the
-# teardown/rebuild helpers used by zfsdelfs and zfs-send-receive.
+# detect_vm_refs_missing_live, detect_pool_identity), the
+# teardown/rebuild helpers used by zfsdelfs and zfs-send-receive, and the
+# pool-resident zfsutilities dataset helpers (state_dataset_mountpoint,
+# newest_iscsi_state_map).
 #
 # This library is sourced at the file level by:
 #   - zfsdelfs, to tear down iSCSI LUNs before destroying VM zvols.
@@ -13,6 +15,8 @@
 #   - repair-iscsi-luns and export-iscsi-state, for the discovery helpers.
 #   - setup-iscsi-targets and reconcile-iscsi-state, for the discovery and
 #     detection helpers.
+#   - backup-settings, for state_dataset_mountpoint (the settings copies
+#     live in the same <pool>/zfsutilities datasets as the state map).
 #   - iscsi-recover-encrypted-luns and iscsi-add-encrypted-luns, to grant a
 #     (re)created LUN to every existing ACL initiator on its target.
 #   - check-prerequisites (--two-node, with ISCSI_LIB_NO_BOOTSTRAP=1), for
@@ -475,6 +479,36 @@ discover_zvols() {
 
 # File name of the state map inside each <pool>/zfsutilities dataset.
 : "${ISCSI_STATE_FILENAME:=iscsi-state.json}"
+
+# Echo the mountpoint of <pool>/zfsutilities, creating the dataset on first
+# use. Prints nothing and returns 1 when the dataset cannot be created or
+# resolved to a usable mountpoint. Shared by every writer of pool-resident
+# zfsutilities files (export-iscsi-state's state map, backup-settings' dated
+# settings copies) so they all land in the same dataset the same way.
+state_dataset_mountpoint() {
+    local pool="$1" ds mnt
+    ds="${pool}/zfsutilities"
+
+    if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
+        if ! zfs create "$ds" >/dev/null 2>&1; then
+            log_msg "WARN: Could not create dataset ${ds} — pool ${pool} skipped"
+            return 1
+        fi
+        log_msg "INFO:   ✓ Created dataset ${ds} (first use)"
+    fi
+
+    mnt=$(zfs list -H -o mountpoint "$ds" 2>/dev/null || true)
+    if [[ -z "$mnt" || "$mnt" == "-" || ! -d "$mnt" ]]; then
+        # Not an alarm: a configured pool whose state dataset is currently
+        # unmounted is a standing condition (backup pools spend most of
+        # their time this way); pool-resident files still reach every pool
+        # that can take them.
+        log_msg "INFO: Dataset ${ds} has no usable mountpoint (${mnt:-none}) —" \
+            "pool ${pool} skipped"
+        return 1
+    fi
+    printf '%s\n' "$mnt"
+}
 
 # Print the string value of a top-level field in a JSON file (empty on any
 # error). python3 is already a project-wide dependency (safe-iscsi-save, GUI).

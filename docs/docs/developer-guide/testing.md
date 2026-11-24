@@ -511,7 +511,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_disks_page` | Disks tab UI, including topology-selection highlighting in the inventory and the managed-pool Pools-cell scope (the wipe fence keeps full membership on both sides) |
 | `test_profile_dialogs` | Apply Profile picker treeview/dialog/execution, Rewrite Data gating plus its truthful completion summary (results-file capture/count plumbing, the rc=0 matrix — files-rewritten count, rewrote-nothing, summary-unavailable/incomplete, datasets missing a summary — and results/capture cleanup), the generated rewrite script really executed against a stub `zfs` (count, no-op, rc propagation, mount/unmount), workload profile manager/editor (driven from the Datasets page); Add/Recall schedule-profile dialogs and duplicate-name overwrite handling |
 | `test_disks_page_growth_buttons` | Disks tab pool-growth button sensitivity gating (Add Data Vdev, Expand Vdev, Replace, Detach, Add Infra Vdev, Migrate Pool): compute-host, runner-busy, tooltip precedence; Detach's mirror-vdev selection gate (enabled for a mirror member/group or no selection, disabled otherwise) |
-| `test_docs_integrity` | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability; AGENTS.md repo-relative path and `Branch:` reference validation |
+| `test_docs_integrity` | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability; AGENTS.md repo-relative path and `Branch:` reference validation; repository-root litter detection (untracked, non-ignored entries directly under the root) |
 | `test_docs_viewer` | Standalone documentation viewer launcher |
 | `test_feature_config` | Per-feature config getters/setters, snapshot name generation, checkagainst entry merge, workload and pool profile quintets/immutability, and the managed-pool scope helpers with endpoint parsing (placeholders, remotes, absolute paths) |
 | `test_file_locking` | Advisory flock helpers |
@@ -587,6 +587,8 @@ pytest for older invocations.
   `python3 -m pip install -r requirements-dev.txt`.
 - `pyyaml` — required only for `test_docs_integrity` (parses `mkdocs.yml`).
   Install with `python3 -m pip install pyyaml`.
+- `git` — required only for `test_docs_integrity` (branch lookups, ignore
+  checks, and the repository-root litter guard).
 - `gi` — the GTK tests mock `gi.repository` so no display server is needed.
 
 ### Running Python Suites Directly

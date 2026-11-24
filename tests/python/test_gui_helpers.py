@@ -861,7 +861,8 @@ class TestCreateMenuBar(unittest.TestCase):
             self.assertIn(("activate", handler, state_key), connect_args)
 
     def test_settings_menu_holds_notifications_and_docs_editor(self):
-        """Settings carries Notifications and Documentation Editor; File keeps only Quit."""
+        """Settings carries Notifications, Documentation Editor, and the
+        pool-resident settings backup/restore pair; File keeps only Quit."""
         with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers
 
@@ -874,6 +875,12 @@ class TestCreateMenuBar(unittest.TestCase):
                 return menus[-1]
 
             items = {}
+            separators = []
+
+            def fresh_separator(*_args, **_kwargs):
+                sep = MagicMock()
+                separators.append(sep)
+                return sep
 
             def fresh_item(*_args, **kwargs):
                 item = MagicMock()
@@ -882,6 +889,7 @@ class TestCreateMenuBar(unittest.TestCase):
 
             gtk_mock.Menu.side_effect = fresh_menu
             gtk_mock.MenuItem.side_effect = fresh_item
+            gtk_mock.SeparatorMenuItem.side_effect = fresh_separator
 
             with patch.object(gui_helpers, "Gtk", gtk_mock):
                 app = MagicMock()
@@ -891,6 +899,8 @@ class TestCreateMenuBar(unittest.TestCase):
         self.assertIn("Notifications…", labels)
         self.assertIn("Documentation Editor...", labels)
         self.assertNotIn("Set Documentation Editor...", labels)
+        self.assertIn("Backup Settings...", labels)
+        self.assertIn("Restore Settings...", labels)
 
         # Identify the top-level menus by their set_submenu wiring (the
         # font submenus are also Gtk.Menu instances, so construction
@@ -899,9 +909,17 @@ class TestCreateMenuBar(unittest.TestCase):
         settings_menu = items["Settings"].set_submenu.call_args[0][0]
         help_menu = items["Help"].set_submenu.call_args[0][0]
 
+        # View's separator is created first, Settings' second.
+        settings_sep = separators[1]
         self.assertEqual(
             [c.args[0] for c in settings_menu.append.call_args_list],
-            [items["Notifications…"], items["Documentation Editor..."]],
+            [
+                items["Notifications…"],
+                items["Documentation Editor..."],
+                settings_sep,
+                items["Backup Settings..."],
+                items["Restore Settings..."],
+            ],
         )
         self.assertEqual(
             [c.args[0] for c in file_menu.append.call_args_list],
@@ -916,6 +934,10 @@ class TestCreateMenuBar(unittest.TestCase):
         self.assertIn(("activate", app.on_notifications), notifications_connects)
         editor_connects = [c.args for c in items["Documentation Editor..."].connect.call_args_list]
         self.assertIn(("activate", app.on_set_docs_editor), editor_connects)
+        backup_connects = [c.args for c in items["Backup Settings..."].connect.call_args_list]
+        self.assertIn(("activate", app.on_backup_settings), backup_connects)
+        restore_connects = [c.args for c in items["Restore Settings..."].connect.call_args_list]
+        self.assertIn(("activate", app.on_restore_settings), restore_connects)
 
 
 class TestSectionHeaderAndNoteMarkup(unittest.TestCase):

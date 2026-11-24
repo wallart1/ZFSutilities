@@ -1800,6 +1800,33 @@ for what each drop-in does at boot. These lines have no `LEVEL:` token.
 
 See also [zfs-migrate-send](#zfs-migrate-send) under Backup and Send/Receive for pool-migration transfer messages, and [zfslockctl](#zfslockctl) / [zfslockmanager](#zfslockmanager) under Two-Node iSCSI and VM Disks for dataset-lock messages.
 
+### [backup-settings](../commands-and-modules/commands.md#backup-settings)
+
+Pool-resident settings backups with day-based retention. The
+`<pool>/zfsutilities` dataset messages (`Created dataset ... (first use)`,
+`no usable mountpoint`) come from the shared helper and are cataloged under
+[export-iscsi-state](#export-iscsi-state).
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `INFO: Pool ... is offline — settings backup not written there` | A configured pool is currently offline (rotation/backup pool); a standing condition, not an alarm | Informational; the remaining online pools receive the copy |
+| `WARN: .../config.json not found — not backed up` / `WARN: .../node.conf not found — not backed up` | An expected settings file is missing on this host | Check the path; the backup still carries whatever exists |
+| `WARN: Profile ... has an unusable name — skipped` | A profiles-directory file falls outside the safe name alphabet and cannot travel in a backup | Rename the file to letters, digits, dots, dashes, or underscores |
+| `WARN: Could not stage ...` / `WARN: Could not install ...` / `WARN: Could not prune ...` | A copy or prune step failed on one file or entry | The run continues; check pool health and permissions, then rerun |
+| `FATAL: No settings files found to back up on ...` | Nothing in the settings set could be staged | Install/configure ZFSutilities first |
+| `FATAL: Settings backup was not written to any pool on ...` | No online pool accepted the backup | Check `zpool list`; at least one pool must be online with a writable `zfsutilities` dataset |
+| `FATAL: Invalid timestamp: ... (expected YYYYmmddTHHMMSS)` | `--restore` was given a malformed timestamp | Use a timestamp exactly as `--list` printed it |
+| `FATAL: No settings backup ... on any online pool` | No online pool holds a backup with that timestamp | List the available backups first (`backup-settings --list`) |
+| `FATAL: Nothing was restored from ...` | The chosen backup directory holds none of the settings files | Take a fresh backup and retry |
+| `FATAL: Another backup-settings run holds ...` | Another backup or restore holds the advisory lock | Wait for the other run to finish |
+| `INFO: Staged ... settings file(s) (retention ... days)` | The settings set was collected and the retention in force | Informational |
+| `INFO: ✓ Settings backup written to ...` / `INFO: ✓ Settings backup refreshed in ...` | One pool received (or re-received) the dated copy | Informational |
+| `INFO: ✓ Settings backup written to ... pool(s)` | Final outcome of a backup run | Informational |
+| `INFO: Restoring settings from ...` | The source directory of a restore (first pool holding the timestamp) | Informational |
+| `INFO: Current settings staged aside at ...` | The displaced current settings were copied into the pre-restore staging directory | Rollback copy; kept for the same retention |
+| `INFO: ✓ Restored ... settings file(s); rollback copy kept ... days` | Final outcome of a restore | Restart the GUI to apply every page |
+| `INFO: Restart the ZFS Utilities GUI to apply the restored settings` | The on-disk settings changed under the running GUI | Restart the GUI (it reloads its config, but some pages refresh fully only at startup) |
+
 ### [zfsscruball](../commands-and-modules/commands.md#zfsscruball)
 
 Parallel scrub scheduler with pause/resume modes tracked in a state file.
@@ -2697,6 +2724,13 @@ The GUI application shell: startup config checks, close confirmation, docs ancho
 | `VERB: [Input N] closed` | The held question N was answered and released | Informational |
 | `VERB: [Input N] withdrawn (task ended)` | The task that held question N exited or was cancelled, releasing the hold | Informational |
 | `INFO: Memory stats refreshed` | The menu **Refresh** ran on the Performance page | Informational; charts/values already updated |
+| `WARN: backup-settings not found on this host` | The Settings-menu backup/restore could not resolve the companion script | Reinstall or check the deployment layout |
+| `WARN: Could not run backup-settings: ...` / `WARN: backup-settings did not finish within 600 seconds` | The companion script could not be launched, or outran the 600-second wait | Check the message detail; the run's session log holds the script's own lines |
+| `VERB: Settings backup cancelled` / `VERB: Settings restore cancelled` | A Settings-menu dialog was dismissed before the action started | Nothing ran |
+| `INFO: Settings backup finished` / `WARN: Settings backup failed (exit ...)` | Final outcome of **Settings → Backup Settings...** | On failure, the relayed script lines above name the cause |
+| `WARN: Could not list settings backups` / `WARN: No settings backups found on any online pool` | The restore dialog could not enumerate backups (script failure), or no pool holds one yet | Run **Settings → Backup Settings...** first |
+| `WARN: Settings restore failed (exit ...)` | **Settings → Restore Settings...** did not complete | The current settings are untouched when the failure precedes the restore step; the relayed lines name the cause |
+| `INFO: Settings restored; restart the GUI to apply every page` | The restore completed and the in-memory config was reloaded from disk | Restart the GUI so every page rebuilds from the restored settings |
 
 ### [main](../commands-and-modules/python-modules.md#mainpy)
 

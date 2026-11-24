@@ -94,6 +94,7 @@
 # ---------------------------------------------------------------------------
 
 id	command	lab	node	depth	invoke	profiles	rcs	feeds	assert
+cli-backup-settings	backup-settings	single	storage	deep	backup-settings --list	-	-	-	-
 cli-check-prerequisites	check-prerequisites	single	storage	deep	./bin/check-prerequisites --single-node	-	-	-	-
 cli-startdocserver	startdocserver	single	storage	bespoke	-	-	-	-	-
 cli-watchall	watchall	single	storage	bespoke	-	-	-	-	-

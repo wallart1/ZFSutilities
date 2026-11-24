@@ -1,6 +1,7 @@
 """Tests for profile_runner.py — profile step building with mocked subprocess."""
 
 import io
+import json
 import os
 import re
 import signal
@@ -2512,7 +2513,32 @@ class TestCronOutputSilencing(unittest.TestCase):
         os.path.dirname(os.path.abspath(profile_runner.__file__)), "profile_runner.py"
     )
 
+    def _seed_daily_backup_off(self, tmp):
+        """Seed the temp state with a config that opts out of the daily
+        settings backup.
+
+        The default config enables it, and startup convergence would then
+        create the cron drop-in (one VERB line before the session log
+        exists) on every fresh tmp tree. These tests pin the cron OUTPUT
+        SILENCING, not the settings-backup policy, so the harness opts out
+        to stay hermetic to it. config_version must match the build or the
+        newer-config WARN would also pollute the stream.
+        """
+        from config_migrations import CONFIG_VERSION
+
+        state_dir = os.path.join(tmp, "state")
+        os.makedirs(state_dir, exist_ok=True)
+        with open(os.path.join(state_dir, "config.json"), "w") as f:
+            json.dump(
+                {
+                    "config_version": CONFIG_VERSION,
+                    "settings_backup": {"daily": False},
+                },
+                f,
+            )
+
     def _run_main_subprocess(self, tmp, from_cron):
+        self._seed_daily_backup_off(tmp)
         env = os.environ.copy()
         env.update(
             {
@@ -2592,6 +2618,7 @@ class TestCronOutputSilencing(unittest.TestCase):
             }
         )
         env.pop("ZFSUTILITIES_FROM_CRON", None)
+        self._seed_daily_backup_off(tmp)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "ab") as sink:
             return subprocess.run(

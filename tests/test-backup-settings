@@ -1,0 +1,476 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-backup-settings — Unit tests for the pool-resident settings backups.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mocks
+# ------------------------------------------------------------------
+
+# node-lib behavior (two-node by default; single-node tests flip it).
+NODE_MODE="two-node"
+node_mode="two-node"
+storage_host="stewie"
+compute_host="tweety"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+    ["NVME1"]="nvme1"
+)
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+pool_list() { printf '%s\n' "${!POOL_TARGET[@]}"; }
+# Keeps iscsi-lib.sh's bootstrap probe from re-sourcing bashinit/node-lib.
+pool_to_target() { return 1; }
+
+# The evaluated script calls find_zfsutility_script for rootcheck; some test
+# environments use an older deployed bashinit without it.
+find_zfsutility_script() { echo "/dev/null"; }
+
+# Skip the real node-lib.sh (mocks above) and source the real shared
+# pool-resident helpers from lib/iscsi-lib.sh so the tests exercise
+# production code.
+export BACKUP_SETTINGS_NODE_LIB="/dev/null"
+export BACKUP_SETTINGS_ISCSI_LIB="$mydir/lib/iscsi-lib.sh"
+export BACKUP_SETTINGS_SKIP_ROOT="Y"
+export BACKUP_SETTINGS_TEST_MODE="Y"
+
+# ZFS mock: dataset existence, mountpoint resolution, create capture.
+# Create calls are logged to a FILE: main() runs inside a command
+# substitution (a subshell), so in-memory capture arrays would vanish
+# before the assertions — only the filesystem and files survive.
+declare -A _mock_zfs_dataset=()
+declare -A _mock_zfs_mountpoint=()
+_mock_zfs_create_logfile=$(mktemp)
+_mock_pools_root=""
+_mock_zpool_list=""
+
+zfs() {
+    if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" ]]; then
+        local field="$4" ds="$5"
+        if [[ -n "${_mock_zfs_dataset[$ds]+x}" ]]; then
+            if [[ "$field" == "name" ]]; then
+                echo "$ds"
+            elif [[ "$field" == "mountpoint" ]]; then
+                echo "${_mock_zfs_mountpoint[$ds]:--}"
+            fi
+            return 0
+        fi
+        return 1
+    fi
+    if [[ "$1" == "create" ]]; then
+        local ds="$2"
+        echo "$ds" >> "$_mock_zfs_create_logfile"
+        [[ -d "$_mock_pools_root" ]] || _mock_pools_root=$(mktemp -d)
+        local mnt="${_mock_pools_root}/${ds//\//_}"
+        mkdir -p "$mnt"
+        _mock_zfs_dataset["$ds"]=1
+        _mock_zfs_mountpoint["$ds"]="$mnt"
+        return 0
+    fi
+    return 0
+}
+
+zpool() {
+    if [[ "$1" == "list" ]]; then
+        printf '%s\n' "$_mock_zpool_list"
+        return 0
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Load the script under test
+# ------------------------------------------------------------------
+
+# Eval bin/backup-settings into this shell. Re-runnable: tests that point
+# the state/config environment elsewhere call this again after their env
+# changes (the script derives its top-level paths from the environment).
+reload_script() {
+    local script_text
+    script_text=$(cat "$mydir/bin/backup-settings")
+    eval "$script_text"
+    # The script's strict line leaks into this test shell at the eval
+    # point; restore the harness's own option state so a failing test
+    # reports normally instead of aborting the suite.
+    set +euo pipefail
+}
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+
+# Point every settings location at a fresh scratch tree and populate a
+# realistic settings set (config + one profile + node.conf, optional
+# extras left to the caller).
+make_settings() {
+    _state=$(mktemp -d)
+    _etc=$(mktemp -d)
+    export ZFSUTILITIES_STATE_DIR="$_state"
+    export ZFSUTILITIES_CONFIG_PATH="$_state/config.json"
+    export ZFSUTILITIES_PROFILES_DIR="$_state/profiles"
+    export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$_etc"
+    export ZFSUTILITIES_CONFIG_DIR="$_etc"
+    export ZFSUTILITIES_LEGACY_DEPLOY_CONF="$_etc/nonexistent-deploy.conf"
+    export ISCSI_ENCRYPTED_CONF="$_etc/iscsi-encrypted-luns.conf"
+    export NODE_CONF="$_etc/node.conf"
+    mkdir -p "$_state/profiles"
+    printf '{"config_version": 33, "marker": "live"}\n' > "$_state/config.json"
+    printf '{"profile_name": "root-daily"}\n' > "$_state/profiles/root-daily.json"
+    printf 'NODE_MODE="two-node"\n' > "$_etc/node.conf"
+    reload_script
+}
+
+# Register an online pool with a pre-existing zfsutilities dataset whose
+# mountpoint is a fresh scratch directory.
+register_online_pool() {
+    local pool="$1"
+    [[ -d "$_mock_pools_root" ]] || _mock_pools_root=$(mktemp -d)
+    local mnt="${_mock_pools_root}/${pool}"
+    mkdir -p "$mnt"
+    _mock_zfs_dataset["${pool}/zfsutilities"]=1
+    _mock_zfs_mountpoint["${pool}/zfsutilities"]="$mnt"
+    local online="${_mock_zpool_list:+${_mock_zpool_list}$'\n'}${pool}"
+    _mock_zpool_list="$online"
+}
+
+# A configured pool that is currently offline (rotation/backup pool). It
+# stays in POOL_TARGET (the enumeration visits it and reports the skip).
+register_offline_pool() {
+    local pool="$1"
+    POOL_TARGET["$pool"]="$pool"
+    _mock_zfs_dataset["${pool}/zfsutilities"]=1
+    _mock_zfs_mountpoint["${pool}/zfsutilities"]="/nonexistent"
+}
+
+pool_backup_root() {
+    local pool="$1"
+    printf '%s/settings-backups\n' "${_mock_zfs_mountpoint[${pool}/zfsutilities]}"
+}
+
+# Echo the single backup timestamp the last run wrote on <pool>.
+latest_backup_ts() {
+    local pool="$1"
+    find "$(pool_backup_root "$pool")" -mindepth 1 -maxdepth 1 -type d \
+        -printf '%f\n' | sort | tail -1
+}
+
+reset_mocks() {
+    # A fresh pools root per test: entries written by earlier tests must
+    # not leak into later listings/prunes/assertions.
+    _mock_pools_root=""
+    _mock_zfs_dataset=()
+    _mock_zfs_mountpoint=()
+    : > "$_mock_zfs_create_logfile"
+    _mock_zpool_list=""
+    NODE_MODE="two-node"
+    node_mode="two-node"
+    list_only=false
+    restore_ts=""
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_sourcing_defines_functions() {
+    make_settings
+    local fn
+    for fn in main stage_settings_set write_backup_to_pool list_settings_backups \
+        restore_settings_files prune_settings_entries settings_backup_retention_days; do
+        declare -f "$fn" >/dev/null 2>&1 \
+            || test_fail "$fn should be defined after sourcing"
+    done
+}
+
+test_backup_writes_to_every_online_pool() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    register_online_pool NVME1
+    local out rc=0
+    out=$(main 2>/dev/null) || rc=$?
+    [[ $rc -eq 0 ]] || test_fail "backup should succeed (rc=$rc): $out"
+
+    local pool ts f
+    for pool in threeamigos NVME1; do
+        ts=$(latest_backup_ts "$pool")
+        [[ -n "$ts" ]] || test_fail "no backup directory on $pool"
+        local dir
+        dir="$(pool_backup_root "$pool")/${ts}"
+        for f in config.json node.conf profiles/root-daily.json manifest.json; do
+            [[ -f "${dir}/${f}" ]] || test_fail "${pool}: missing ${f} in backup"
+        done
+        grep -q '"marker": "live"' "${dir}/config.json" \
+            || test_fail "${pool}: backup config.json content differs"
+    done
+}
+
+test_backup_manifest_fields() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    local dir
+    dir="$(pool_backup_root threeamigos)/$(latest_backup_ts threeamigos)"
+    python3 - "$dir/manifest.json" <<'PYEOF' || test_fail "manifest is not valid JSON"
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f)
+assert m["version"] == 1, m
+assert m["node_mode"] == "two-node", m
+assert m["retention_days"] == 35, m
+names = [e["name"] for e in m["files"]]
+for expected in ("config.json", "node.conf", "profiles/root-daily.json"):
+    assert expected in names, names
+assert "manifest.json" not in names, names
+PYEOF
+}
+
+test_backup_creates_dataset_on_first_use() {
+    make_settings
+    reset_mocks
+    # Online configured pool with NO zfsutilities dataset yet. The pools
+    # root is created HERE (parent shell): main() runs in a subshell, so
+    # a root the create mock would have made there is invisible to these
+    # assertions; an inherited one is shared and visible to both.
+    _mock_pools_root=$(mktemp -d)
+    POOL_TARGET[freshpool]="freshpool"
+    _mock_zpool_list="freshpool"
+    local out rc=0
+    out=$(main 2>/dev/null) || rc=$?
+    [[ $rc -eq 0 ]] || test_fail "backup should succeed on a fresh pool (rc=$rc)"
+    grep -q "freshpool/zfsutilities" "$_mock_zfs_create_logfile" \
+        || test_fail "dataset freshpool/zfsutilities should be created on first use"
+    # The create mock's mountpoint registration happened inside main's
+    # subshell; the directory itself survives, so assert on the filesystem.
+    local mnt="${_mock_pools_root}/freshpool_zfsutilities"
+    [[ -f "${mnt}/settings-backups/$(cd "${mnt}/settings-backups" && find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tail -1)/config.json" ]] \
+        || test_fail "backup should be written to the created dataset"
+}
+
+test_backup_skips_offline_pool() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    register_offline_pool z22tb
+    local out rc=0
+    out=$(main 2>&1) || rc=$?
+    [[ $rc -eq 0 ]] || test_fail "backup should succeed with one online pool"
+    grep -q "z22tb is offline" <<< "$out" \
+        || test_fail "offline pool should be reported"
+    [[ -n "$(latest_backup_ts threeamigos)" ]] \
+        || test_fail "online pool should still receive the backup"
+}
+
+test_backup_fails_with_no_online_pool() {
+    make_settings
+    reset_mocks
+    register_offline_pool z22tb
+    local out rc=0
+    out=$(main 2>/dev/null) || rc=$?
+    [[ $rc -ne 0 ]] || test_fail "all-offline should fail the backup"
+}
+
+test_backup_fails_with_no_settings() {
+    make_settings
+    reset_mocks
+    # Empty the settings tree: nothing can be staged.
+    rm -f "$_state/config.json" "$_etc/node.conf" "$_state/profiles/root-daily.json"
+    register_online_pool threeamigos
+    local out rc=0
+    out=$(main 2>/dev/null) || rc=$?
+    [[ $rc -ne 0 ]] || test_fail "no settings files should fail the backup"
+}
+
+test_optional_files_and_mode_preservation() {
+    make_settings
+    reset_mocks
+    printf 'DEPLOY=1\n' > "$_etc/deploy.conf"
+    printf '{"smtp": true}\n' > "$_etc/smtp-credentials.json"
+    chmod 600 "$_etc/smtp-credentials.json"
+    register_online_pool threeamigos
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    local dir
+    dir="$(pool_backup_root threeamigos)/$(latest_backup_ts threeamigos)"
+    [[ -f "${dir}/deploy.conf" ]] || test_fail "deploy.conf should be backed up"
+    [[ -f "${dir}/smtp-credentials.json" ]] \
+        || test_fail "smtp-credentials.json should be backed up"
+    local mode
+    mode=$(stat -c '%a' "${dir}/smtp-credentials.json")
+    [[ "$mode" == "600" ]] || test_fail "0600 should survive the backup (got $mode)"
+}
+
+test_prune_removes_old_entries_keeps_recent() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    local root
+    root=$(pool_backup_root threeamigos)
+    mkdir -p "$root/20200101T000000" "$root/20990101T000000" "$root/not-a-backup"
+    echo old > "$root/20200101T000000/config.json"
+    echo future > "$root/20990101T000000/config.json"
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    [[ ! -d "$root/20200101T000000" ]] || test_fail "35-day-old entry should be pruned"
+    [[ -d "$root/20990101T000000" ]] || test_fail "recent entry should be kept"
+    [[ -d "$root/not-a-backup" ]] || test_fail "malformed name should be untouched"
+}
+
+test_retention_env_override() {
+    make_settings
+    reset_mocks
+    # The retention reader rejects 0 (it would mean "keep nothing"), so the
+    # tightest legal override is 1 day: a 2-day-old entry goes, a future
+    # entry stays.
+    SETTINGS_BACKUP_RETENTION_DAYS=1
+    export SETTINGS_BACKUP_RETENTION_DAYS
+    register_online_pool threeamigos
+    local root
+    root=$(pool_backup_root threeamigos)
+    local old_entry
+    old_entry=$(date -d "-2 days" +%Y%m%dT%H%M%S)
+    local future_entry
+    future_entry=$(date -d "+1 day" +%Y%m%dT%H%M%S)
+    mkdir -p "$root/${old_entry}" "$root/${future_entry}"
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    [[ ! -d "$root/${old_entry}" ]] || test_fail "1-day retention should prune the 2-day-old entry"
+    [[ -d "$root/${future_entry}" ]] || test_fail "future entry should be kept"
+    unset SETTINGS_BACKUP_RETENTION_DAYS
+}
+
+test_list_newest_first_across_pools() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    register_online_pool NVME1
+    mkdir -p "$(pool_backup_root threeamigos)/20261101T080000"
+    mkdir -p "$(pool_backup_root NVME1)/20261102T090000"
+    list_only=true
+    local out
+    out=$(main 2>/dev/null) || test_fail "--list should succeed"
+    local -a rows
+    mapfile -t rows <<< "$out"
+    [[ ${#rows[@]} -eq 2 ]] || test_fail "expected 2 rows, got ${#rows[@]}: $out"
+    [[ "${rows[0]}" == "20261102T090000|NVME1|0" ]] \
+        || test_fail "newest row should be first: ${rows[0]}"
+    [[ "${rows[1]}" == "20261101T080000|threeamigos|0" ]] \
+        || test_fail "older row second: ${rows[1]}"
+}
+
+test_single_node_uses_all_online_pools() {
+    make_settings
+    reset_mocks
+    NODE_MODE="single-node"
+    node_mode="single-node"
+    # scratchpool is NOT in POOL_TARGET: single-node mode still backs up
+    # to every online pool.
+    register_online_pool scratchpool
+    local out rc=0
+    out=$(main 2>/dev/null) || rc=$?
+    [[ $rc -eq 0 ]] || test_fail "single-node backup should succeed"
+    [[ -n "$(latest_backup_ts scratchpool)" ]] \
+        || test_fail "unconfigured pool should receive a single-node backup"
+}
+
+test_restore_stages_current_and_restores() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    local ts
+    ts=$(latest_backup_ts threeamigos)
+
+    # Change the live settings after the backup.
+    printf '{"config_version": 33, "marker": "changed"}\n' > "$_state/config.json"
+    printf '{"profile_name": "extra"}\n' > "$_state/profiles/root-extra.json"
+
+    restore_ts="$ts"
+    local out rc=0
+    out=$(main 2>/dev/null) || rc=$?
+    [[ $rc -eq 0 ]] || test_fail "restore should succeed (rc=$rc): $out"
+
+    grep -q '"marker": "live"' "$_state/config.json" \
+        || test_fail "restore should bring back the backed-up config"
+    # Profiles merge: the restored one is back, the newer extra stays.
+    [[ -f "$_state/profiles/root-daily.json" ]] \
+        || test_fail "restored profile should be written"
+    [[ -f "$_state/profiles/root-extra.json" ]] \
+        || test_fail "profile merge should keep extra live profiles"
+    # The pre-restore staging copy holds the replaced current settings.
+    local staged
+    staged=$(find "$_state/settings-pre-restore" -name config.json | head -1)
+    [[ -n "$staged" ]] || test_fail "pre-restore staging should capture config.json"
+    grep -q '"marker": "changed"' "$staged" \
+        || test_fail "staging should hold the pre-restore content"
+}
+
+test_restore_unknown_timestamp_fails() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    restore_ts="19990101T000000"
+    local out rc=0
+    out=$(main 2>/dev/null) || rc=$?
+    [[ $rc -ne 0 ]] || test_fail "unknown timestamp should fail the restore"
+    grep -q '"marker": "live"' "$_state/config.json" \
+        || test_fail "live config must be untouched by a failed restore"
+}
+
+test_existing_destination_refreshes_files_in_place() {
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    # Drive write_backup_to_pool directly against a destination that
+    # already exists (the same-second rerun shape) — deterministic,
+    # no race with the wall clock.
+    local staging ts dest
+    staging=$(mktemp -d)
+    printf '{"config_version": 33, "marker": "live"}\n' > "${staging}/config.json"
+    printf '{\n  "version": 1\n}\n' > "${staging}/manifest.json"
+    ts="20261124T120000"
+    dest="$(pool_backup_root threeamigos)/${ts}"
+    mkdir -p "$dest"
+    printf '{"stale": true}\n' > "${dest}/config.json"
+
+    local result
+    result=$(write_backup_to_pool threeamigos "$_mock_zpool_list" "$staging" "$ts" 2>/dev/null)
+    [[ "$result" == "1" ]] || test_fail "existing destination should still count as written"
+    grep -q '"marker": "live"' "${dest}/config.json" \
+        || test_fail "existing entry's config.json should be refreshed"
+    [[ -f "${dest}/manifest.json" ]] || test_fail "manifest should be refreshed too"
+    # No staging leftovers on the pool.
+    [[ -z "$(find "$(pool_backup_root threeamigos)" -maxdepth 1 -name '.staging.*' -print -quit)" ]] \
+        || test_fail "pool staging should not be left behind"
+    rm -rf -- "$staging"
+}
+
+# ------------------------------------------------------------------
+# Suite bootstrap
+# ------------------------------------------------------------------
+
+test_sourcing_defines_functions
+test_backup_writes_to_every_online_pool
+test_backup_manifest_fields
+test_backup_creates_dataset_on_first_use
+test_backup_skips_offline_pool
+test_backup_fails_with_no_online_pool
+test_backup_fails_with_no_settings
+test_optional_files_and_mode_preservation
+test_prune_removes_old_entries_keeps_recent
+test_retention_env_override
+test_list_newest_first_across_pools
+test_single_node_uses_all_online_pools
+test_restore_stages_current_and_restores
+test_restore_unknown_timestamp_fails
+test_existing_destination_refreshes_files_in_place
+
+[[ -n "$_mock_pools_root" && -d "$_mock_pools_root" ]] && rm -rf "$_mock_pools_root"
+
+test_summary

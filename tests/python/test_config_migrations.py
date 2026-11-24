@@ -181,8 +181,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_32(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 32)
+    def test_config_version_is_33(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 33)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -560,6 +560,39 @@ class TestIndividualMigrations(unittest.TestCase):
         config = {"config_version": 31}
         result1 = config_migrations._migrate_31_to_32(dict(config))
         result2 = config_migrations._migrate_31_to_32(result1)
+        self.assertEqual(result1, result2)
+
+    def test_migrate_32_to_33_seeds_settings_backup_section(self):
+        config = {
+            "config_version": 32,
+            "settings_backup": {"retention_days": 90},
+        }
+        result = config_migrations._migrate_32_to_33(config)
+        self.assertEqual(result["config_version"], 33)
+        section = result["settings_backup"]
+        # A user-set retention is preserved; the missing keys are seeded.
+        self.assertEqual(section["retention_days"], 90)
+        self.assertTrue(section["daily"])
+        self.assertEqual(section["daily_hour"], 0)
+        self.assertEqual(section["daily_minute"], 17)
+
+    def test_migrate_32_to_33_seeds_all_keys_on_untouched_config(self):
+        config = {"config_version": 32}
+        result = config_migrations._migrate_32_to_33(config)
+        self.assertEqual(
+            result["settings_backup"],
+            {
+                "retention_days": 35,
+                "daily": True,
+                "daily_hour": 0,
+                "daily_minute": 17,
+            },
+        )
+
+    def test_migrate_32_to_33_is_idempotent(self):
+        config = {"config_version": 32}
+        result1 = config_migrations._migrate_32_to_33(dict(config))
+        result2 = config_migrations._migrate_32_to_33(result1)
         self.assertEqual(result1, result2)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
