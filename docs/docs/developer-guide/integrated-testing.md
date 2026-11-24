@@ -366,8 +366,19 @@ deterministic snapshot sequence.
     digest the current planner
     cannot reproduce is refused as planner drift. 
 
-    `busy` (background load) stays reserved for a later phase, and the
-    world staging step
+    `busy` stages the same world as `lived-in` and then adds one
+    bounded real background operation, started after the world and the
+    GUI environment are staged and stopped before the wrap-up: a paced
+    `zfsdailybackup` run over the world's own backup pair
+    (rate-limited through the product's transfer pacing, so the
+    lock-held window lasts seconds to about a minute), falling back to
+    a scrub of `zfstest2` when the backup cannot hold. Items that meet
+    the operation's dataset locks may honestly lose them: for the rows
+    marked `refuse-ok` in `universe.tsv`, and only in busy runs, the
+    clean holder-naming lock refusal counts as a pass — acquire or
+    refuse is the product's documented contract for contended
+    datasets. Hangs still die at the item timeout, and corruption is
+    what the invariant sweep below catches. The world staging step
     reports its elapsed time so the cost of richer worlds stays visible
     per run.
 
@@ -389,8 +400,40 @@ disks, and
 `zfscleanup` / `zfsdailybackup` run with overrides — a retention
 dry-run over the aged ladder, and a real send into the scratch receive
 tree. Every recipe creates its own prey and converges it afterward, so
-random order cannot starve or poison a later item; the wrap-up reports
-the run's depth distribution alongside its verdicts.
+random order cannot starve or poison a later item; the wrap-up reports the
+run's depth distribution alongside its verdicts.
+
+Random order gets the same guarantee on the GUI side, through
+**ensure-precondition**. When a row-needing widget interaction meets an
+empty store, the probe clicks the page's own Add control to create the
+row before running the interaction. The click is bounded (at most three
+creations per page per run), and any Add dialog is answered by the
+item's response profile like every other dialog. Only Retention ("Add
+Policy") and Check Against ("Add Row") own row-creating controls. Pages
+whose rows come from config or system state have no Add control, so an
+empty store there keeps the **blocked** verdict — that emptiness is the
+cold-start coverage the thin world exists to reach. A failed ensure (a
+declined dialog, an exhausted bound) also keeps the blocked verdict;
+ensure never converts a blocked item into a failed one.
+
+The probe also records its **resource envelope**. The GUI runs in the
+probe's own process, so the probe samples its resident memory and open
+file-descriptor count at start, every 25 operations, and at end. The
+wrap-up reports the first-to-last trajectory as one informational step.
+The envelope is report-only: a growing trajectory never changes a
+verdict. Suspected growth becomes a `FINDINGS.md` row for a product
+leak, verified separately.
+
+Every run ends with an **invariant sweep**, judged after the items (in
+busy runs, after the background operation is joined or killed) but
+before the playground teardown, while the scratch world still exists:
+all pools `ONLINE`, the pinned config still parses, the lock directory
+empty, no stray `.send-` or unplanned holds on the scratch datasets,
+no survey `/tmp` litter, and a verdict record for every drawn GUI
+item. The sweep runs in every variant — it is the oracle for
+cross-item damage that per-item verdicts cannot see — and its findings
+(one artifact plus one pass/fail step) fail the run without ever
+skipping cleanup.
 
 Defects found in a past release are recorded in `FINDINGS.md` and fixed
 **forward** in the dev tree — there is no back-porting; the release

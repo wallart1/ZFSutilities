@@ -2017,7 +2017,7 @@ GUI Pools tab: pool registry table, import/export actions, scrub toggles, and th
 
 ### [pool_actions](../commands-and-modules/python-modules.md#pool_actionspy)
 
-GUI Pools tab actions: watch windows, details dump, registry add/remove/save/revert, import/export (with blocker recovery), and scrub queue selection.
+GUI Pools tab actions: watch windows, details dump, registry add/remove/save/revert, import/export (proactively prepared before the attempt, with blocker recovery as the backstop), and scrub queue selection.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
@@ -2029,9 +2029,11 @@ GUI Pools tab actions: watch windows, details dump, registry add/remove/save/rev
 | `INFO: Pool details for ...:` / `INFO: zpool get all output for ...:` | Headers of the gated status/property dumps | Informational |
 | `WARN: Pool '...' is already in the registry` | Add-pool gate — duplicate name | Add aborted |
 | `INFO: Added '...' to pool registry (unsaved)` | Registry list updated, not yet saved to JSON | Use Save to persist |
-| `INFO: Pool '...' imported successfully` | `zpool import` succeeded | Pages refreshed |
+| `INFO: Pool '...' imported successfully` | `zfs import` succeeded | Pages refreshed |
 | `WARN: Error importing pool '...'` | Import failed | That import aborted; others continue |
-| `INFO: Pool '...' exported successfully` | Export succeeded after the Yes/No confirm | Informational |
+| `INFO: Pool '...' exported successfully` | Export succeeded after the Yes/No confirm (the proactive gate found the pool blocker-free, or its blockers were resolved first) | Informational |
+| `WARN: Export of '...' skipped — resolve the blockers and retry` | The pre-export gate found a holder it cannot remove (each is WARNed above and named in the blocker dialog) | That pool is not exported; others continue |
+| `WARN: Export of '...' skipped — blockers remain after resolution` | The gate's approvals ran but a holder survived them (the blocker dialog names what remains) | That pool is not exported; others continue |
 | `WARN: Error exporting pool '...'` | Export failed; the blocker-diagnosis/recovery path is entered | Recovery continues |
 | `WARN: Export of '...' stalled ...s — pool still held` / `WARN: Resolving pool holders so the export can finish` | The export command has not returned within the UI-side wait (a zvol behind a live iSCSI LUN session blocks the kernel uninterruptibly); the window stays responsive and the same blocker-removal dialogs as a failed export are entered | Holder resolution begins |
 | `WARN: Export of '...' stays kernel-blocked; no removable holders found` | The stalled export's blocker diagnosis found nothing the GUI can clear | Give up; check what holds the pool |
@@ -2057,7 +2059,7 @@ GUI Pools tab actions: watch windows, details dump, registry add/remove/save/rev
 | `WARN: Could not determine which dataset blocked export of '...'` | A "cannot unmount" mountpoint could not be mapped to a dataset | Generic blocker collection continues |
 | `WARN: zpool export stderr: ...` | Raw export stderr logged when the dataset is unknown | Informational; recovery continues |
 | `WARN: No specific blockers identified. Common causes are active sends/receives, scrubs, or processes holding the pool through a different path.` | Blocker collection came up empty | Recovery aborted; export stays failed |
-| `WARN: Auto-unmount of filesystems failed: ...` | Safe unmount of non-blocked filesystems failed | Approval-driven recovery continues anyway |
+| `WARN: Auto-unmount of filesystems failed: ...` | Safe unmount of non-blocked filesystems failed | In the pre-export gate the pool is refused with the blocker dialog; inside recovery the approval-driven flow continues anyway |
 | `INFO: Export of '...' cancelled by user` | An approval dialog (VM/LUN/share/process/force-kill) was answered No | Export recovery aborted |
 | `WARN: Export of '...' still failed after recovery: ...` | The export retry failed after resolving blockers | Pool remains imported |
 

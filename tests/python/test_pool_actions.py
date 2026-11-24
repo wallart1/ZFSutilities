@@ -44,6 +44,25 @@ def _fake_reason(category, dataset, detail, resolvable=False, action="", data=No
     )
 
 
+def _dynamic_blockers(blocker):
+    """collect_dataset_busy_reasons side_effect over a mutable list.
+
+    The proactive export gate re-collects after resolving blockers, so
+    a holder mock stays visible until the test's clearing action (qm
+    stop, kill, targetcli, set_property, unmount) empties it.  Returns
+    (side_effect, clear).
+    """
+    state = {"blockers": [blocker]}
+
+    def collect(_dataset, repo=None):
+        return list(state["blockers"])
+
+    def clear():
+        state["blockers"] = []
+
+    return collect, clear
+
+
 def _import_pool_actions():
     """Import pool_actions under a fresh mocked GTK context."""
     sys.modules.pop("pool_actions", None)
@@ -689,10 +708,11 @@ class TestOnPoolsExport(unittest.TestCase):
     def test_export_stall_recovers_after_iscsi_holder_removal(self):
         """The stall path resolves holders with approval instead of WARN-only.
 
-        A stalled export (zvol held by a live iSCSI LUN session) goes
-        through the same blocker diagnosis and approval dialogs as the
-        fast-fail path; removing the LUN releases the kernel hold, the
-        lingering worker completes, and the pool exports.
+        A stalled export (zvol held by a live iSCSI LUN session the
+        proactive scan cannot see) goes through the same blocker
+        diagnosis and approval dialogs as the fast-fail path; removing
+        the LUN releases the kernel hold, the lingering worker
+        completes, and the pool exports.
         """
         pa = _import_pool_actions()
         app = self._make_app_with_selection(
@@ -705,6 +725,14 @@ class TestOnPoolsExport(unittest.TestCase):
             SimpleNamespace(name="tank/vm-211-disk-0", ds_type="volume", mounted="no")
         ]
         blocker = _iscsi_blocker(lun_info="iqn.2023-01.com.example:t1 (LUN 3)")
+
+        # The proactive gate's scan finds nothing; the holder surfaces
+        # only when the stalled export is diagnosed.
+        collect_calls = {"n": 0}
+
+        def collect_blockers(_dataset, repo=None):
+            collect_calls["n"] += 1
+            return [] if collect_calls["n"] == 1 else [blocker]
 
         release = threading.Event()
 
@@ -730,7 +758,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(pa, "schedule_scrub_refresh_burst"),
             patch.object(pa, "EXPORT_STALL_WARN_S", 0.05),
             patch.object(repo, "export_pool_detailed", side_effect=blocked_export),
-            patch.object(pa, "collect_dataset_busy_reasons", return_value=[blocker]),
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect_blockers),
             patch.object(pa, "subprocess") as mock_subprocess,
             patch.object(pa, "log_msg") as mock_log,
         ):
@@ -763,6 +791,14 @@ class TestOnPoolsExport(unittest.TestCase):
             SimpleNamespace(name="tank/vm-211-disk-0", ds_type="volume", mounted="no")
         ]
         blocker = _iscsi_blocker()
+
+        # Invisible to the proactive scan; found by the stall diagnosis.
+        collect_calls = {"n": 0}
+
+        def collect_blockers(_dataset, repo=None):
+            collect_calls["n"] += 1
+            return [] if collect_calls["n"] == 1 else [blocker]
+
         release = threading.Event()
 
         def blocked_export(_pool):
@@ -786,7 +822,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(pa, "schedule_scrub_refresh_burst"),
             patch.object(pa, "EXPORT_STALL_WARN_S", 0.05),
             patch.object(repo, "export_pool_detailed", side_effect=blocked_export),
-            patch.object(pa, "collect_dataset_busy_reasons", return_value=[blocker]),
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect_blockers),
             patch.object(pa, "log_msg") as mock_log,
         ):
             try:
@@ -928,7 +964,13 @@ class TestOnPoolsExport(unittest.TestCase):
         self.assertFalse(finished)
         self.assertFalse(ok)
 
-    def test_export_auto_unmounts_and_retries_on_unmount_failure(self):
+    def test_export_auto_unmounts_before_the_export_attempt(self):
+        """The proactive gate unmounts a clearable mounted dataset itself.
+
+        The mounted blocker is resolved by the gate's safe unmount before
+        `zpool export` runs, so the single export attempt succeeds and
+        the reactive diagnose path is never needed.
+        """
         pa = _import_pool_actions()
         app = self._make_app_with_selection(
             pa,
@@ -943,10 +985,18 @@ class TestOnPoolsExport(unittest.TestCase):
         row.ds_type = "filesystem"
         row.mounted = "yes"
 
-        export_results = [
-            (False, "cannot unmount '/mnt/tank/data': unmount failed"),
-            (True, ""),
-        ]
+        blocker = _fake_reason(
+            category="mounted",
+            dataset="tank/data",
+            detail="Dataset is mounted at /mnt/tank/data.",
+            resolvable=True,
+            data={"mountpoint": "/mnt/tank/data", "busy": False},
+        )
+        collect, clear = _dynamic_blockers(blocker)
+
+        def unmount(_name):
+            clear()  # the unmount resolves the mounted blocker
+            return (True, "")
 
         with (
             patch.object(pa, "refresh_pools_page") as mock_refresh,
@@ -956,7 +1006,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "export_pool_detailed",
-                side_effect=export_results,
+                return_value=(True, ""),
             ) as mock_export,
             patch.object(
                 app.ctx.zfs_repository,
@@ -971,8 +1021,39 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "unmount_filesystem",
-                return_value=(True, ""),
-            ),
+                side_effect=unmount,
+            ) as mock_unmount,
+            patch.object(pa, "diagnose_dataset_busy") as mock_diagnose,
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+            mock_diagnose.assert_not_called()
+            mock_unmount.assert_called_once_with("tank/data")
+            self.assertEqual(mock_export.call_count, 1)
+            mock_refresh.assert_called_once_with(app)
+            mock_scrub_refresh.assert_called_once_with(app)
+            mock_burst.assert_called_once_with(app)
+
+    def test_recovery_diagnoses_and_retries_after_unmount_failure(self):
+        """The reactive backstop still diagnoses a failed export.
+
+        An export that fails despite the gate (a holder that appeared
+        after preparation) gets the mountpoint diagnosis, the blocker
+        resolution, and one retry.
+        """
+        pa = _import_pool_actions()
+        app = MagicMock()
+        repo = app.ctx.zfs_repository
+        repo.dataset_for_mountpoint.return_value = "tank/data"
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/data", ds_type="filesystem", mounted="yes")
+        ]
+        repo.unmount_filesystem.return_value = (True, "")
+        repo.export_pool_detailed.return_value = (True, "")
+
+        with (
             patch.object(pa, "diagnose_dataset_busy") as mock_diagnose,
             patch.object(
                 pa,
@@ -988,16 +1069,16 @@ class TestOnPoolsExport(unittest.TestCase):
                 ],
             ),
         ):
-            pa.Gtk.MessageDialog = msg_dialog
-            pa.on_pools_export(app)
+            recovered = pa._try_export_with_recovery(
+                app, "tank", "cannot unmount '/mnt/tank/data': unmount failed"
+            )
 
-            mock_diagnose.assert_called_once()
-            self.assertEqual(mock_export.call_count, 2)
-            mock_refresh.assert_called_once_with(app)
-            mock_scrub_refresh.assert_called_once_with(app)
-            mock_burst.assert_called_once_with(app)
+        self.assertTrue(recovered)
+        mock_diagnose.assert_called_once()
+        self.assertEqual(repo.export_pool_detailed.call_count, 1)
 
-    def test_export_approval_stop_vm_then_retry(self):
+    def test_export_approval_stop_vm_before_export(self):
+        """The gate stops an approved running VM before the export runs."""
         pa = _import_pool_actions()
         app = self._make_app_with_selection(
             pa,
@@ -1007,10 +1088,18 @@ class TestOnPoolsExport(unittest.TestCase):
         msg_dialog = MagicMock()
         msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
 
-        export_results = [
-            (False, "cannot unmount '/tank': unmount failed"),
-            (True, ""),
-        ]
+        blocker = _fake_reason(
+            category="vm",
+            dataset="tank/proxmox/vm-105-disk-0",
+            detail="VM 105 is RUNNING and may be using tank/proxmox/vm-105-disk-0.",
+            resolvable=True,
+            data={"vmid": "105"},
+        )
+        collect, clear = _dynamic_blockers(blocker)
+
+        def qm_stop(*_args, **_kwargs):
+            clear()  # stopping the VM resolves the holder
+            return SimpleNamespace(returncode=0, stderr="")
 
         with (
             patch.object(pa, "refresh_pools_page") as mock_refresh,
@@ -1020,7 +1109,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "export_pool_detailed",
-                side_effect=export_results,
+                return_value=(True, ""),
             ) as mock_export,
             patch.object(
                 app.ctx.zfs_repository,
@@ -1035,23 +1124,11 @@ class TestOnPoolsExport(unittest.TestCase):
                 ],
             ),
             patch.object(pa, "diagnose_dataset_busy"),
-            patch.object(
-                pa,
-                "collect_dataset_busy_reasons",
-                return_value=[
-                    _fake_reason(
-                        category="vm",
-                        dataset="tank/proxmox/vm-105-disk-0",
-                        detail="VM 105 is RUNNING and may be using tank/proxmox/vm-105-disk-0.",
-                        resolvable=True,
-                        data={"vmid": "105"},
-                    )
-                ],
-            ),
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect),
             patch.object(
                 subprocess,
                 "run",
-                return_value=MagicMock(returncode=0, stderr=""),
+                side_effect=qm_stop,
             ) as mock_run,
         ):
             pa.Gtk.MessageDialog = msg_dialog
@@ -1064,10 +1141,11 @@ class TestOnPoolsExport(unittest.TestCase):
                 errors="replace",
                 check=False,
             )
-            self.assertEqual(mock_export.call_count, 2)
+            self.assertEqual(mock_export.call_count, 1)
             mock_refresh.assert_called_once_with(app)
 
-    def test_export_approval_terminate_process_then_retry(self):
+    def test_export_approval_terminate_process_before_export(self):
+        """The gate terminates approved busy processes before the export."""
         pa = _import_pool_actions()
         app = self._make_app_with_selection(
             pa,
@@ -1077,10 +1155,18 @@ class TestOnPoolsExport(unittest.TestCase):
         msg_dialog = MagicMock()
         msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
 
-        export_results = [
-            (False, "cannot unmount '/mnt/tank/data': unmount failed"),
-            (True, ""),
-        ]
+        blocker = _fake_reason(
+            category="busy_processes",
+            dataset="tank/data",
+            detail="Open processes: bash",
+            resolvable=True,
+            data={"mountpoint": "/mnt/tank/data", "pids": [1234], "names": "bash"},
+        )
+        collect, clear = _dynamic_blockers(blocker)
+
+        def kill(_pid, _sig):
+            clear()  # the terminated process releases the dataset
+            raise ProcessLookupError(1234)
 
         with (
             patch.object(pa, "refresh_pools_page") as mock_refresh,
@@ -1090,7 +1176,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "export_pool_detailed",
-                side_effect=export_results,
+                return_value=(True, ""),
             ) as mock_export,
             patch.object(
                 app.ctx.zfs_repository,
@@ -1108,19 +1194,7 @@ class TestOnPoolsExport(unittest.TestCase):
                 return_value=(True, ""),
             ),
             patch.object(pa, "diagnose_dataset_busy"),
-            patch.object(
-                pa,
-                "collect_dataset_busy_reasons",
-                return_value=[
-                    _fake_reason(
-                        category="busy_processes",
-                        dataset="tank/data",
-                        detail="Open processes: bash",
-                        resolvable=True,
-                        data={"mountpoint": "/mnt/tank/data", "pids": [1234], "names": "bash"},
-                    )
-                ],
-            ),
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect),
             patch.object(
                 subprocess,
                 "run",
@@ -1129,7 +1203,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(pa, "time"),
             patch.object(pa, "os") as mock_pa_os,
         ):
-            mock_pa_os.kill.side_effect = ProcessLookupError(1234)
+            mock_pa_os.kill.side_effect = kill
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_export(app)
 
@@ -1137,10 +1211,11 @@ class TestOnPoolsExport(unittest.TestCase):
                 ["kill", "-TERM", "1234"],
                 check=False,
             )
-            self.assertEqual(mock_export.call_count, 2)
+            self.assertEqual(mock_export.call_count, 1)
             mock_refresh.assert_called_once_with(app)
 
-    def test_export_approval_remove_iscsi_then_retry(self):
+    def test_export_approval_remove_iscsi_before_export(self):
+        """The gate removes an approved iSCSI LUN before the export runs."""
         pa = _import_pool_actions()
         app = self._make_app_with_selection(
             pa,
@@ -1150,10 +1225,26 @@ class TestOnPoolsExport(unittest.TestCase):
         msg_dialog = MagicMock()
         msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
 
-        export_results = [
-            (False, "cannot unmount '/tank': unmount failed"),
-            (True, ""),
-        ]
+        blocker = _fake_reason(
+            category="iscsi",
+            dataset="tank/proxmox/vm-105-disk-0",
+            detail="Zvol is exposed as an iSCSI LUN on "
+            "iqn.2026-02.local.stewie:threeamigos (LUN 3).",
+            resolvable=True,
+            data={
+                "bsname": "vm-105-disk-0",
+                "lun_info": "iqn.2026-02.local.stewie:threeamigos (LUN 3)",
+            },
+        )
+        collect, clear = _dynamic_blockers(blocker)
+
+        targetcli_calls = {"n": 0}
+
+        def targetcli(*_args, **_kwargs):
+            targetcli_calls["n"] += 1
+            if targetcli_calls["n"] == 2:
+                clear()  # the backstore removal releases the zvol
+            return MagicMock(returncode=0, stderr="")
 
         with (
             patch.object(pa, "refresh_pools_page") as mock_refresh,
@@ -1163,7 +1254,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "export_pool_detailed",
-                side_effect=export_results,
+                return_value=(True, ""),
             ) as mock_export,
             patch.object(
                 app.ctx.zfs_repository,
@@ -1176,27 +1267,11 @@ class TestOnPoolsExport(unittest.TestCase):
                 return_value=[MagicMock(name="tank/proxmox/vm-105-disk-0", ds_type="volume")],
             ),
             patch.object(pa, "diagnose_dataset_busy"),
-            patch.object(
-                pa,
-                "collect_dataset_busy_reasons",
-                return_value=[
-                    _fake_reason(
-                        category="iscsi",
-                        dataset="tank/proxmox/vm-105-disk-0",
-                        detail="Zvol is exposed as an iSCSI LUN on "
-                        "iqn.2026-02.local.stewie:threeamigos (LUN 3).",
-                        resolvable=True,
-                        data={
-                            "bsname": "vm-105-disk-0",
-                            "lun_info": "iqn.2026-02.local.stewie:threeamigos (LUN 3)",
-                        },
-                    )
-                ],
-            ),
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect),
             patch.object(
                 subprocess,
                 "run",
-                return_value=MagicMock(returncode=0, stderr=""),
+                side_effect=targetcli,
             ) as mock_run,
         ):
             pa.Gtk.MessageDialog = msg_dialog
@@ -1221,10 +1296,11 @@ class TestOnPoolsExport(unittest.TestCase):
                 errors="replace",
                 check=False,
             )
-            self.assertEqual(mock_export.call_count, 2)
+            self.assertEqual(mock_export.call_count, 1)
             mock_refresh.assert_called_once_with(app)
 
-    def test_export_approval_disable_nfs_share_then_retry(self):
+    def test_export_approval_disable_nfs_share_before_export(self):
+        """The gate disables an approved NFS share before the export runs."""
         pa = _import_pool_actions()
         app = self._make_app_with_selection(
             pa,
@@ -1234,10 +1310,19 @@ class TestOnPoolsExport(unittest.TestCase):
         msg_dialog = MagicMock()
         msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
 
-        export_results = [
-            (False, "cannot unmount '/tank': unmount failed"),
-            (True, ""),
-        ]
+        blocker = _fake_reason(
+            category="nfs",
+            dataset="tank/data",
+            detail="Dataset is shared via NFS (on).",
+            resolvable=True,
+            action="Unshare with 'zfs set sharenfs=off tank/data' before destroying.",
+            data={"prop": "sharenfs", "value": "on"},
+        )
+        collect, clear = _dynamic_blockers(blocker)
+
+        def set_property(_dataset, _prop, _value):
+            clear()  # disabling the share resolves the holder
+            return True
 
         with (
             patch.object(pa, "refresh_pools_page") as mock_refresh,
@@ -1247,7 +1332,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "export_pool_detailed",
-                side_effect=export_results,
+                return_value=(True, ""),
             ) as mock_export,
             patch.object(
                 app.ctx.zfs_repository,
@@ -1262,32 +1347,20 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "set_property",
-                return_value=True,
+                side_effect=set_property,
             ) as mock_set_property,
             patch.object(pa, "diagnose_dataset_busy"),
-            patch.object(
-                pa,
-                "collect_dataset_busy_reasons",
-                return_value=[
-                    _fake_reason(
-                        category="nfs",
-                        dataset="tank/data",
-                        detail="Dataset is shared via NFS (on).",
-                        resolvable=True,
-                        action="Unshare with 'zfs set sharenfs=off tank/data' before destroying.",
-                        data={"prop": "sharenfs", "value": "on"},
-                    )
-                ],
-            ),
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect),
         ):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_export(app)
 
             mock_set_property.assert_called_once_with("tank/data", "sharenfs", "off")
-            self.assertEqual(mock_export.call_count, 2)
+            self.assertEqual(mock_export.call_count, 1)
             mock_refresh.assert_called_once_with(app)
 
-    def test_export_declined_approval_aborts_retry(self):
+    def test_export_declined_approval_aborts(self):
+        """Declining a gate approval cancels the export before any attempt."""
         pa = _import_pool_actions()
         app = self._make_app_with_selection(
             pa,
@@ -1295,8 +1368,8 @@ class TestOnPoolsExport(unittest.TestCase):
             ["tank"],
         )
         msg_dialog = MagicMock()
-        # First YES confirms the export itself; the NO declines the recovery
-        # approval ("Stop VM 105?"), which must abort the retry.
+        # First YES confirms the export itself; the NO declines the gate
+        # approval ("Stop VM 105?"), which must abort before the export.
         msg_dialog.return_value.run.side_effect = [
             pa.Gtk.ResponseType.YES,
             pa.Gtk.ResponseType.NO,
@@ -1310,7 +1383,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(
                 app.ctx.zfs_repository,
                 "export_pool_detailed",
-                return_value=(False, "cannot unmount '/tank': unmount failed"),
+                return_value=(True, ""),
             ) as mock_export,
             patch.object(
                 app.ctx.zfs_repository,
@@ -1340,10 +1413,234 @@ class TestOnPoolsExport(unittest.TestCase):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_export(app)
 
-            self.assertEqual(mock_export.call_count, 1)
+            mock_export.assert_not_called()
             logged = "\n".join(call.args[0] for call in mock_log.call_args_list)
             self.assertIn("cancelled by user", logged)
             mock_refresh.assert_called_once_with(app)
+
+
+class TestPreparePoolsPageExport(unittest.TestCase):
+    """The proactive gate: blockers are resolved — or the export refused
+    — before any zpool export attempt (PREEXISTING fix: a bare export is
+    never attempted)."""
+
+    def _make_app(self, pa, selected):
+        app = _make_app([{"name": n, "offsite_candidate": False} for n in selected])
+        model = MagicMock()
+        paths = [MagicMock() for _ in selected]
+        it = MagicMock()
+        model.get_iter.return_value = it
+        call_count = {"n": 0}
+
+        def get_value(_it, col):
+            name = selected[call_count["n"] // 2]
+            call_count["n"] += 1
+            if col == pa.COL_NAME:
+                return name
+            if col == pa.COL_HEALTH:
+                return "ONLINE"
+            return None
+
+        model.get_value.side_effect = get_value
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, paths)
+        return app
+
+    def test_gate_refuses_unresolvable_blocker_without_export(self):
+        """An unresolvable holder refuses the export up front."""
+        pa = _import_pool_actions()
+        app = self._make_app(pa, ["tank"])
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/data", ds_type="filesystem", mounted="no")
+        ]
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "_show_export_blockers_dialog") as mock_blocker_dialog,
+            patch.object(pa, "log_msg") as mock_log,
+            patch.object(repo, "export_pool_detailed", return_value=(True, "")) as mock_export,
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="other",
+                        dataset="tank/data",
+                        detail="Dataset is held by an unknown holder.",
+                        resolvable=False,
+                    )
+                ],
+            ),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+        mock_export.assert_not_called()
+        mock_blocker_dialog.assert_called_once()
+        msgs = [c.args[0] for c in mock_log.call_args_list]
+        self.assertIn("WARN: tank/data: Dataset is held by an unknown holder.", msgs)
+        self.assertTrue(any("skipped" in m and "tank" in m for m in msgs))
+
+    def test_gate_refuses_when_safe_unmount_fails(self):
+        """A failed safe unmount refuses the export instead of attempting it."""
+        pa = _import_pool_actions()
+        app = self._make_app(pa, ["tank"])
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/data", ds_type="filesystem", mounted="yes")
+        ]
+        repo.unmount_filesystem.return_value = (False, "umount: target is busy")
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "_show_export_blockers_dialog") as mock_blocker_dialog,
+            patch.object(pa, "log_msg") as mock_log,
+            patch.object(repo, "export_pool_detailed", return_value=(True, "")) as mock_export,
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="nfs",
+                        dataset="tank/other",
+                        detail="Dataset is shared via NFS (on).",
+                        resolvable=True,
+                        data={"prop": "sharenfs", "value": "on"},
+                    )
+                ],
+            ),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+        mock_export.assert_not_called()
+        mock_blocker_dialog.assert_called_once()
+        msgs = [c.args[0] for c in mock_log.call_args_list]
+        self.assertTrue(any("Auto-unmount" in m for m in msgs))
+
+    def test_gate_refuses_when_blockers_survive_resolution(self):
+        """Approvals that fail to clear the holder still refuse the export."""
+        pa = _import_pool_actions()
+        app = self._make_app(pa, ["tank"])
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/proxmox/vm-105-disk-0", ds_type="volume", mounted="no")
+        ]
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "_show_export_blockers_dialog") as mock_blocker_dialog,
+            patch.object(pa, "log_msg") as mock_log,
+            patch.object(repo, "export_pool_detailed", return_value=(True, "")) as mock_export,
+            patch.object(
+                subprocess,
+                "run",
+                return_value=MagicMock(returncode=0, stderr=""),
+            ),
+            # The blocker never clears: the VM survives qm stop.
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="vm",
+                        dataset="tank/proxmox/vm-105-disk-0",
+                        detail="VM 105 is RUNNING and may be using tank/proxmox/vm-105-disk-0.",
+                        resolvable=True,
+                        data={"vmid": "105"},
+                    )
+                ],
+            ),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+        mock_export.assert_not_called()
+        mock_blocker_dialog.assert_called_once()
+        msgs = [c.args[0] for c in mock_log.call_args_list]
+        self.assertTrue(any("blockers remain after resolution" in m for m in msgs))
+
+    def test_gate_passes_clean_pool_straight_to_export(self):
+        """A blocker-free pool exports without any preparation side effects."""
+        pa = _import_pool_actions()
+        app = self._make_app(pa, ["tank"])
+        repo = app.ctx.zfs_repository
+        repo.list_datasets.return_value = [
+            SimpleNamespace(name="tank/data", ds_type="filesystem", mounted="yes")
+        ]
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "_show_export_blockers_dialog") as mock_blocker_dialog,
+            patch.object(repo, "unmount_filesystem") as mock_unmount,
+            patch.object(repo, "export_pool_detailed", return_value=(True, "")) as mock_export,
+            patch.object(pa, "collect_dataset_busy_reasons", return_value=[]),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+        # No blockers means no unmount churn and no blocker dialog: the
+        # export itself unmounts a clean pool's filesystems.
+        mock_unmount.assert_not_called()
+        mock_blocker_dialog.assert_not_called()
+        mock_export.assert_called_once_with("tank")
+
+    def test_blocked_pool_skipped_sibling_still_exports(self):
+        """A refused pool does not stop the remaining selections."""
+        pa = _import_pool_actions()
+        app = self._make_app(pa, ["tank", "other"])
+        repo = app.ctx.zfs_repository
+
+        def list_datasets(pool=None):
+            if pool == "tank":
+                return [SimpleNamespace(name="tank/data", ds_type="filesystem", mounted="no")]
+            return []
+
+        def collect(dataset, repo=None):
+            if dataset == "tank/data":
+                return [
+                    _fake_reason(
+                        category="other",
+                        dataset="tank/data",
+                        detail="Dataset is held by an unknown holder.",
+                        resolvable=False,
+                    )
+                ]
+            return []
+
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "_show_export_blockers_dialog"),
+            patch.object(pa, "log_msg"),
+            patch.object(repo, "list_datasets", side_effect=list_datasets),
+            patch.object(repo, "export_pool_detailed", return_value=(True, "")) as mock_export,
+            patch.object(pa, "collect_dataset_busy_reasons", side_effect=collect),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+        mock_export.assert_called_once_with("other")
 
 
 class TestLogPoolMountState(unittest.TestCase):

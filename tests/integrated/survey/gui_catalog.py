@@ -138,6 +138,21 @@ L2_INTERACTIONS = {
     ],
 }
 
+# Per-page ensure specs: when a row-needing role meets an empty target
+# store, the probe may click the page's own creation control (the label
+# below) to create the row it needs, bounded by max_create clicks per
+# run.  Only pages whose central area owns a row-creating action button
+# carry a spec — Retention's Add Policy and Check Against's Add Row are
+# the only ones (Backup/Offsite/Schedule rows are config-borne with no
+# add control; Pools' Add feeds the always-populated registry, not the
+# scrub queue; the system-state pages have no creation control at all).
+# Pages without a spec keep the empty-store BLOCKED verdict: that is
+# cold-start coverage, not a defect.
+ENSURE_PRECONDITIONS = {
+    "retention": {"button": "Add Policy", "max_create": 3},
+    "checkagainst": {"button": "Add Row", "max_create": 3},
+}
+
 # L3 composites: impl = gui_probe function key; the probe asserts every
 # step named in `checks` programmatically and records pass/fail per step.
 L3_COMPOSITES = [

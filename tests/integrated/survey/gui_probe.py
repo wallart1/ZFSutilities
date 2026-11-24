@@ -38,6 +38,7 @@ from typing import ClassVar
 
 OP_TIMEOUT_DEFAULT = int(os.environ.get("SURVEY_OP_TIMEOUT", "300"))
 MAX_DIALOG_RESPONSES_PER_OP = 6
+RESOURCE_INTERVAL_DEFAULT = int(os.environ.get("SURVEY_RESOURCE_INTERVAL", "25"))
 
 # Native file-chooser dialogs must stay in-process on every distro.  On a
 # desktop OS (the mint leg) GTK routes GtkFileChooserNative through
@@ -100,6 +101,23 @@ def ensure_display():
     raise RuntimeError("no private Xvfb display could be produced")
 
 
+def sample_resources(proc_root="/proc/self"):
+    """VmRSS (kB) and open-fd count of a process — report-only leak
+    tracking.  Takes a proc root so tests can fabricate one; a value the
+    kernel did not report stays None, never a guess.
+    """
+    vmrss = None
+    with suppress(OSError), open(os.path.join(proc_root, "status"), encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("VmRSS:"):
+                vmrss = int(line.split()[1])
+                break
+    fds = None
+    with suppress(OSError):
+        fds = len(os.listdir(os.path.join(proc_root, "fd")))
+    return {"vmrss_kb": vmrss, "fds": fds}
+
+
 # ---------------------------------------------------------------------------
 # Results (JSON lines) + started markers
 # ---------------------------------------------------------------------------
@@ -134,6 +152,11 @@ class Results:
         self.verdicts[rec["id"]] = rec
         self._append(rec)
 
+    def log(self, rec):
+        """Append a non-verdict record (resource samples) to the same
+        file — reload ignores them, so crash-resume is unaffected."""
+        self._append(rec)
+
     def _append(self, rec):
         with open(self.path, "a", encoding="utf-8") as f:
             # ensure_ascii=False keeps ids with unicode (e.g. the "…" in
@@ -157,6 +180,7 @@ class GuiProbe:
         self.dialog_budget = 0
         self._handled_dialogs = set()
         self._window_grace = {}
+        self._ensure_created = {}
 
         sys.path.insert(0, os.path.join(repo, "python"))
         import gi
@@ -491,6 +515,84 @@ class GuiProbe:
         top = " ".join(f"{k}x{v}" for k, v in names.most_common(limit))
         return f"page census: {top}"
 
+    # -- L2 order safety: per-item ensure-precondition -----------------------
+
+    # Roles whose blocked verdict is "no rows on the page" — the only
+    # outcomes an Add-control click can rescue.  Widget-missing roles
+    # (combo, entry, spin, check, dry-run) are never ensure targets.
+    ROW_ROLES: ClassVar[frozenset] = frozenset(
+        {
+            "select-first",
+            "select-second",
+            "select-multi",
+            "toggle-active",
+            "edit-cell",
+            "edit-spin-cell",
+            "expand-first",
+        }
+    )
+
+    def _role_target_empty(self, page, role):
+        """True when run_widget_role's row path would report "blocked:
+        no rows" — mirrors its per-role view resolution exactly.
+
+        A page with no treeview at all returns False: that is the
+        census-dumped FAILURE condition, never an ensure target.
+        """
+        views = self.treeviews(page)
+        if not views:
+            return False
+        if role == "select-second" and len(views) > 1:
+            candidates = [views[1]]
+        elif role in ("toggle-active", "edit-cell", "edit-spin-cell"):
+            # These roles walk every view until one carries rows.
+            candidates = views
+        else:
+            # select-first / select-multi / expand-first resolve views[0]
+            # (select-second too, when the page has only one view).
+            candidates = [views[0]]
+        return all(
+            view.get_model() is None or view.get_model().iter_n_children(None) == 0
+            for view in candidates
+        )
+
+    def ensure_precondition(self, page, role):
+        """Create the row a row-needing role needs, via the page's own
+        Add control, when the catalog's ensure spec allows it.
+
+        Returns the clicked button's label, or None when nothing was
+        attempted.  Never raises for a missing button or an Add that
+        produced no row (a decline-profile dialog answer, say): the role
+        then takes its normal blocked verdict — ensure must never
+        convert a blocked into a fail.
+        """
+        if role not in self.ROW_ROLES or not self._role_target_empty(page, role):
+            return None
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import gui_catalog
+
+        spec = gui_catalog.ENSURE_PRECONDITIONS.get(page)
+        if not spec:
+            return None
+        created = self._ensure_created.get(page, 0)
+        if created >= spec["max_create"]:
+            self.dialog_log.append(
+                f"ensure: {page} max_create reached ({created}); staying blocked"
+            )
+            return None
+        button = self._button_by_label(page, spec["button"])
+        if button is None:
+            self.dialog_log.append(
+                f"ensure: no '{spec['button']}' button on {page}; staying blocked"
+            )
+            return None
+        self._ensure_created[page] = created + 1
+        button.clicked()
+        self.pump(10)  # an Add dialog (if any) is answered by the responder
+        grew = not self._role_target_empty(page, role)
+        self.dialog_log.append(f"ensure: clicked '{spec['button']}' ({page}), row appeared={grew}")
+        return spec["button"]
+
     def run_widget_role(self, page, role):
         Gtk = self.Gtk
         if role == "navigate":
@@ -632,8 +734,7 @@ class GuiProbe:
                             self.pump(5)
                             after = store.get_value(it, col_idx)
                             return (
-                                f"committed spin edit on first editable cell "
-                                f"({current} -> {after})"
+                                f"committed spin edit on first editable cell ({current} -> {after})"
                             )
             if not saw_rows:
                 return "blocked: no rows to adjust"
@@ -760,6 +861,18 @@ class GuiProbe:
         sel.unselect_all()
         return ok, "; ".join(detail)
 
+    def _flip_first_active_toggle(self, view):
+        """Emit toggled on row 0's first activatable toggle renderer."""
+        Gtk = self.Gtk
+        store = view.get_model()
+        for col in view.get_columns():
+            for rend in col.get_cells():
+                if isinstance(rend, Gtk.CellRendererToggle) and rend.get_activatable():
+                    path = store.get_path(store.iter_nth_child(None, 0))
+                    rend.emit("toggled", path.to_string())
+                    return True
+        return False
+
     def comp_backup_edit_dirty_save_revert(self):
         self.navigate("backup")
         views = self.treeviews("backup")
@@ -770,21 +883,20 @@ class GuiProbe:
         if store is None or store.iter_n_children(None) == 0:
             return True, "blocked: no step rows to toggle"
         # Find the active toggle column and flip row 0.
-        Gtk = self.Gtk
-        flipped = False
-        for col in view.get_columns():
-            for rend in col.get_cells():
-                if isinstance(rend, Gtk.CellRendererToggle) and rend.get_activatable():
-                    path = store.get_path(store.iter_nth_child(None, 0))
-                    rend.emit("toggled", path.to_string())
-                    flipped = True
-                    break
-            if flipped:
-                break
-        if not flipped:
+        if not self._flip_first_active_toggle(view):
             return True, "blocked: no activatable toggle column"
         self.pump(5)
         dirty = self._page_dirty("backup")
+        if dirty is not True:
+            # Random order: a prior item may have left this same cell
+            # toggled-and-unsaved, so this flip restored the saved
+            # state — the page is legitimately clean.  Flip again: the
+            # store now differs from the saved config for sure
+            # (live-failed run-20261124-121057, first item toggled the
+            # cell ahead of this composite).
+            self._flip_first_active_toggle(view)
+            self.pump(5)
+            dirty = self._page_dirty("backup")
         self._click_action("backup", "Save Config")
         self.pump(20)
         saved_dirty = self._page_dirty("backup")
@@ -1009,9 +1121,17 @@ class GuiProbe:
                 # page first (the action panel and widget state belong to
                 # the VISIBLE page) — except the navigate role itself,
                 # which IS the navigation test.
+                ensured = None
                 if role != "navigate":
                     self.navigate(op["page"])
+                    # Order safety, the gui-button branch's
+                    # select_scratch_or_first precedent: when the role
+                    # needs a row the page no longer has, the page's own
+                    # Add control may recreate it (ensure spec).
+                    ensured = self.ensure_precondition(op["page"], role)
                 detail = self.run_widget_role(op["page"], role)
+                if ensured:
+                    detail = f"[ensure:{ensured}] {detail}"
                 if isinstance(detail, str) and detail.startswith("blocked"):
                     verdict = "blocked"
             elif kind == "gui-composite":
@@ -1131,9 +1251,24 @@ def main(argv=None):
 
     xvfb = ensure_display()
     probe = None
+
+    def log_resources(phase, ops_done):
+        # Report-only leak tracking: the GUI runs in THIS process, so
+        # its memory/fd trajectory is ours.  Never a verdict.
+        results.log(
+            {
+                "event": "resources",
+                "phase": phase,
+                "ops_done": ops_done,
+                "ts": time.time(),
+                **sample_resources(),
+            }
+        )
+
     try:
         probe = GuiProbe(args.repo, results)
-        for op in pending:
+        log_resources("start", 0)
+        for done, op in enumerate(pending, start=1):
             results.mark_started(op["id"])
             watchdog = threading.Timer(OP_TIMEOUT_DEFAULT, lambda: os.kill(os.getpid(), 9))
             watchdog.daemon = True
@@ -1144,6 +1279,9 @@ def main(argv=None):
                 watchdog.cancel()
             results.record(rec)
             print(f"gui_probe: {op['id']} -> {rec['verdict']} ({rec['detail'][:80]})", flush=True)
+            if done % RESOURCE_INTERVAL_DEFAULT == 0:
+                log_resources("interval", done)
+        log_resources("end", len(pending))
     finally:
         if probe is not None:
             with suppress(Exception):

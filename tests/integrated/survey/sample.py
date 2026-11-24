@@ -278,9 +278,8 @@ def resolve_world(spec):
 
     Returns the variant string ("" / None mean the default, thin);
     raises ValueError naming the known variants — resolve_sw's refusal
-    style.  busy stays a recognized-but-reserved name (Phase 5);
-    staging the variants is the journey library's call, not the
-    sampler's.
+    style.  Staging the variants is the journey library's call, not
+    the sampler's.
     """
     spec = (spec or "thin").strip()
     if spec not in WORLDS:
@@ -430,7 +429,7 @@ def main(argv=None):
     parser.add_argument(
         "--world",
         default=os.environ.get("ITF_SURVEY_WORLD", "thin"),
-        help="world variant (thin | lived-in | busy; busy is reserved for Phase 5)",
+        help="world variant (thin | lived-in | busy)",
     )
     parser.add_argument(
         "--world-seed",
@@ -573,7 +572,7 @@ def main(argv=None):
             "anchor": world_anchor,
             "digest": world_digest(world_variant, world_seed, world_anchor),
         }
-    except ValueError as exc:  # PlanError: recognized but unplannable (busy)
+    except ValueError as exc:  # PlanError: unrecognized variant or unplannable seed
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
     archive_path = args.archive or os.path.join(

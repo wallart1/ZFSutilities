@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.144.0
+
+*Released 2026-11-24*
+
+### Added
+
+- **Busy survey world (test framework).** The function survey's `busy`
+  world variant stages the same aged, populated world as `lived-in`
+  and then runs one bounded real operation in the background while
+  the randomly drawn actions land: a paced `zfsdailybackup` full send
+  into a survey-owned receive tree (rate-limited through the product's
+  own transfer pacing, so the lock-held window lasts seconds to about
+  a minute), falling back to a scrub when the backup cannot hold. The
+  operation starts after the world and the GUI environment are staged
+  and is joined or killed before the wrap-up, so items meet real
+  dataset locks — the contention surface a sequential survey cannot
+  reach.
+
+- **Acquire-or-refuse verdicts under load (test framework).** For the
+  survey rows whose prey can meet the background operation's locks
+  (and only in busy runs), the clean holder-naming lock refusal — the
+  product's documented contract for contended datasets — counts as a
+  pass. Every other row keeps its strict verdict.
+
+- **End-of-run invariant sweep (test framework).** Every survey run
+  now ends with a judged sweep of the whole lab, after the items and
+  before the scratch world is torn down: all pools healthy, the pinned
+  config still valid, the lock directory empty, no stray transfer
+  holds or `/tmp` litter, and a recorded verdict for every drawn GUI
+  item. Per-item verdicts say whether each action worked; the sweep
+  says whether the actions together left the system intact — it is the
+  oracle for cross-item damage, and its findings fail the run without
+  ever skipping cleanup.
+
+- **GUI-leg order safety and leak visibility (test framework).** When
+  a row-needing widget interaction meets an empty store, the survey
+  probe clicks the page's own Add control to create the row first
+  (bounded to three creations per page per run, dialog answers
+  unchanged) — pages whose rows come from config or system state keep
+  their blocked verdict, because cold-start emptiness is coverage. The
+  probe also samples its resident memory and open file-descriptor
+  count across the run and reports the trajectory; growth is
+  report-only and becomes a findings row, never a verdict.
+
+### Fixed
+
+- **The Pools page's Export action now prepares a pool before touching
+  it.** Export used to run `zpool export` bare and engage the blocker
+  machinery only after the attempt failed. Every export now goes
+  through the same proactive gate the Migrate Pool cutover has:
+  filesystems that are safe to unmount are unmounted, removable
+  holders (running VMs, iSCSI LUN exports, NFS/SMB shares, busy
+  processes) are offered the per-holder removal approvals up front,
+  and a pool that is still held is refused with a dialog naming each
+  blocker — a bare export is never attempted. The reactive diagnosis
+  and recovery remain as the backstop for holders that appear or hide
+  between the gate and the export itself.
+
+- **The Ctrl-click wiring suite runs hermetically on CI.** The suite
+  added in 0.143.0 failed on builders without the production state
+  directory (a `PermissionError` at import) and passed on dev hosts
+  only because the real profiles directory supplied a same-type
+  profile. Its state directory is now fenced to a private temp dir
+  with the profile list seeded per test — order-independent under
+  parallel workers. (Shipped first as the `v0.143.1` CI-repair point
+  tag; recorded here because that tag carried no changelog entry.)
+
+- **Test-load flake fences.** The zlm suite's fabricated lock holders
+  now wait for the holder process's exec on every site that stages
+  one (three sites skipped the wait — under full-suite parallel load
+  the stale-lock reaper could momentarily see the parent's command
+  line and reap a lock the test had just written); the migrate-holds
+  fixture's `mkstemp` redirect is scoped to the product's own
+  `migrate-holds-` staging so the lock manager's lock staging is never
+  redirected into a directory the fixture deletes; and the logging
+  suite's older tests source the repository's own `bashinit` instead
+  of whichever lane the home-directory link points at.
+
 ## 0.143.0
 
 *Released 2026-11-23*

@@ -79,19 +79,35 @@ def test_digest_seed_and_anchor_sensitive():
     assert base != world.world_digest("lived-in", SEED, ANCHOR + 7 * 86400)
 
 
-def test_thin_has_no_plan_busy_refused():
+def test_thin_has_no_plan_bogus_refused_busy_plans():
     assert world.relative_plan("thin", SEED) is None
-    for bad, exc in (("busy", "Phase 5"), ("bogus", "bad world variant")):
-        try:
-            world.relative_plan(bad, SEED)
-            raise AssertionError(f"{bad} accepted")
-        except world.PlanError as e:
-            assert exc in str(e)
+    try:
+        world.relative_plan("bogus", SEED)
+        raise AssertionError("bogus accepted")
+    except world.PlanError as e:
+        assert "bad world variant" in str(e)
     try:
         world.relative_plan("lived-in", SEED)  # no anchor
         raise AssertionError("lived-in without anchor accepted")
     except world.PlanError as e:
         assert "anchor" in str(e)
+    try:
+        world.relative_plan("busy", SEED)  # no anchor either
+        raise AssertionError("busy without anchor accepted")
+    except world.PlanError as e:
+        assert "anchor" in str(e)
+
+
+def test_busy_plans_the_lived_in_ladder_with_its_own_digest():
+    # busy stages the identical ladder (its background op is runtime
+    # activity, outside the plan), but the digest document names the
+    # variant — so busy archives replay as busy, never as lived-in.
+    assert world.relative_plan("busy", SEED, ANCHOR) == _plan()
+    lived = world.world_digest("lived-in", SEED, ANCHOR)
+    busy = world.world_digest("busy", SEED, ANCHOR)
+    assert busy != lived
+    resolved = world.resolve_epochs(_plan(), ANCHOR, "busy")
+    assert world.emit_ladder_tsv(resolved).splitlines()[0] == "# variant busy"
 
 
 # ---------------------------------------------------------------------------
@@ -361,10 +377,30 @@ def test_cli_plan_and_digest(tmp_path):
             "busy",
             "--seed",
             SEED,
+            "--anchor",
+            str(ANCHOR),
         ],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert r.returncode == 2
-    assert "Phase 5" in r.stderr
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == world.world_digest("busy", SEED, ANCHOR)
+    r = subprocess.run(
+        [
+            sys.executable,
+            os.path.join(SURVEY_DIR, "world.py"),
+            "plan",
+            "--variant",
+            "busy",
+            "--seed",
+            SEED,
+            "--anchor",
+            str(ANCHOR),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    assert f"digest {world.world_digest('busy', SEED, ANCHOR)}" in r.stdout

@@ -448,14 +448,15 @@ def relative_plan(variant, seed, anchor=None):
 
     `anchor` is the staging epoch (int) the calendar slots are picked
     against; it is part of the plan's identity.  thin has no plan (its
-    world is the playground); busy and unknown variants raise PlanError —
-    busy is reserved for Phase 5.
+    world is the playground); unknown variants raise PlanError.  busy
+    stages the identical ladder as lived-in — its background operation is
+    runtime activity the journey launches after staging, not world state,
+    so it stays outside the plan (the digest still differs via the
+    variant name, giving busy archives their own replay identity).
     """
     variant = resolve_variant(variant)
     if variant == "thin":
         return None
-    if variant == "busy":
-        raise PlanError("world 'busy' is not implemented in this tree (Phase 5)")
     if anchor is None:
         raise PlanError("non-thin worlds need the staging anchor")
     anchor_date = dt.datetime.fromtimestamp(int(anchor), tz=dt.timezone.utc).date()
@@ -496,13 +497,15 @@ def _row_name(row, epoch):
     return f"{row['label']}-{_snap_ts(epoch)}-{row['bucket']}"
 
 
-def resolve_epochs(plan, anchor_epoch):
+def resolve_epochs(plan, anchor_epoch, variant="lived-in"):
     """Concrete epochs + product names for every plan point.
 
     The anchor's UTC midnight is the base; day_offset * 86400 + minute*60
     gives each point its instant.  Returns a new structure (the relative
     plan stays pristine — it is the digest document).  The offsite pair's
     65-day minage observability is enforced here, against the anchor.
+    `variant` rides along so the emitted ladder TSV names the world the
+    walk belongs to (busy stages the same ladder as lived-in).
     """
     midnight = anchor_epoch - (anchor_epoch % DAY)
 
@@ -544,6 +547,7 @@ def resolve_epochs(plan, anchor_epoch):
     if len(ages) < 2 or ages[1] <= 65:
         raise PlanError(f"offsite pair ages {ages[:2]} do not clear the 65d minage")
     return {
+        "variant": variant,
         "datasets": plan["datasets"],
         "ladder": rows,
         "dailybackup": dailybackup,
@@ -561,7 +565,7 @@ def emit_ladder_tsv(resolved):
     survey-lib before the file is pushed into the guest.
     """
     out = [
-        "# variant lived-in",
+        f"# variant {resolved['variant']}",
         f"# anchor {resolved['anchor_epoch']}",
     ]
     for d in resolved["datasets"]:
@@ -618,7 +622,7 @@ def main(argv=None):
             return 0
         anchor = args.anchor if args.anchor is not None else int(time.time())
         plan = relative_plan(variant, args.seed, anchor)
-        resolved = resolve_epochs(plan, anchor)
+        resolved = resolve_epochs(plan, anchor, variant)
         tsv = emit_ladder_tsv(resolved)
         if args.out_json:
             with open(args.out_json, "w", encoding="utf-8") as f:

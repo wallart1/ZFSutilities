@@ -282,6 +282,19 @@ an observation, not itself an error — each fence decides which drift is
 fatal, which warns, and which is by design (a one-sided pool name is
 deliberately not drift).
 
+## ensure-precondition
+
+The function survey's order-safety rule for GUI items: when a
+row-needing interaction (select, toggle, edit) meets an empty store,
+the probe clicks the page's own Add control to create the row before
+running the interaction — bounded to three creations per page per run,
+with any Add dialog answered per the item's response profile. Only
+Retention ("Add Policy") and Check Against ("Add Row") own row-creating
+controls; pages whose rows come from config or system state keep their
+blocked verdict when empty, because cold-start emptiness is coverage,
+not starvation. A failed ensure keeps the blocked verdict too — it
+never fails an item. Related: response profile, world variant.
+
 ## exit-status bits (smartctl)
 
 smartctl's exit status is a bitmask, not a single error code: each bit
@@ -418,6 +431,18 @@ helpers). The typed answer flows back through the PTY as if it were
 keyed into a terminal window. Without the GUI the helpers ask on the
 terminal directly. The mechanics live with BackupRunner in the
 python-modules reference.
+
+## invariant sweep
+
+The checks the function survey makes of the whole lab at the end of a
+run, after every item and before the scratch world is torn down: all
+pools healthy, the pinned config still valid JSON, the lock directory
+empty, no stray `.send-` or unplanned holds on the scratch datasets,
+no `/tmp` litter, and a recorded verdict for every drawn GUI item.
+Per-item verdicts say whether each action worked; the sweep says
+whether the actions together left the system intact — cross-item
+damage is what it exists to catch. It runs in every world variant and
+its findings fail the run. Related: world variant, function survey.
 
 ## IQN
 
@@ -785,6 +810,16 @@ no host and the partial-dir checks stay deterministic. Dev-tarball
 source only — real GitHub cannot be re-labeled. j25 runs on it; j23's
 pass 2 uses the same re-label stage.
 
+## resource envelope
+
+The memory-and-descriptors trajectory a function-survey run records for
+its GUI leg: the probe hosts the GUI in its own process, so it samples
+its resident-memory size (VmRSS) and open file-descriptor count at
+start, every 25 operations, and at end, and the wrap-up reports the
+first-to-last trajectory in one informational step. Report-only by
+design — growth never changes a verdict; a suspected leak becomes a
+FINDINGS.md row verified separately. Related: ensure-precondition.
+
 ## response profile
 
 The per-item answer style a function-survey run applies to every prompt
@@ -1065,8 +1100,11 @@ which variant is staged plus the seed that makes it reproducible.
 `lived-in` adds an aged, product-named snapshot ladder built by the
 clock walk, then populated config rows — per-pool retention policies,
 backup and offsite steps, and inactive schedule profiles — so the GUI
-pages have real rows; `busy` (lived-in plus background load) is
-reserved for a later phase. The survey archive records the variant,
+pages have real rows; `busy` stages the same world as `lived-in` and
+then runs one bounded real operation in the background while the
+items land (a paced `zfsdailybackup` send, or a scrub as the
+fallback), so items meet real locks — a clean lock refusal counts as
+a pass for the rows that can contend. The survey archive records the variant,
 seed, staging
 anchor, and digest, so a replay rebuilds the same world — the anchor
 matters because snapshot buckets follow the calendar (Sundays are

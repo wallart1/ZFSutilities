@@ -2586,7 +2586,7 @@ registry entries, and scrub queue operations.
 | Function                                  | Purpose                                                                              |
 | ----------------------------------------- | ------------------------------------------------------------------------------------ |
 | `on_pools_watch()`                        | Open `PoolWatchWindow` for selected pools                                            |
-| `on_pools_import()` / `on_pools_export()` | Import/export pools; export diagnoses failures and offers per-blocker recovery (auto-unmount, stop VMs, tear down iSCSI LUNs, unshare NFS/SMB, terminate busy processes) before retrying |
+| `on_pools_import()` / `on_pools_export()` | Import/export pools; every export is prepared first (`_prepare_pools_page_export`: blockers collected, safe unmounts, per-blocker approvals — a held pool is refused with the blocker dialog and never exported bare), and failures still get the reactive diagnosis and per-blocker recovery (auto-unmount, stop VMs, tear down iSCSI LUNs, unshare NFS/SMB, terminate busy processes) before retrying |
 | `on_pools_add()` / `on_pools_remove()`    | Modify the registered pool list                                                      |
 | `on_pools_save()` / `on_pools_revert()`   | Persist/revert pool registry                                                         |
 | Scrub action handlers                     | start, pause, resume, stop                                                           |

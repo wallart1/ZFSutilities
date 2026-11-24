@@ -132,6 +132,13 @@ journey_main() {
     itf_survey_stage_world "$guest_ip" || return 1
     itf_survey_stage_gui_env "$guest_ip" || return 1
 
+    # Busy worlds: the bounded background operation starts LAST — the
+    # whole world (ladder, config rows, GUI env) is staged and verified
+    # first, then the load lands and the items run against it.
+    if [[ "$SURVEY_WORLD" == busy ]]; then
+        itf_survey_busy_start "$guest_ip" || return 1
+    fi
+
     # ------------------------------------------------------------------
     # Stage I: items, in archived order, every one logged
     # ------------------------------------------------------------------
@@ -146,9 +153,9 @@ journey_main() {
         fi
         row="$(awk -F'\t' -v i="$id" '$1==i' "$ITF_ROOT/survey/universe.tsv")"
         # Column order is id,command,lab,node,depth,invoke,profiles,rcs,
-        # feeds,assert — the read consumes all ten (id and lab into
-        # fillers: the selection already resolved the lab shape).
-        IFS=$'\t' read -r _ command _lab node depth invoke profiles rcs feeds assert \
+        # feeds,assert,busy — the read consumes all eleven (id and lab
+        # into fillers: the selection already resolved the lab shape).
+        IFS=$'\t' read -r _ command _lab node depth invoke profiles rcs feeds assert busy_mark \
             <<< "$row"
         if [[ -z "$command" ]]; then
             itf_step fail "item $id" "no universe.tsv row for selected id"
@@ -157,7 +164,7 @@ journey_main() {
         fi
         itf_survey_run_cli_item "$guest_ip" "$id" "$command" "$depth" \
             "$invoke" "$profiles" "$rcs" "$feeds" "$assert" "$profile" \
-            "$node" || failed=1
+            "$node" "$busy_mark" || failed=1
     done < "$SURVEY_ITEMS"
 
     # ------------------------------------------------------------------
@@ -165,6 +172,12 @@ journey_main() {
     # ------------------------------------------------------------------
 
     itf_survey_run_gui_items "$guest_ip" || failed=1
+
+    # Busy worlds: the background op joins or dies HERE, before the
+    # wrap — the invariant sweep judges a quiesced system.
+    if [[ "$SURVEY_WORLD" == busy ]]; then
+        itf_survey_busy_teardown "$guest_ip" || failed=1
+    fi
 
     # ------------------------------------------------------------------
     # Stage W: results artifact, residue check, distributions

@@ -349,6 +349,13 @@ test_wrap_residue_gate_and_summary() {
     local out
     out="$(_source_survey "$root" "$run" '
         itf_guest_exec() {
+            case "$2" in
+                # invariant-sweep facts pull: a clean world
+                *"== pools =="*)
+                    printf "== pools ==\nzfstest1 ONLINE\nzfstest2 ONLINE\n"
+                    printf "== config ==\nparses\n"
+                    return 0 ;;
+            esac
             # residue grep: rc 1 = nothing left behind (pass shape)
             return 1
         }
@@ -370,6 +377,84 @@ test_wrap_residue_gate_and_summary() {
     test_pass
 }
 
+test_wrap_resource_summary() {
+    test_start "wrap: GUI resource envelope step (report-only)"
+    local root run
+    root="$(make_itf_root "$tmp_root/root-res1")"
+    run="$tmp_root/run-res1"; mkdir -p "$run"
+    printf 'id\tkind\tname\tpage\tprofile\n' > "$run/survey-items.tsv"
+    printf 'gui-b-backup-Run Backup\tgui-button\tRun Backup\tbackup\tdecline\n' \
+        >> "$run/survey-items.tsv"
+    {
+        printf '%s\n' '{"id": "gui-b-backup-Run Backup", "verdict": "pass", "detail": "ok", "duration": 1.5}'
+        printf '%s\n' '{"event": "resources", "phase": "start", "ops_done": 0, "vmrss_kb": 100000, "fds": 20}'
+        printf '%s\n' '{"event": "resources", "phase": "end", "ops_done": 40, "vmrss_kb": 110000, "fds": 17}'
+    } > "$run/survey-gui-results.jsonl"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_exec() {
+            case "$2" in
+                *"== pools =="*)
+                    printf "== pools ==\nzfstest1 ONLINE\n"
+                    printf "== config ==\nparses\n"
+                    return 0 ;;
+            esac
+            return 1   # residue grep: nothing left
+        }
+        itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "info:GUI resource envelope"
+    assert_contains "$out" "VmRSS 100000->110000 kB (+10000)"
+    assert_contains "$out" "fds 20->17 (-3)"
+    assert_contains "$out" "ops 0->40"
+
+    # Old runs (no resources records) and CLI-only selections: the step
+    # reports none recorded and never changes the wrap verdict.
+    printf '%s\n' '{"id": "gui-b-backup-Run Backup", "verdict": "pass", "detail": "ok", "duration": 1.5}' \
+        > "$run/survey-gui-results.jsonl"
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_exec() {
+            case "$2" in
+                *"== pools =="*)
+                    printf "== pools ==\nzfstest1 ONLINE\n"
+                    printf "== config ==\nparses\n"
+                    return 0 ;;
+            esac
+            return 1
+        }
+        itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "info:GUI resource envelope:none recorded"
+    rm -f "$run/survey-gui-results.jsonl"
+    # A selection with NO gui items (the CLI-only shape): no results
+    # file is expected, the sweep has nothing to miss, and the envelope
+    # step still reports "none recorded".
+    printf 'id\tkind\tname\tpage\tprofile\n' > "$run/survey-items.tsv"
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_exec() {
+            case "$2" in
+                *"== pools =="*)
+                    printf "== pools ==\nzfstest1 ONLINE\n"
+                    printf "== config ==\nparses\n"
+                    return 0 ;;
+            esac
+            return 1
+        }
+        itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "info:GUI resource envelope:none recorded"
+    test_pass
+}
+
 # ------------------------------------------------------------------------------
 # Mint leg: baseline install + profile gates
 # ------------------------------------------------------------------------------
@@ -381,7 +466,15 @@ test_baseline_install_stage_shape() {
     run="$tmp_root/run9"; mkdir -p "$run"
     local out
     out="$(_source_survey "$root" "$run" '
-        itf_guest_exec() { return 1; }   # prereq check reports missing
+        itf_guest_exec() {
+            case "$2" in
+                *"== pools =="*)
+                    printf "== pools ==\nzfstest1 ONLINE\n"
+                    printf "== config ==\nparses\n"
+                    return 0 ;;
+            esac
+            return 1
+        }   # prereq check reports missing
         itf_journey_run_installer() { echo "installer-feed:$2"; return 0; }
         itf_journey_verify_installed() { echo "verify-installed"; }
         itf_survey_install_baseline 10.0.0.1 2>/dev/null
@@ -453,7 +546,7 @@ test_world_stage_dispatches_thin() {
 }
 
 test_world_stage_refuses_unimplemented() {
-    test_start "world stage: busy/unknown fail closed (lived-in dispatches)"
+    test_start "world stage: unknown variants fail closed"
     local root run
     root="$(make_itf_root "$tmp_root/root12")"
     run="$tmp_root/run12"; mkdir -p "$run"
@@ -461,18 +554,34 @@ test_world_stage_refuses_unimplemented() {
     out="$(_source_survey "$root" "$run" '
         itf_guest_put() { return 0; }
         itf_guest_exec() { return 0; }
-        SURVEY_WORLD=busy
-        itf_survey_stage_world 10.0.0.1 > /dev/null 2>&1
-        echo "rc-busy=$? steps-busy=$_steps"
-        _steps=""
         SURVEY_WORLD=bogus
         itf_survey_stage_world 10.0.0.1 > /dev/null 2>&1
         echo "rc-bogus=$? steps-bogus=$_steps"
     ')"
-    assert_contains "$out" "rc-busy=1"
     assert_contains "$out" "rc-bogus=1"
-    assert_contains "$out" "Phase 5"
     assert_contains "$out" "unknown world variant"
+    test_pass
+}
+
+test_world_stage_dispatches_busy() {
+    test_start "world stage: busy dispatches the lived-in staging + reports busy"
+    local root run
+    root="$(make_itf_root "$tmp_root/root12d")"
+    run="$tmp_root/run12d"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        STAGED_IP=""
+        itf_survey_stage_lived_in() { STAGED_IP="$1"; return 0; }
+        SURVEY_WORLD=busy
+        itf_survey_stage_world 10.0.0.7 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "staged-ip=$STAGED_IP"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "staged-ip=10.0.0.7"
+    assert_contains "$out" "info:survey world staged"
+    assert_contains "$out" "variant=busy"
     test_pass
 }
 
@@ -618,6 +727,11 @@ test_wrap_lived_in_teardown_order() {
         TEARDOWN_CMD=""
         itf_guest_exec() {
             case "$2" in
+                # invariant-sweep facts pull: a clean world
+                *"== pools =="*)
+                    printf "== pools ==\nzfstest1 ONLINE\n"
+                    printf "== config ==\nparses\n"
+                    return 0 ;;
                 *"zfs release"*|*"zfs destroy"*) TEARDOWN_CMD="$2" ;;
             esac
             return 1   # residue grep: nothing left behind
@@ -628,6 +742,7 @@ test_wrap_lived_in_teardown_order() {
         SURVEY_CLONE_DS=zfstest1/survey-t1/clone-work
         itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
         echo "rc=$?"
+        echo "steps=$_steps"
         # Order inside the single teardown script: holds released, then
         # clone, then the receive tree, and only then the base destroys.
         case "$TEARDOWN_CMD" in
@@ -639,6 +754,225 @@ test_wrap_lived_in_teardown_order() {
     ')"
     assert_contains "$out" "rc=0"
     assert_contains "$out" "order-ok"
+    assert_contains "$out" "pass:survey invariant sweep"
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
+# Phase 5: busy world (background op + widened verdicts + invariant sweep)
+# ------------------------------------------------------------------------------
+
+test_busy_start_launches_paced_backup() {
+    test_start "busy start: paced backup launcher, liveness probe, scrub fallback"
+    local root run
+    root="$(make_itf_root "$tmp_root/root15")"
+    run="$tmp_root/run15"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        PROBE_OUT=running
+        itf_guest_put() { return 0; }
+        itf_guest_exec() {
+            case "$2" in
+                *"survey-busy-start.sh"*) return 0 ;;
+                *"kill -0"*) echo "$PROBE_OUT" ;;
+                *"zpool scrub"*) return 0 ;;
+            esac
+            return 0
+        }
+        SURVEY_DS=zfstest1/survey-run15
+        SURVEY_DS2=zfstest2/survey-run15
+        itf_survey_busy_start 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+        _steps=""
+        PROBE_OUT=failed
+        itf_survey_busy_start 10.0.0.1 > /dev/null 2>&1
+        echo "rc-fallback=$?"
+        echo "steps-fallback=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey busy op started"
+    assert_contains "$out" "rate=32k"
+    # The generated launcher: the j12 detached shape (setsid + feed
+    # file + log), the paced overrides, and the nextsnap cleanup.
+    grep -q "setsid ./bin/zfsdailybackup" "$run/survey-busy-start.sh" \
+        || { test_fail "launcher missing the setsid backup"; return; }
+    grep -q "transfer_rate_limit=.32k." "$run/survey-busy-start.sh" \
+        || { test_fail "launcher missing the rate limit"; return; }
+    grep -q "destfs=.zfstest2/survey-run15-busy." "$run/survey-busy-start.sh" \
+        || { test_fail "launcher not sending to a fresh busy dest"; return; }
+    grep -q "nextsnap_" "$run/survey-busy-start.sh" \
+        || { test_fail "launcher missing the nextsnap cleanup"; return; }
+    grep -q "SURVEY_BUSY_DEST=zfstest2/survey-run15-busy" "$run/survey-env.sh" \
+        || { test_fail "survey-env.sh missing the busy dest"; return; }
+    # Fallback arm: the backup does not hold -> the scrub takes over.
+    assert_contains "$out" "rc-fallback=0"
+    assert_contains "$out" "info:survey busy op fallback"
+    assert_contains "$out" "scrub of zfstest2"
+    test_pass
+}
+
+test_busy_teardown_joins_and_kills() {
+    test_start "busy teardown: join passes, kill exceeds and fails, log kept"
+    local root run
+    root="$(make_itf_root "$tmp_root/root16")"
+    run="$tmp_root/run16"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        OUTCOME="outcome: joined"
+        itf_guest_put() { return 0; }
+        itf_guest_exec() {
+            case "$2" in
+                *"survey-busy-stop.sh"*) echo "$OUTCOME" ;;
+                *"survey-busy.log"*) echo "busy log tail" ;;
+            esac
+            return 0
+        }
+        itf_survey_busy_teardown 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+        _steps=""
+        OUTCOME="outcome: killed (join window exceeded)"
+        itf_survey_busy_teardown 10.0.0.1 > /dev/null 2>&1
+        echo "rc-killed=$?"
+        echo "steps-killed=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey busy op teardown:outcome: joined"
+    assert_contains "$out" "rc-killed=1"
+    assert_contains "$out" "fail:survey busy op teardown:outcome: killed"
+    # The stopper: group TERM->KILL escalation for the backup, and the
+    # scrub stop judged by pool-state polling (never the command rc).
+    grep -q "kill -KILL" "$run/survey-busy-stop.sh" \
+        || { test_fail "stopper missing the KILL escalation"; return; }
+    grep -q "zpool scrub -s zfstest2" "$run/survey-busy-stop.sh" \
+        || { test_fail "stopper missing the scrub stop"; return; }
+    grep -q "scrub in progress" "$run/survey-busy-stop.sh" \
+        || { test_fail "stopper missing the pool-state polling"; return; }
+    grep -q "busy log tail" "$run/survey-busy.log" \
+        || { test_fail "busy log not pulled back as the artifact"; return; }
+    test_pass
+}
+
+test_cli_item_busy_refusal_widening() {
+    test_start "cli item: lock refusal passes only busy + marked + holder-named"
+    local root run
+    root="$(make_itf_root "$tmp_root/root17")"
+    run="$tmp_root/run17"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        HOLDER=zfsdailybackup
+        itf_guest_exec_feed() {
+            printf "WARN: Lock conflict on \x27x\x27: held by dataset=\x27y\x27 "
+            printf "type=Write pid=1 script=\x27%s\x27\n" "$HOLDER"
+            echo "FATAL: Lock conflict on x in non-interactive mode. Aborting."
+            return 1
+        }
+        itf_artifact() { return 0; }
+        # busy + marked + busy-op holder: the widened pass
+        SURVEY_WORLD=busy
+        itf_survey_run_cli_item 10.0.0.1 cli-a a deep "a" "-" "accept=0" \
+            "accept=\\n" "INFO" accept storage refuse-ok > /dev/null 2>&1
+        echo "s1=$_steps"
+        _steps=""
+        # busy + marked + DIFFERENT holder: strict fail
+        HOLDER=someone-else
+        itf_survey_run_cli_item 10.0.0.1 cli-b b deep "b" "-" "accept=0" \
+            "accept=\\n" "INFO" accept storage refuse-ok > /dev/null 2>&1
+        echo "s2=$_steps"
+        _steps=""
+        HOLDER=zfsdailybackup
+        # not a busy world: strict fail
+        SURVEY_WORLD=lived-in
+        itf_survey_run_cli_item 10.0.0.1 cli-c c deep "c" "-" "accept=0" \
+            "accept=\\n" "INFO" accept storage refuse-ok > /dev/null 2>&1
+        echo "s3=$_steps"
+        _steps=""
+        # busy but unmarked row: strict fail
+        SURVEY_WORLD=busy
+        itf_survey_run_cli_item 10.0.0.1 cli-d d deep "d" "-" "accept=0" \
+            "accept=\\n" "INFO" accept storage - > /dev/null 2>&1
+        echo "s4=$_steps"
+    ')"
+    assert_contains "$out" "s1=pass:item cli-a"
+    assert_contains "$out" "busy-refused"
+    assert_contains "$out" "s2=fail:item cli-b"
+    assert_contains "$out" "s3=fail:item cli-c"
+    assert_contains "$out" "s4=fail:item cli-d"
+    test_pass
+}
+
+test_wrap_invariant_sweep_gates() {
+    test_start "wrap invariant sweep: clean passes, every dirt class fails"
+    local root run
+    root="$(make_itf_root "$tmp_root/root18")"
+    run="$tmp_root/run18"; mkdir -p "$run"
+    printf 'id\tkind\tname\tpage\tprofile\n' > "$run/survey-items.tsv"
+    printf 'gui-b-x\tgui-button\tx\tp\ta\n' >> "$run/survey-items.tsv"
+    printf '{"id": "gui-b-x", "verdict": "pass"}\n' \
+        > "$run/survey-gui-results.jsonl"
+    printf '{"ladder": [{"hold": "offsite-keep"}]}\n' \
+        > "$run/survey-world-plan.json"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        FACTS="== pools ==
+zfstest1 ONLINE
+== config ==
+parses
+== holds ==
+zfstest1/survey-run18/home@snap offsite-keep
+"
+        itf_guest_exec() { printf "%s" "$FACTS"; return 0; }
+        _survey_invariant_sweep 10.0.0.1 > /dev/null 2>&1
+        echo "rc-clean=$?"
+        echo "steps=$_steps"
+        _steps=""
+        FACTS="== pools ==
+zfstest1 DEGRADED
+== config ==
+broken
+== locks ==
+stale.lock
+== holds ==
+zfstest1/survey-run18@snap .send-1234
+zfstest1/survey-run18@snap offsite-rogue
+== tmp ==
+/tmp/survey-junk
+"
+        _survey_invariant_sweep 10.0.0.1 > /dev/null 2>&1
+        echo "rc-dirty=$?"
+        echo "steps-dirty=$_steps"
+        cp "$ITF_RUN_DIR/survey-invariants.log" \
+           "$ITF_RUN_DIR/survey-invariants.dirty.log"
+        _steps=""
+        FACTS="== pools ==
+zfstest1 ONLINE
+== config ==
+parses
+"
+        rm -f "'"$run"'/survey-gui-results.jsonl"
+        _survey_invariant_sweep 10.0.0.1 > /dev/null 2>&1
+        echo "rc-missing=$?"
+    ')"
+    assert_contains "$out" "rc-clean=0"
+    assert_contains "$out" "pass:survey invariant sweep"
+    assert_contains "$out" "rc-dirty=1"
+    assert_contains "$out" "fail:survey invariant sweep"
+    grep -q "pool not ONLINE" "$run/survey-invariants.dirty.log" \
+        || { test_fail "unhealthy pool unreported"; return; }
+    grep -q "pinned config JSON broken" "$run/survey-invariants.dirty.log" \
+        || { test_fail "config breakage unreported"; return; }
+    grep -q "lock dir not empty" "$run/survey-invariants.dirty.log" \
+        || { test_fail "lock leftovers unreported"; return; }
+    grep -q "stray send hold" "$run/survey-invariants.dirty.log" \
+        || { test_fail ".send- hold unreported"; return; }
+    grep -q "unexpected hold" "$run/survey-invariants.dirty.log" \
+        || { test_fail "rogue hold unreported"; return; }
+    grep -q "/tmp litter" "$run/survey-invariants.dirty.log" \
+        || { test_fail "tmp litter unreported"; return; }
+    assert_contains "$out" "rc-missing=1"
+    grep -q "GUI results incomplete" "$run/survey-invariants.log" \
+        || { test_fail "gui incompleteness unreported"; return; }
     test_pass
 }
 
@@ -736,6 +1070,10 @@ assert pull["active"] is False and pull["excludes"] == []
 off = cfg["offsite"]["steps"][0]
 assert isinstance(off["includes"], str) and off["includes"] == "backup-src"
 assert off["excludes"] == "clone-work" and off["dest"] == "<offsite>/survey"
+ca = cfg["checkagainst"]
+assert ca["user_entries"], ca
+assert set(ca["user_entries"][0]) == {"label", "source_root", "dest_root", "comment"}
+assert ca["backup_derived"] == [] and ca["offsite_derived"] == []
 
 pdir = f"{run}/survey-state-profiles"
 names = sorted(os.listdir(pdir))
@@ -944,6 +1282,10 @@ test_wrap_depth_distribution() {
         RESIDUE=""
         itf_guest_exec() {
             case "$2" in
+                *"== pools =="*)
+                    printf "== pools ==\nzfstest1 ONLINE\n"
+                    printf "== config ==\nparses\n"
+                    return 0 ;;
                 *"zfs destroy"*) TEARDOWN="$2" ;;
                 *"remove-vm-disk"*) VMD+="$1:" ;;
                 *"zfs list"*) RESIDUE="$2" ;;
@@ -1015,26 +1357,48 @@ test_select_lived_in_passes_with_digest_guard() {
     test_pass
 }
 
-test_select_busy_still_refused() {
-    test_start "select refuses busy (Phase 5) before any lab spend"
+test_select_accepts_busy_world() {
+    test_start "select accepts busy (archives the world) and refuses typos early"
     local root run
     root="$(make_itf_root "$tmp_root/root14b")"
     run="$tmp_root/run14b"; mkdir -p "$run"
     local out
     out="$(_source_survey "$root" "$run" '
+        # Typo arm FIRST: its failed select truncates survey-select.out,
+        # which the busy arm below rewrites with the real content.
+        ITF_SURVEY_WORLD=bogus itf_survey_select > /dev/null 2>&1
+        echo "rc-typo=$?"
+        echo "steps-typo=$_steps"
+        # The busy arm below truncates survey-select.log on success —
+        # keep the typo refusal itself for the grep outside.
+        cp "$ITF_RUN_DIR/survey-select.log" \
+           "$ITF_RUN_DIR/survey-select-typo.log"
+        _steps=""
         ITF_SURVEY_WORLD=busy ITF_SURVEY_SEED=unitseed \
             itf_survey_select > /dev/null 2>&1
         echo "rc=$?"
         echo "steps=$_steps"
     ')"
-    # The refusal now fires inside the sampler (new-mode busy has no
-    # plan to digest), so select reports the sampler's FATAL — still
-    # before any lab is cloned; select's own fence stays as the
-    # defense-in-depth layer behind it.
-    assert_contains "$out" "rc=1"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey selection created"
+    grep -q "^# world busy$" "$run/survey-select.out" \
+        || { test_fail "select.out missing the busy world line"; return; }
+    python3 - "$run/survey-archive.json" <<'PYCHK' \
+        || { test_fail "archive did not record the busy world"; return; }
+import json, sys
+
+world = json.load(open(sys.argv[1]))["world"]
+assert world["variant"] == "busy", world
+assert world["seed"] and world["anchor"] and world["digest"], world
+PYCHK
+    assert_contains "$out" "rc-typo=1"
+    # The typo is refused by the SAMPLER first (the closed variant list
+    # is validated at args parsing); select reports the refusal before
+    # any lab spend.  The lib-side fence stays as defense-in-depth and
+    # is covered by test_world_stage_refuses_unimplemented.
     assert_contains "$out" "fail:survey selection"
-    grep -q "Phase 5" "$run/survey-select.log" \
-        || { test_fail "sampler busy FATAL missing from survey-select.log"; return; }
+    grep -q "bad world variant" "$run/survey-select-typo.log" \
+        || { test_fail "sampler variant FATAL missing from select.log"; return; }
     test_pass
 }
 
@@ -1100,11 +1464,17 @@ test_cli_item_verdicts_and_routing
 test_baseline_install_stage_shape
 test_journey_profile_gates
 test_wrap_residue_gate_and_summary
+test_wrap_resource_summary
 test_guest_time_fence
 test_world_stage_dispatches_thin
 test_world_stage_refuses_unimplemented
+test_world_stage_dispatches_busy
 test_world_stage_dispatches_lived_in
 test_wrap_lived_in_teardown_order
+test_busy_start_launches_paced_backup
+test_busy_teardown_joins_and_kills
+test_cli_item_busy_refusal_widening
+test_wrap_invariant_sweep_gates
 test_playground_config_version_dynamic
 test_config_rows_seeded
 test_recipe_zfsresume
@@ -1114,7 +1484,7 @@ test_table_overrides_invokes
 test_wrap_depth_distribution
 test_select_forwards_world_knob
 test_select_lived_in_passes_with_digest_guard
-test_select_busy_still_refused
+test_select_accepts_busy_world
 test_select_digest_guard_refuses_drift
 test_select_replay_world_conflict_refused
 

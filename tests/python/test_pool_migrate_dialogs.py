@@ -1422,6 +1422,29 @@ def _make_app(pools=("pool1", "pool2"), root_pool=None):
     return app
 
 
+def _isolated_mkstemp_factory(tmpdir, created):
+    """An mkstemp redirect scoped to the handler's captured-holds TSV.
+
+    The product stages the holds file with the `migrate-holds-` prefix;
+    only calls carrying that prefix are routed into *tmpdir* and recorded
+    in *created*.  Everything else — zlm's `.lock-` staging included —
+    keeps the real tempfile.mkstemp: redirecting those too once raced the
+    holds dir's deletion against an in-flight lock write under full-suite
+    load (the 2026-11-17 ENOENT flake).
+    """
+    real_mkstemp = tempfile.mkstemp
+
+    def _isolated_mkstemp(*args, **kwargs):
+        if not str(kwargs.get("prefix", "")).startswith("migrate-holds-"):
+            return real_mkstemp(*args, **kwargs)
+        kwargs["dir"] = tmpdir
+        fd, path = real_mkstemp(*args, **kwargs)
+        created.append(path)
+        return fd, path
+
+    return _isolated_mkstemp
+
+
 def _drive_handler(
     pmd,
     app,
@@ -1447,18 +1470,13 @@ def _drive_handler(
     # The handler overwrites request.holds_file with a fresh mkstemp; route
     # it into a per-drive temp dir so tests that never finish (or that
     # deliberately keep) the file cannot litter the real /tmp. The created
-    # paths are exposed on the stack for assertions.
+    # paths are exposed on the stack for assertions. Only the handler's
+    # own migrate-holds- staging is redirected (see the factory).
     holds_tmpdir = stack.enter_context(tempfile.TemporaryDirectory(prefix="migrate-holds-test-"))
     holds_files = []
-    real_mkstemp = tempfile.mkstemp
-
-    def _isolated_mkstemp(*args, **kwargs):
-        kwargs["dir"] = holds_tmpdir
-        fd, path = real_mkstemp(*args, **kwargs)
-        holds_files.append(path)
-        return fd, path
-
-    stack.enter_context(patch.object(pmd.tempfile, "mkstemp", _isolated_mkstemp))
+    stack.enter_context(
+        patch.object(pmd.tempfile, "mkstemp", _isolated_mkstemp_factory(holds_tmpdir, holds_files))
+    )
     patches = [
         patch.object(pmd, "show_migrate_pool_dialog", return_value=request),
         patch.object(pmd, "_show_cutover_confirm", return_value=confirm_cutover),
@@ -1702,16 +1720,8 @@ class TestHandlerExecution(unittest.TestCase):
         nc.is_two_node.return_value = False
         with tempfile.TemporaryDirectory(prefix="migrate-holds-test-") as tmpdir:
             created = []
-            real_mkstemp = tempfile.mkstemp
-
-            def _isolated_mkstemp(*args, **kwargs):
-                kwargs["dir"] = tmpdir
-                fd, path = real_mkstemp(*args, **kwargs)
-                created.append(path)
-                return fd, path
-
             with (
-                patch.object(pmd.tempfile, "mkstemp", _isolated_mkstemp),
+                patch.object(pmd.tempfile, "mkstemp", _isolated_mkstemp_factory(tmpdir, created)),
                 patch.object(pmd, "show_migrate_pool_dialog", return_value=request),
                 patch.object(pmd, "node_config", nc),
                 patch.object(pmd, "zlm", zlm),
@@ -2316,6 +2326,27 @@ class TestCutoverIscsiRepair(unittest.TestCase):
     def test_failed_cutover_skips_proxmox_enrollment(self):
         _pmd, _app, _logs, offer = self._run_cutover(managed=True, cutover_rc=2)
         offer.assert_not_called()
+
+
+class TestIsolatedMkstempFactory(unittest.TestCase):
+    """The holds redirect is scoped: zlm's .lock- staging never redirects."""
+
+    def test_only_migrate_holds_prefix_is_redirected(self):
+        with tempfile.TemporaryDirectory() as inside:
+            with tempfile.TemporaryDirectory() as outside:
+                created = []
+                mkstemp = _isolated_mkstemp_factory(inside, created)
+
+                _fd, holds_path = mkstemp(prefix="migrate-holds-pool1-", suffix=".tsv")
+                os.close(_fd)
+                _fd, lock_path = mkstemp(prefix=".lock-something", dir=outside)
+                os.close(_fd)
+
+                # The holds TSV landed in the redirected dir and was recorded;
+                # the lock staging kept its own dir and stays unrecorded.
+                self.assertEqual(os.path.dirname(holds_path), inside)
+                self.assertEqual(created, [holds_path])
+                self.assertEqual(os.path.dirname(lock_path), outside)
 
 
 if __name__ == "__main__":

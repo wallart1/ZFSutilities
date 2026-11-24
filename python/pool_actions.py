@@ -387,7 +387,13 @@ def on_pools_import(app):
 
 
 def on_pools_export(app):
-    """Export all selected pools, with diagnosis and recovery on failure."""
+    """Export all selected pools, proactively prepared before the attempt.
+
+    Every pool goes through the blocker gate first (safe unmounts and
+    approval-driven holder resolution — a bare export is never
+    attempted); failures and stalls still get the reactive diagnosis
+    and recovery as the backstop.
+    """
     selected = [n for n, h in _get_selected_rows(app)]
     if not selected:
         log_msg("WARN: Select at least one pool to export")
@@ -412,6 +418,8 @@ def on_pools_export(app):
         return
 
     for pool_name in selected:
+        if not _prepare_pools_page_export(app, pool_name):
+            continue
         export = _BoundedExport(app.ctx.zfs_repository, pool_name)
         finished, success, stderr = export.wait(EXPORT_STALL_WARN_S)
         if finished and success:
@@ -904,6 +912,49 @@ def _show_export_blockers_dialog(app, pool, blockers):
     dialog.format_secondary_text("\n".join(lines))
     run_dialog(dialog)
     dialog.destroy()
+
+
+def _prepare_pools_page_export(app, pool_name):
+    """Prepare a pool for export before any export attempt is made.
+
+    The proactive gate the Migrate Pool cutover already has: collect the
+    pool's blockers, unmount every filesystem that is safe to unmount,
+    and clear the resolvable blockers through the approval dialogs.
+    While anything still holds the pool, refuse with the blocker dialog
+    — a bare export is never attempted.  Returns True when the pool is
+    ready for `zpool export`.
+    """
+    repo = app.ctx.zfs_repository
+
+    blockers = _collect_export_blockers(repo, pool_name)
+    if blockers:
+        unmount_ok, unmount_err = _unmount_pool_filesystems(repo, pool_name, blockers)
+        if not unmount_ok:
+            log_msg(f"WARN: Auto-unmount of filesystems failed: {unmount_err}")
+            _show_export_blockers_dialog(app, pool_name, _collect_export_blockers(repo, pool_name))
+            return False
+        blockers = _collect_export_blockers(repo, pool_name)
+    if not blockers:
+        return True
+
+    unresolvable = [b for b in blockers if not b.resolvable]
+    for reason in unresolvable:
+        log_msg(f"WARN: {reason.dataset}: {reason.detail}")
+    if unresolvable:
+        _show_export_blockers_dialog(app, pool_name, unresolvable)
+        log_msg(f"WARN: Export of '{pool_name}' skipped — resolve the blockers and retry")
+        return False
+
+    if not _resolve_export_blockers(app, pool_name, blockers):
+        log_msg(f"INFO: Export of '{pool_name}' cancelled by user")
+        return False
+
+    remaining = _collect_export_blockers(repo, pool_name)
+    if remaining:
+        _show_export_blockers_dialog(app, pool_name, remaining)
+        log_msg(f"WARN: Export of '{pool_name}' skipped — blockers remain after resolution")
+        return False
+    return True
 
 
 def _try_export_with_recovery(app, pool_name, stderr):

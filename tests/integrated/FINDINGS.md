@@ -7,7 +7,16 @@ executed in the dev repository only after explicit user approval.
 
 Published rows are pruned at each release (recoverable via
 `git log`); rows remain here only while their outcome is not yet
-shipped.  Pruned at the 0.141.0 release (2026-11-12): F-047 and
+shipped.  Pruned at the 0.143.0 release (2026-11-23): F-052 — the
+zfsresume silent-verdict defect (`zfs send -nP -t` for a valid token
+exits 0 with the decoded contents on zfs 2.2.2, but both report
+branches sat inside the failure path, and an unrecognized probe
+failure printed "seems valid").  Fixed under the approved 2026-11-23
+survey plan: decoded contents are the validity signal, and unexpected
+failures WARN with wording reused from zfs-migrate-send; verified by
+the green replay run-20261123-202938-j22-function-survey (the
+real-path item passed with the live "seems valid" verdict) and shipped
+in 0.143.0.  Pruned at the 0.141.0 release (2026-11-12): F-047 and
 F-050 — both fixed in the dev tree (2026-11-11, approved session
 plan for the pub-tree j22 run), verified by the green archive
 replay of the same 107-item draw on the fixed tree
@@ -29,7 +38,6 @@ files a finding.
 
 | ID | Date | Journey | Symptom | Suspected area | Status | Repair plan |
 |----|------|---------|---------|----------------|--------|-------------|
-| F-052 | 2026-11-23 | j22-function-survey (`results/run-20261123-200238-j22-function-survey/`) | `zfsresume` printed no verdict at all for a valid resume token — on zfs 2.2.2 the `zfs send -nP -t` dry-run exits 0 with the decoded contents, and both report branches sat inside the failure path; an unrecognized probe failure was misreported as "seems valid" | `bin/zfsresume` token validation | verified (replay `run-20261123-202938-j22-function-survey` green, real-path item passed with the live "seems valid" verdict) | in-session fix under the approved 2026-11-23 survey plan |
 
 Status values: `open` → `planned` (repair plan approved) → `fixed`
 (dev change landed) → `verified` (rerun green) → `accepted` (user waives).

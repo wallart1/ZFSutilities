@@ -34,15 +34,18 @@
 #       World-variant dispatcher: stages the world the archive names
 #       (ITF_SURVEY_WORLD, default thin — the playground above; lived-in
 #       adds the aged, product-named snapshot ladder via the guest clock
-#       walk; busy is reserved for Phase 5) and reports the variant +
+#       walk; busy stages the same ladder and itf_survey_busy_start adds
+#       the bounded background operation) and reports the variant +
 #       stage elapsed time (cost visibility).
 #   itf_survey_stage_gui_env <guest-ip>
 #       In-guest Xvfb (the product's GUI deps are already installed).
 #   itf_survey_run_cli_item <guest-ip> <id> <command> <depth> <invoke>
 #                           <profiles> <rcs> <feeds> <assert> <profile>
+#                           [node] [busy-mark]
 #       One CLI item: placeholder resolution, profile-selected stdin
 #       feed and expected rc, timeout-bounded guest invocation, log
-#       artifact, PASS/FAIL step.  A survey_recipe_<command> function,
+#       artifact, PASS/FAIL step; in busy runs a refuse-ok row may pass
+#       via the clean holder-naming lock refusal.  A survey_recipe_<command> function,
 #       when defined below, takes over the whole invocation (bespoke
 #       depth in universe.tsv).
 #   itf_survey_run_gui_items <guest-ip>
@@ -136,14 +139,17 @@ itf_survey_select() {
     # missing-world-is-thin rule the archive loader applies.
     [[ -n "$SURVEY_WORLD" ]] || SURVEY_WORLD=thin
 
-    # Phase fence: busy is the one variant this tree cannot stage yet
-    # (Phase 5).  Refusing here — before any lab is cloned — beats
-    # failing at the world stage minutes later.
-    if [[ "$SURVEY_WORLD" != "thin" && "$SURVEY_WORLD" != "lived-in" ]]; then
-        itf_step fail "survey world variant" \
-            "world '$SURVEY_WORLD' is not implemented in this tree (busy lands in Phase 5)"
-        return 1
-    fi
+    # Early fence: the closed variant list, refused before any lab is
+    # cloned (the sampler validates the name too — this catches a typo
+    # minutes earlier than the world stage would).
+    case "$SURVEY_WORLD" in
+        thin|lived-in|busy) ;;
+        *)
+            itf_step fail "survey world variant" \
+                "world '$SURVEY_WORLD' is not a known variant (thin | lived-in | busy)"
+            return 1
+            ;;
+    esac
 
     if [[ "$mode" == "new" ]]; then
         SURVEY_ARCHIVE="$ITF_RUN_DIR/survey-archive.json"
@@ -474,7 +480,10 @@ PYEOF
             "world seed/anchor unknown - select must run first (seed='${SURVEY_WORLD_SEED:-}' anchor='${SURVEY_WORLD_ANCHOR:-}')"
         return 1
     fi
-    local -a plan_args=(--variant lived-in --seed "$SURVEY_WORLD_SEED"
+    # busy stages this same ladder (its background operation is runtime
+    # activity, not plan state), but the digest names the variant — plan
+    # as whichever one the archive carries so the digest guard holds.
+    local -a plan_args=(--variant "${SURVEY_WORLD:-lived-in}" --seed "$SURVEY_WORLD_SEED"
         --anchor "$SURVEY_WORLD_ANCHOR")
     local plan_json="$ITF_RUN_DIR/survey-world-plan.json"
     local ladder_raw="$ITF_RUN_DIR/survey-world-ladder.tsv"
@@ -706,6 +715,24 @@ cfg = {
             },
         ],
     },
+    # Check Against: the page's user tree is its only editable surface,
+    # so one seeded user row keeps edit-cell live under any draw (an
+    # empty user tree left the role nothing to commit to — live-failed
+    # run-20261124-121057; port of the pub3 lane fix).
+    "checkagainst": {
+        "backup_derived_active": True,
+        "offsite_derived_active": True,
+        "backup_derived": [],
+        "offsite_derived": [],
+        "user_entries": [
+            {
+                "label": "survey-user",
+                "source_root": ds + "/home",
+                "dest_root": ds2,
+                "comment": "survey seeded row",
+            },
+        ],
+    },
 }
 with open(path, "w") as f:
     json.dump(cfg, f, indent=1)
@@ -887,11 +914,12 @@ itf_survey_stage_world() {
             itf_survey_stage_lived_in "$guest_ip" || return 1
             ;;
         busy)
-            # Recognized name reserved for Phase 5; select's fence
-            # normally refuses it before any lab spend.
-            itf_step fail "survey world staged" \
-                "world 'busy' is not implemented in this tree (Phase 5)"
-            return 1
+            # The identical staging as lived-in: the background
+            # operation is launched later (itf_survey_busy_start,
+            # after the GUI env) and is runtime activity, not world
+            # state — the digest names the variant and the ladder is
+            # the same.
+            itf_survey_stage_lived_in "$guest_ip" || return 1
             ;;
         *)
             itf_step fail "survey world staged" "unknown world variant: '$variant'"
@@ -936,6 +964,187 @@ itf_survey_stage_gui_env() {
 }
 
 # ---------------------------------------------------------------------------
+# Busy-world background operation (busy = lived-in + one bounded real op
+# running while the random actions land — the lock/EBUSY surfaces a
+# sequential survey cannot reach)
+# ---------------------------------------------------------------------------
+
+# itf_survey_busy_start <guest-ip>
+#
+# Launches the bounded background operation on the storage guest: a real
+# zfsdailybackup run redirected at the survey's scratch pair through the
+# product's own overrides mechanism (the world stage's mode_dailybackup
+# shape) — source backup-src, a FRESH receive tree so the send is full
+# and therefore paceable, and transfer_rate_limit riding the same
+# overrides string so lib/pace_stream.py stretches the window to
+# seconds-to-a-minute scale.  Fallback when the backup cannot hold: a
+# scrub of zfstest2 (IO load without dataset locks).  The op runs under
+# setsid in its own session (j12's detached-launch pattern) so teardown
+# can signal the whole process group; pid/mode land in guest-side files
+# the teardown reads back.
+itf_survey_busy_start() {
+    local guest_ip="$1"
+    local rate="${ITF_SURVEY_BUSY_RATE:-32k}"
+    local busy_dest="${SURVEY_DS2}-busy"
+
+    # Teardown knowledge (the wrap also destroys the tree).
+    cat >> "$ITF_RUN_DIR/survey-env.sh" <<EOF
+SURVEY_BUSY_DEST=$busy_dest
+EOF
+    itf_guest_put "$guest_ip" "$ITF_RUN_DIR/survey-env.sh" \
+        /root/survey-env.sh > /dev/null 2>&1
+
+    local overrides="pull_rocky='N';pull_tweety='N';pull_stewie='N';backup_threeamigos_proxmox='N';backup_NVME1='N';prune='N';sourcefs='$SURVEY_DS/backup-src';destfs='$busy_dest';transfer_rate_limit='$rate';send-receive"
+    local launcher="$ITF_RUN_DIR/survey-busy-start.sh"
+    cat > "$launcher" <<EOF
+#!/bin/bash
+# itf j22 busy world (generated): launch the bounded background op.
+set -u
+printf '\n' > /root/survey-busy.feed
+cd /root/ZFSutilities
+# zfssnapbuild's nextsnap-reuse prompt would eat the feed newline.
+rm -f /run/zfsutilities/nextsnap_* 2>/dev/null || true
+setsid ./bin/zfsdailybackup "${overrides}" \\
+    < /root/survey-busy.feed > /root/survey-busy.log 2>&1 &
+echo \$! > /root/survey-busy.pid
+echo backup > /root/survey-busy.mode
+exit 0
+EOF
+    if ! itf_guest_put "$guest_ip" "$launcher" /root/survey-busy-start.sh \
+            > /dev/null 2>&1 \
+        || ! itf_guest_exec "$guest_ip" 'bash /root/survey-busy-start.sh'; then
+        itf_step fail "survey busy op start" "could not launch background backup"
+        return 1
+    fi
+
+    # Bounded liveness verify: alive after 5 s = running; gone but the
+    # log shows real work = finished fast (a short window, still a real
+    # op); gone with no work markers = launch failed -> scrub fallback.
+    local probe
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    probe="$(itf_guest_exec "$guest_ip" '
+        sleep 5
+        pid=$(cat /root/survey-busy.pid 2>/dev/null || echo 0)
+        if kill -0 "$pid" 2>/dev/null; then
+            echo running
+        elif grep -qE "New snapshot|zfs send|completed" \
+                /root/survey-busy.log 2>/dev/null; then
+            echo finished
+        else
+            echo failed
+        fi
+    ' 2>/dev/null)"
+    case "$probe" in
+        running)
+            itf_step pass "survey busy op started" \
+                "paced backup $SURVEY_DS/backup-src -> $busy_dest rate=$rate"
+            ;;
+        finished)
+            itf_step pass "survey busy op started" \
+                "backup to $busy_dest completed within the launch probe (short window)"
+            ;;
+        *)
+            itf_step info "survey busy op fallback" \
+                "background backup did not hold - starting a zfstest2 scrub instead"
+            if itf_guest_exec "$guest_ip" '
+                    zpool scrub zfstest2 \
+                        > /root/survey-busy.log 2>&1 \
+                    && echo scrub > /root/survey-busy.mode \
+                    && echo 0 > /root/survey-busy.pid
+                '; then
+                itf_step pass "survey busy op started" \
+                    "scrub of zfstest2 running as the background load"
+            else
+                itf_step fail "survey busy op started" \
+                    "neither backup nor scrub could start - see survey-busy.log"
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# itf_survey_busy_teardown <guest-ip>
+#
+# Joins or kills the background operation before the wrap: the invariant
+# sweep judges a quiesced system, so the op must be gone by then.  The
+# preferred path is the join (bounded in-guest polling, no long sleeps);
+# a timeout escalates TERM then KILL on the whole session group, and a
+# leftover lock after a kill is the sweep's honest failure, never
+# hand-cleaned here.  The scrub fallback stops by pool-state polling —
+# scrub ioctls complete asynchronously, so the command's return says
+# nothing about the pool (the scrub-pause semantics law).
+itf_survey_busy_teardown() {
+    local guest_ip="$1"
+    local stopper="$ITF_RUN_DIR/survey-busy-stop.sh"
+    cat > "$stopper" <<'EOF'
+#!/bin/bash
+# itf j22 busy world (generated): join/kill the background op.
+set -u
+mode=$(cat /root/survey-busy.mode 2>/dev/null || echo none)
+case "$mode" in
+    backup)
+        pid=$(cat /root/survey-busy.pid 2>/dev/null || echo 0)
+        for _ in $(seq 1 45); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 2
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+            for _ in $(seq 1 5); do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 2
+            done
+            kill -0 "$pid" 2>/dev/null \
+                && kill -KILL -- "-$pid" 2>/dev/null
+            echo "outcome: killed (join window exceeded)"
+        else
+            echo "outcome: joined"
+        fi
+        ;;
+    scrub)
+        zpool scrub -s zfstest2 2>/dev/null || true
+        for _ in $(seq 1 30); do
+            zpool status zfstest2 2>/dev/null | grep -q 'scrub in progress' \
+                || break
+            sleep 2
+        done
+        if zpool status zfstest2 2>/dev/null | grep -q 'scrub in progress'; then
+            echo "outcome: scrub stop still settling"
+        else
+            echo "outcome: scrub stopped"
+        fi
+        ;;
+    *)
+        echo "outcome: no busy op recorded"
+        ;;
+esac
+EOF
+    if ! itf_guest_put "$guest_ip" "$stopper" /root/survey-busy-stop.sh \
+            > /dev/null 2>&1; then
+        itf_step fail "survey busy op teardown" "could not push the stopper"
+        return 1
+    fi
+    local outcome
+    outcome="$(itf_guest_exec "$guest_ip" 'bash /root/survey-busy-stop.sh')" \
+        || outcome="outcome: teardown ssh failed"
+    itf_guest_exec "$guest_ip" \
+        'cat /root/survey-busy.log 2>/dev/null || true' \
+        > "$ITF_RUN_DIR/survey-busy.log" 2>/dev/null || true
+    itf_artifact "survey-busy" "$ITF_RUN_DIR/survey-busy.log"
+    case "$outcome" in
+        "outcome: joined"|"outcome: scrub stopped"|"outcome: no busy op recorded")
+            itf_step pass "survey busy op teardown" "$outcome"
+            ;;
+        *)
+            itf_step fail "survey busy op teardown" "$outcome"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # CLI item execution
 # ---------------------------------------------------------------------------
 
@@ -951,6 +1160,24 @@ _survey_feed_for() {
     done
     [[ "$feed" == "-" ]] && feed=""
     printf '%b' "$feed"
+}
+
+# _survey_busy_lock_refusal <log>
+#
+# True when the log shows the busy world's clean lock refusal — the
+# zfslock_wait_or_resolve contract under a headless caller: a WARN that
+# names the holder (the busy operation's own zfsdailybackup), then the
+# non-interactive abort.  Any other shape (a different holder, a stale
+# lock from an earlier item, a plain failure) stays false, so the
+# strict verdict applies — and outside busy worlds this is always
+# false.
+_survey_busy_lock_refusal() {
+    [[ "${SURVEY_WORLD:-}" == busy ]] || return 1
+    [[ -s "$1" ]] || return 1
+    grep -q "WARN: Lock conflict on '" "$1" \
+        && grep -q "held by dataset=" "$1" \
+        && grep -q "script='zfsdailybackup'" "$1" \
+        && grep -q "non-interactive mode" "$1"
 }
 
 # _survey_rc_for <rcs-map> <profile> -> expected rc ("*" = any)
@@ -993,6 +1220,9 @@ itf_survey_run_cli_item() {
     local profiles="$6"
     local rcs="$7" feeds="$8" assert="$9" profile="${10}"
     local node="${11:-storage}"
+    # universe.tsv's busy column: refuse-ok marks the rows whose prey
+    # can meet the background operation's locks (empty for older rows).
+    local busy_mark="${12:--}"
 
     # Route to the guest that owns the command (two-node items).
     local target_ip="$guest_ip"
@@ -1050,6 +1280,13 @@ timeout 300 ./bin/$resolved"
     if (( ok )); then
         itf_step pass "item $id" \
             "[$depth/$profile] $resolved — see items/$id.log"
+    elif [[ "$busy_mark" == refuse-ok ]] && _survey_busy_lock_refusal "$log"; then
+        # Busy-world acquire-or-refuse: the item honestly lost the zlm
+        # lock to the background operation (holder named in the WARN) —
+        # the product's documented contract, so it passes with the
+        # refusal visible in the detail.
+        itf_step pass "item $id" \
+            "[$depth/$profile] $resolved — [busy-refused] lock holder named; see items/$id.log"
     else
         itf_step fail "item $id" \
             "[$depth/$profile] $resolved — ${why:-failed}; see items/$id.log"
@@ -1396,10 +1633,17 @@ survey_recipe_zfsdelallsnaps() {
     ' > /dev/null 2>&1
     # releaseholds releases the offsite-* tag, and the clone dependent
     # then skips that snapshot with a WARN (delsnap returns 1 for it, so
-    # the script may legitimately exit 1 on the accept path).
+    # the script may legitimately exit 1 on the accept path).  Under a
+    # busy world the prey sits inside the background op's lock scope,
+    # so the clean refusal is an equally honest outcome.
     if grep -qE "clone dependents|INFO" "$log" && (( rc == 0 || rc == 1 )); then
         itf_step pass "item $id" \
             "[bespoke/$profile] zfsdelallsnaps releaseholds+clone flow (see items/$id.log)"
+        return 0
+    fi
+    if _survey_busy_lock_refusal "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] zfsdelallsnaps — [busy-refused] lock holder named (see items/$id.log)"
         return 0
     fi
     itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
@@ -1689,6 +1933,140 @@ itf_survey_run_gui_items() {
 # Wrap-up
 # ---------------------------------------------------------------------------
 
+# _survey_invariant_sweep <guest-ip>
+#
+# The end-of-run oracle: cross-item damage the per-item verdicts cannot
+# see.  Judged on a quiesced system (the busy op is torn down before the
+# wrap) but BEFORE the playground teardown — scratch state and planned
+# holds must still exist to be judged.  Runs in every variant: pools
+# healthy, pinned config valid JSON, lock dir empty, no stray
+# .send-*/unplanned holds on scratch, no /tmp litter, GUI results
+# complete.  Planned offsite holds come from the run's world plan
+# (absent in thin — there, ANY hold on scratch is a surprise).  One
+# PASS/FAIL step; the problems land in the survey-invariants artifact.
+_survey_invariant_sweep() {
+    local guest_ip="$1"
+    local inv_log="$ITF_RUN_DIR/survey-invariants.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    local facts
+    facts="$(itf_guest_exec "$guest_ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        echo "== pools =="
+        zpool list -H -o name,health 2>/dev/null
+        echo "== config =="
+        if python3 -m json.tool /root/survey-config.json > /dev/null 2>&1; then
+            echo parses
+        else
+            echo broken
+        fi
+        echo "== locks =="
+        ls -A /run/lock/zfsutilities/.locks 2>/dev/null || true
+        echo "== holds =="
+        for base in "$SURVEY_DS" "$SURVEY_DS2"; do
+            zfs list -H -t snapshot -o name -r "$base" 2>/dev/null \
+                | while read -r s; do
+                    zfs holds -H "$s" 2>/dev/null || true
+                  done
+        done
+        echo "== tmp =="
+        ls -d /tmp/survey-* 2>/dev/null || true
+    ' 2>/dev/null)" || facts=""
+    local -a sweep_args=("$ITF_RUN_DIR/survey-invariants.facts"
+        "$ITF_RUN_DIR/survey-world-plan.json"
+        "${SURVEY_ITEMS:-$ITF_RUN_DIR/survey-items.tsv}"
+        "$ITF_RUN_DIR/survey-gui-results.jsonl")
+    printf '%s\n' "$facts" > "${sweep_args[0]}"
+    itf_artifact "survey-invariants-facts" "${sweep_args[0]}"
+    local problems
+    problems="$(python3 - "${sweep_args[@]}" <<'PYEOF'
+import json, os, sys
+
+facts_path, plan_path, items_path, results_path = sys.argv[1:5]
+section = None
+pools, locks, holds, tmp = [], [], [], []
+config_state = "missing"
+for line in open(facts_path):
+    line = line.rstrip("\n")
+    if line.startswith("== ") and line.endswith(" =="):
+        section = line[3:-3]
+        continue
+    if not line.strip():
+        continue
+    if section == "pools":
+        pools.append(line.split())
+    elif section == "config":
+        config_state = line.strip()
+    elif section == "locks":
+        locks.append(line)
+    elif section == "holds":
+        holds.append(line.split())
+    elif section == "tmp":
+        tmp.append(line)
+
+problems = []
+for fields in pools:
+    if len(fields) >= 2 and fields[1] != "ONLINE":
+        problems.append(f"pool not ONLINE: {' '.join(fields)}")
+if not pools:
+    problems.append("no pools listed (zpool list empty?)")
+if config_state != "parses":
+    problems.append(f"pinned config JSON {config_state}")
+if locks:
+    problems.append(f"lock dir not empty: {' '.join(locks)}")
+planned = set()
+if os.path.exists(plan_path):
+    with open(plan_path) as f:
+        for row in json.load(f).get("ladder", []):
+            if row.get("hold"):
+                planned.add(row["hold"])
+for fields in holds:
+    if len(fields) < 2:
+        continue
+    if fields[1].startswith(".send-"):
+        problems.append(f"stray send hold {fields[0]} {fields[1]}")
+    elif fields[1] not in planned:
+        problems.append(f"unexpected hold {fields[0]} {fields[1]}")
+for t in tmp:
+    problems.append(f"/tmp litter: {t}")
+
+# GUI completeness: every drawn GUI item must have a verdict record
+# (crash-resume retries append duplicates; any record with a verdict
+# counts, resource samples do not).
+gui_ids, seen = [], set()
+if os.path.exists(items_path):
+    for line in open(items_path):
+        fields = line.rstrip("\n").split("\t")
+        # Item kinds: cli | gui-button | gui-widget | gui-composite.
+        if len(fields) >= 2 and fields[1].startswith("gui") and fields[0]:
+            gui_ids.append(fields[0])
+if os.path.exists(results_path):
+    with open(results_path) as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("verdict") and rec.get("id"):
+                seen.add(rec["id"])
+missing = [i for i in gui_ids if i not in seen]
+if missing:
+    problems.append("GUI results incomplete: " + ", ".join(missing))
+
+print("\n".join(problems) if problems else "clean")
+PYEOF
+)"
+    printf '%s\n' "$problems" > "$inv_log"
+    itf_artifact "survey-invariants" "$inv_log"
+    if [[ "$problems" != "clean" ]]; then
+        itf_step fail "survey invariant sweep" \
+            "$(printf '%s\n' "$problems" | head -3 | tr '\n' '; ') — see survey-invariants.log"
+        return 1
+    fi
+    itf_step pass "survey invariant sweep" \
+        "pools ONLINE, config parses, lock dir empty, holds/tmp/results clean"
+    return 0
+}
+
 itf_survey_wrap() {
     local guest_ip="$1"
     local results_tsv="$ITF_RUN_DIR/survey-results.tsv"
@@ -1757,6 +2135,60 @@ PYEOF
     ' "$ITF_ROOT/survey/universe.tsv" "$items" | sort | tr '\n' ' ')"
     itf_step info "survey depth distribution" "${depth_counts:-none}"
 
+    # GUI resource envelope (report-only): the probe sampled its own
+    # VmRSS/fd count at start, every N ops, and end — the GUI runs in
+    # the probe's process, so growth here is a FINDINGS candidate for a
+    # product leak, never a run verdict.
+    local res_summary
+    res_summary="$(python3 - "$ITF_RUN_DIR/survey-gui-results.jsonl" <<'PYEOF'
+import json, os, sys
+
+path = sys.argv[1]
+first = last = None
+if os.path.exists(path):
+    with open(path) as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("event") == "resources":
+                if first is None:
+                    first = rec
+                last = rec
+
+
+def kv(rec, key):
+    val = rec.get(key)
+    return "?" if val is None else val
+
+
+def delta(key):
+    a, b = first.get(key), last.get(key)
+    if a is None or b is None:
+        return "?"
+    return f"{b - a:+d}"
+
+
+if first is None:
+    print("none recorded")
+else:
+    print(
+        f"VmRSS {kv(first, 'vmrss_kb')}->{kv(last, 'vmrss_kb')} kB "
+        f"({delta('vmrss_kb')}), fds {kv(first, 'fds')}->{kv(last, 'fds')} "
+        f"({delta('fds')}), ops {kv(first, 'ops_done')}->{kv(last, 'ops_done')}"
+    )
+PYEOF
+)"
+    itf_step info "GUI resource envelope" "$res_summary"
+
+    # End-of-run invariant sweep (Phase 5): the cross-item oracle, run
+    # while the scratch world still exists.  Teardown and the residue
+    # gate always run after it — a sweep failure fails the run but
+    # never skips cleanup.
+    local sweep_failed=0
+    _survey_invariant_sweep "$guest_ip" || sweep_failed=1
+
     # Playground teardown first: the scratch state the recipes ran against
     # is the survey's own and must not outlive it (the residue gate below
     # then proves the pool is clean).
@@ -1786,6 +2218,8 @@ PYEOF
         zfs destroy -r "$SURVEY_DS2" 2>/dev/null || true
         zfs destroy -r "${SURVEY_DS2}-recv" 2>/dev/null || true
         zfs destroy -r "${SURVEY_DS2}-res" 2>/dev/null || true
+        # Busy-world receive tree (absent in other variants; harmless).
+        zfs destroy -r "${SURVEY_DS2}-busy" 2>/dev/null || true
         rm -f "$SURVEY_STREAM" /root/survey-tree.tgz
         # The survey-owned state dir (schedule profiles and any other
         # runtime state written under the pinned ZFSUTILITIES_STATE_DIR).
@@ -1816,5 +2250,6 @@ PYEOF
     fi
     itf_step pass "survey residue check" \
         "no survey-* datasets remain (GUI effects on non-scratch state are the lab's to keep)"
+    (( sweep_failed )) && return 1
     return 0
 }

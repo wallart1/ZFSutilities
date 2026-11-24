@@ -390,6 +390,7 @@ class TestCheckLocal(unittest.TestCase):
         # The Oct 29 production shape: an offsite send-receive held a write
         # lock on the destination pool root, fencing every dataset below it.
         holder = subprocess.Popen(["sleep", "60"])
+        _wait_holder_execed(holder.pid)
         self.addCleanup(holder.wait)
         self.addCleanup(holder.terminate)
         self._write_w_lock("localpool", holder.pid, "send-receive dest: temp -> localpool")
@@ -414,6 +415,7 @@ class TestCheckLocal(unittest.TestCase):
 
     def test_check_local_reads_local_holder_lock(self):
         holder = subprocess.Popen(["sleep", "60"])
+        _wait_holder_execed(holder.pid)
         self.addCleanup(holder.wait)
         self.addCleanup(holder.terminate)
         # A local lock file for a remote-authority dataset is unusual but
@@ -486,6 +488,7 @@ class TestSamePidConversion(unittest.TestCase):
     def test_foreign_descendant_read_blocks_conversion(self):
         zlm.acquire("localpool/fs", "w", "initial write")
         holder = subprocess.Popen(["sleep", "60"])
+        _wait_holder_execed(holder.pid)
         self.addCleanup(holder.wait)
         self.addCleanup(holder.terminate)
         self._write_foreign_lock("localpool/fs/child", "r", holder.pid)

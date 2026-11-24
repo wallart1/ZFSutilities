@@ -402,13 +402,24 @@ def test_new_mode_lived_in_archives_anchor_pinned_digest(tmp_path):
     assert f"# world-anchor {world['anchor']}" in out2.stdout
 
 
-def test_new_mode_refuses_busy_world(tmp_path):
-    """busy is a recognized replay-conflict name but not plannable yet."""
-    refused = _sampler_run(
-        "new", "--seed", "s", "--archive", str(tmp_path / "b.json"), "--world", "busy"
-    )
+def test_new_mode_plans_busy_world(tmp_path):
+    """busy archives like any non-thin world: variant/seed/anchor/digest."""
+    archive = tmp_path / "b.json"
+    out = _sampler_run("new", "--seed", "s", "--archive", str(archive), "--world", "busy")
+    assert out.returncode == 0, out.stderr
+    assert "# world busy" in out.stdout
+    data = json.loads(archive.read_text())
+    world = data["world"]
+    assert world["variant"] == "busy"
+    assert world["digest"] == sampler.world_digest("busy", world["seed"], world["anchor"])
+    # Replay accepts the matching explicit variant and refuses a
+    # conflicting one — busy follows the same replay rules.
+    ok = _sampler_run("replay", "--archive", str(archive), "--world", "busy")
+    assert ok.returncode == 0, ok.stderr
+    assert "# world busy" in ok.stdout
+    refused = _sampler_run("replay", "--archive", str(archive), "--world", "lived-in")
     assert refused.returncode == 2
-    assert "Phase 5" in refused.stderr
+    assert "busy" in refused.stderr and "lived-in" in refused.stderr
 
 
 def test_replay_world_conflict_refused(tmp_path):
@@ -617,6 +628,25 @@ def test_gui_catalog_covers_every_page():
     pages_with_catalog = set(gui_catalog.L2_INTERACTIONS)
     pages_in_product = set(action_dispatch.ACTION_HANDLERS)
     assert pages_with_catalog == pages_in_product
+
+
+def test_gui_catalog_ensure_schema():
+    """Ensure specs map to real pages and real Add buttons, with a bound."""
+    import action_dispatch
+    import gui_catalog
+
+    ensure = gui_catalog.ENSURE_PRECONDITIONS
+    assert ensure, "the ensure map should name at least one page"
+    for page, spec in ensure.items():
+        assert page in gui_catalog.L2_INTERACTIONS, f"ensure names unknown page: {page}"
+        assert isinstance(spec["button"], str) and spec["button"], spec
+        assert isinstance(spec["max_create"], int) and spec["max_create"] >= 1, spec
+        # The button must be a real action button on that page — an
+        # ensure spec pointing at a nonexistent control could never fire
+        # and would silently reduce coverage.
+        assert spec["button"] in action_dispatch.ACTION_HANDLERS[page], (
+            f"ensure button missing from {page}'s action handlers: {spec['button']}"
+        )
 
 
 # ---------------------------------------------------------------------------

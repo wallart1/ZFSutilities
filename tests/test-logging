@@ -37,7 +37,7 @@ test_log_msg_writes_all_levels() {
     # Restore ZFSUTILITIES_LOG_FILE after bashinit so log_msg writes to the
     # test file rather than the auto-created session log.
     (
-        source ~/bashinit
+        source "$mydir/bin/bashinit"
         bashinit
         export ZFSUTILITIES_LOG_FILE="$logfile"
         export ZFSUTILITIES_LOG_INHERIT="N"
@@ -81,7 +81,7 @@ test_log_msg_prints_all_to_stderr() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             log_msg "DEBUG: d"
             log_msg "INFO: i"
@@ -99,7 +99,7 @@ test_log_msg_no_filtering() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             log_msg "INFO: should appear"
         ) 2>&1 >/dev/null
@@ -115,7 +115,7 @@ test_log_msg_writes_to_file_when_owned() {
     export ZFSUTILITIES_LOG_INHERIT="Y"
 
     (
-        source ~/bashinit
+        source "$mydir/bin/bashinit"
         bashinit
         log_msg "INFO: inherited process"
     ) >/dev/null 2>&1
@@ -135,7 +135,7 @@ test_log_msg_handles_unset_log_file() {
     output=$(
         (
             unset ZFSUTILITIES_LOG_FILE
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             log_msg "INFO: no log file set"
         ) 2>&1
@@ -149,7 +149,7 @@ test_log_msg_short_prefix_on_terminal() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             export ZFSUTILITIES_LOG_INHERIT="Y"
             bashinit
             __log_msg_terminal_p() { return 0; }
@@ -164,7 +164,7 @@ test_log_msg_long_prefix_with_flag_on_terminal() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             export ZFSUTILITIES_LOG_INHERIT="Y"
             bashinit
             __log_msg_terminal_p() { return 0; }
@@ -180,7 +180,7 @@ test_log_msg_long_prefix_off_terminal() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             export ZFSUTILITIES_LOG_INHERIT="Y"
             bashinit
             __log_msg_terminal_p() { return 1; }
@@ -196,7 +196,7 @@ test_log_msg_log_file_always_long_prefix() {
     local logfile
     logfile="$(mktemp)"
     (
-        source ~/bashinit
+        source "$mydir/bin/bashinit"
         # Suppress bashinit's auto-created session log so we control the file.
         export ZFSUTILITIES_LOG_INHERIT="Y"
         bashinit
@@ -241,7 +241,7 @@ test_log_msg_msg_level_gate_hides_below_gate() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             export ZFSUTILITIES_MSG_LEVEL="WARN"
             log_msg "DEBUG: d"
@@ -268,7 +268,7 @@ test_log_msg_msg_level_gate_invalid_is_noop() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             export ZFSUTILITIES_MSG_LEVEL="BOGUS"
             log_msg "INFO: i"
@@ -282,7 +282,7 @@ test_log_msg_msg_level_gate_keeps_session_log() {
     local logfile
     logfile="$(mktemp)"
     (
-        source ~/bashinit
+        source "$mydir/bin/bashinit"
         bashinit
         export ZFSUTILITIES_MSG_LEVEL="WARN"
         export ZFSUTILITIES_LOG_FILE="$logfile"
@@ -303,7 +303,7 @@ test_with_msg_level_scopes_and_restores() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             noisy() {
                 log_msg "INFO: inside"
@@ -339,7 +339,7 @@ test_log_verb_hidden_by_default_but_logged() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             unset ZFSUTILITIES_MSG_LEVEL
             export ZFSUTILITIES_LOG_FILE="$logfile"
@@ -366,7 +366,7 @@ test_log_verb_respects_an_explicit_gate() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             bashinit
             export ZFSUTILITIES_MSG_LEVEL="VERB"
             log_verb "shown under verb"
@@ -409,7 +409,7 @@ test_warn_long_prefix_on_terminal() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             export ZFSUTILITIES_LOG_INHERIT="Y"
             bashinit
             __log_msg_terminal_p() { return 0; }
@@ -425,7 +425,7 @@ test_msg_prefix_short_on_terminal() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             export ZFSUTILITIES_LOG_INHERIT="Y"
             bashinit
             __log_msg_terminal_p() { return 0; }
@@ -440,7 +440,7 @@ test_msg_prefix_long_prefix_on_terminal() {
     local stderr
     stderr="$(
         (
-            source ~/bashinit
+            source "$mydir/bin/bashinit"
             export ZFSUTILITIES_LOG_INHERIT="Y"
             bashinit
             __log_msg_terminal_p() { return 0; }

@@ -22,9 +22,10 @@
    Soak suites are excluded from default runs.
 7. When a refactor legitimately changes expected output, regenerate golden
    files and review the diff; do not hand-repair assertions.
-8. Do not make any code changes while tests are running. If you do, cancel the
-   tests that were running and rerun them after you've finished changing the code.
-9. Sleep for a maximum of 60 seconds. After a sleep, report the status and go back to      sleep for up to 60 seconds and repeat as long as you have nothing to do at the moment.
+8. Do not make any code changes while tests are running in the current development lane.
+   If you do, cancel the tests that were running and rerun them after you've finished changing the      code.
+9. Sleep for a maximum of 60 seconds. After a sleep, report the status and go back to
+   sleep for up to 60 seconds and repeat as long as you have nothing to do at the moment.
 
 ## Integrated end-to-end validation (itf)
 
