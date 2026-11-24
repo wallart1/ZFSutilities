@@ -30,6 +30,17 @@ write. ZFS filesystem ACLs exist too (`acltype` and friends — a
 locally-set one simply rides the property manifests like any other
 dataset property), but nothing in the repository manages them directly.
 
+## ashift
+
+The power-of-two exponent behind a ZFS pool's on-disk block size:
+ashift 9 means 512-byte blocks, ashift 12 means 4096-byte blocks. It
+is fixed at pool creation and can never change afterwards, which is
+why the create-pool wizard and the Alignment view treat it as the
+foundation of the blocksize stack. The Disks tab's Pool Topology pane
+shows it on each pool row as the ashift-based blocksize — `4096 bytes
+(ashift 12)` — so the number can never be mistaken for a disk's
+sector size.
+
 ## autoinstall
 
 Ubuntu's unattended-installer format: a `#cloud-config` file (plus a
@@ -144,6 +155,18 @@ returning success); Dashboard shortfall rows clear. The exercise proves
 the 2026-10-27 incident class — the node silently coming up with 3 of 33
 LUNs mapped while every gate passed — is dead: nothing silent, nothing
 destroyed, one clean recovery.
+
+## counterpart dataset
+
+The "other side" of a backup relationship. For every snapshot slated for
+deletion, the retention safety check (`zfscheckagainst`) computes the
+dataset that holds the matching copy — the source's backup on the
+destination pool, or the destination copy's origin — and refuses to delete
+the last snapshot the two still share, so incremental backups can continue.
+A counterpart can be absent while its pool is online: the property-manifest
+store exists only on the destination, and an archived VM's live datasets
+are gone while their backups remain. An absent counterpart protects
+nothing, so it never blocks deletion on its own.
 
 ## conveyance self-test
 
@@ -586,6 +609,17 @@ helper interoperating on the same locks ("Resolved by Phase 4" in
 new shared file means giving it its own lock file on that pattern
 rather than inventing a new scheme.
 
+## physical sector size
+
+The size a disk actually writes in one operation — 4096 bytes on
+modern HDDs even when they report 512-byte logical sectors to the
+operating system (`lsblk`'s Log-sec vs Phy-sec columns). The Disks tab
+shows it in the inventory's Phy-sec column and, for pool members, in
+the Pool Topology's Blocksize column. A pool whose ashift-based
+blocksize falls below a member's physical sector size pays a
+read-modify-write for every large block, which the Alignment view
+flags.
+
 ## pickling
 
 Python's `pickle` serialization, which `multiprocessing` uses to hand
@@ -668,6 +702,16 @@ laws govern it. Display only: `pv` never rate-limits here — pacing is
 Terminal only: `pv` writes to stderr, never through `log_msg`, so
 progress never grows the session log; a run without a terminal shows no
 progress line at all.
+
+## quiesce
+
+To bring a pool to a full stop: no VMs running on its zvols, no shares
+served, no jobs writing. Migrate Pool needs the source pool quiesced
+from its cutover snapshot onward, because anything written after that
+snapshot is lost when the pool is exported. The wizard verifies this
+itself — it reads each dataset's `written@<cutover snapshot>` value and
+refuses to continue while any dataset reports bytes written since the
+snapshot — so quiescence is a checked fact, not an assumption.
 
 ## receive as encrypted
 

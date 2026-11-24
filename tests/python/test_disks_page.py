@@ -157,12 +157,17 @@ class FakeTreeSelection:
         self.store = store
         self.paths = paths or []
         self.selected_paths = []
+        self.unselect_all_calls = 0
 
     def get_selected_rows(self):
         return (self.store, self.paths)
 
     def select_path(self, path):
         self.selected_paths.append(path)
+
+    def unselect_all(self):
+        self.unselect_all_calls += 1
+        self.paths = []
 
 
 class FakeTreeView:
@@ -366,6 +371,50 @@ class TestCreateDisksPage(unittest.TestCase):
         )
         for title, tip in recorded:
             self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_all_three_panes_ellipsize_cells_and_attach_cell_tooltips(self):
+        """Every pane's cells ellipsize and show their full text on hover.
+
+        The shared handler behind ``attach_cell_tooltips`` is unit-tested in
+        test_gui_helpers; here the recorder pins that all three panes wire
+        it, with the Enclosures pane passing offset 1 (its unrendered id
+        column precedes the visible ones) and the other panes no offset.
+        """
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        with patch.object(dp, "attach_cell_tooltips") as recorder:
+            with patch.object(dp, "refresh_disks_page"):
+                dp.create_disks_page(app)
+
+        calls = recorder.call_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(
+            [c.args[2] if len(c.args) > 2 else c.kwargs.get("offset", 0) for c in calls],
+            [0, 1, 0],
+        )
+        views = [c.args[0] for c in calls]
+        self.assertEqual(
+            views,
+            [app.disks_view, app.enclosures_view, app.disks_topology_view],
+        )
+        self.assertEqual(
+            [c.args[1] for c in calls],
+            [app.disks_store, app.enclosures_store, app.disks_topology_store],
+        )
+
+        # Every pane renderer is an END-ellipsizing CellRendererText: under
+        # mock_gtk all renderers share one instance, so the 13+5+7 column
+        # loops must account for every set_property call on it.
+        renderer = dp.Gtk.CellRendererText.return_value
+        ellipsize = dp.Pango.EllipsizeMode.END
+        self.assertEqual(
+            renderer.set_property.call_args_list,
+            [(("ellipsize", ellipsize),)] * 25,
+        )
 
     def test_pool_selector_combo_carries_tooltip(self):
         dp = _import_disks_page()
@@ -933,7 +982,7 @@ class TestSelectionAndTopology(unittest.TestCase):
             topologies={"pool1": topology},
         )
         app.disks_store = FakeListStore([_disk_row("/dev/sda", "pool1")])
-        disk_selection = FakeTreeSelection(app.disks_store)
+        disk_selection = FakeTreeSelection(app.disks_store, paths=[0])
         app.disks_view.get_selection.return_value = disk_selection
         app._disks_pool_selector.get_active_text.return_value = "pool1"
 
@@ -943,10 +992,35 @@ class TestSelectionAndTopology(unittest.TestCase):
         selection.paths = [(0, 0)]
         dp._on_topology_selection_changed(selection, app)
 
-        # Teal highlight is applied, but no inventory row is selected.
+        # Teal highlight is applied, but no inventory row is selected — the
+        # prior disk selection is dropped, never replaced with another row.
         self.assertEqual(disk_selection.selected_paths, [])
+        self.assertEqual(disk_selection.unselect_all_calls, 1)
         self.assertEqual(app.disks_view.scroll_to_cell.call_args_list, [])
         self.assertTrue(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+
+    def test_topology_selection_clears_disk_and_enclosure_selections(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[_disk(path="/dev/sda", pools=["pool1"])],
+            topologies={"pool1": _leaves_topology("pool1", ("/dev/sda",))},
+        )
+        app.disks_store = FakeListStore([_disk_row("/dev/sda", "pool1")])
+        disk_selection = FakeTreeSelection(app.disks_store, paths=[0])
+        app.disks_view.get_selection.return_value = disk_selection
+        app.enclosures_view.get_selection().paths = [0]
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        dp._repopulate_topology(app)
+
+        selection = app.disks_topology_view.get_selection()
+        selection.paths = [(0, 0, 0)]
+        dp._on_topology_selection_changed(selection, app)
+
+        self.assertEqual(disk_selection.unselect_all_calls, 1)
+        self.assertEqual(disk_selection.paths, [])
+        enclosure_selection = app.enclosures_view.get_selection()
+        self.assertEqual(enclosure_selection.unselect_all_calls, 1)
+        self.assertEqual(enclosure_selection.paths, [])
 
     def test_pool_selector_change_highlights_member_disks(self):
         dp = _import_disks_page()
@@ -1085,34 +1159,92 @@ def _mirror_topology(disk_names=("/dev/sda", "/dev/sdb")):
 
 
 class TestTopologyBlocksizeRendering(unittest.TestCase):
-    """The topology pane shows pool blocksize in bytes, never raw ashift."""
+    """The Blocksize cell is row-kind specific: the ashift-based size with
+    its derivation on pool rows, the member disk's physical sector size on
+    device rows, and "-" on vdev-group rows."""
 
-    def test_populate_topology_store_renders_bytes(self):
+    def _disk_node(self, name):
+        return TopologyNode(
+            name=name,
+            vdev_type="disk",
+            state="ONLINE",
+            read=0,
+            write=0,
+            cksum=0,
+            ashift=None,
+            children=[],
+        )
+
+    def test_pool_row_renders_ashift_based_blocksize_with_derivation(self):
+        dp = _import_disks_page()
+        store = FakeTreeStore()
+        dp._populate_topology_store(store, None, _topology("pool1"), dp._member_sector_lookup([]))
+        pool_row = store.root[0]["row"]
+        self.assertEqual(pool_row[dp.COL_T_ASHIFT], "4096 bytes (ashift 12)")
+
+    def test_pool_row_without_ashift_renders_dash(self):
         dp = _import_disks_page()
         store = FakeTreeStore()
         dp._populate_topology_store(
             store,
             None,
-            _topology(
-                "pool1",
-                children=[
-                    TopologyNode(
-                        name="/dev/sda",
-                        vdev_type="disk",
-                        state="ONLINE",
-                        read=0,
-                        write=0,
-                        cksum=0,
-                        ashift=None,
-                        children=[],
-                    )
-                ],
+            TopologyNode(
+                name="pool1",
+                vdev_type="pool",
+                state="ONLINE",
+                read=0,
+                write=0,
+                cksum=0,
+                ashift=None,
+                children=[],
             ),
+            dp._member_sector_lookup([]),
         )
         pool_row = store.root[0]["row"]
-        self.assertEqual(pool_row[dp.COL_T_ASHIFT], "4096 bytes")
-        disk_row = store.root[0]["children"][0]["row"]
+        self.assertEqual(pool_row[dp.COL_T_ASHIFT], "-")
+
+    def test_device_row_renders_backing_disk_physical_sector(self):
+        dp = _import_disks_page()
+        store = FakeTreeStore()
+        resolver = dp._member_sector_lookup([_disk(path="/dev/sda", physical_sector=4096)])
+        dp._populate_topology_store(store, None, self._disk_node("/dev/sda"), resolver)
+        disk_row = store.root[0]["row"]
+        self.assertEqual(disk_row[dp.COL_T_ASHIFT], "4096 bytes")
+
+    def test_device_row_without_inventory_entry_renders_dash(self):
+        # The boot disk never appears in the inventory, so its members
+        # resolve to nothing and fall back to "-".
+        dp = _import_disks_page()
+        store = FakeTreeStore()
+        resolver = dp._member_sector_lookup([_disk(path="/dev/sdb")])
+        dp._populate_topology_store(store, None, self._disk_node("/dev/sda"), resolver)
+        disk_row = store.root[0]["row"]
         self.assertEqual(disk_row[dp.COL_T_ASHIFT], "-")
+
+    def test_device_row_without_physical_sector_renders_dash(self):
+        dp = _import_disks_page()
+        store = FakeTreeStore()
+        resolver = dp._member_sector_lookup([_disk(path="/dev/sda", physical_sector=None)])
+        dp._populate_topology_store(store, None, self._disk_node("/dev/sda"), resolver)
+        disk_row = store.root[0]["row"]
+        self.assertEqual(disk_row[dp.COL_T_ASHIFT], "-")
+
+    def test_mirror_row_renders_dash_but_members_show_sector(self):
+        dp = _import_disks_page()
+        store = FakeTreeStore()
+        disks = [
+            _disk(path="/dev/sda", physical_sector=4096),
+            _disk(path="/dev/sdb", physical_sector=512),
+        ]
+        resolver = dp._member_sector_lookup(disks)
+        dp._populate_topology_store(
+            store, None, _mirror_topology(("/dev/sda", "/dev/sdb")), resolver
+        )
+        mirror_row = store.root[0]["children"][0]["row"]
+        self.assertEqual(mirror_row[dp.COL_T_ASHIFT], "-")
+        member_rows = store.root[0]["children"][0]["children"]
+        self.assertEqual(member_rows[0]["row"][dp.COL_T_ASHIFT], "4096 bytes")
+        self.assertEqual(member_rows[1]["row"][dp.COL_T_ASHIFT], "512 bytes")
 
 
 class TestTopologySelectionHighlight(unittest.TestCase):
@@ -1335,10 +1467,20 @@ class TestDiskSelectionTopologyHighlight(unittest.TestCase):
         leaf_flags = [row[dp.COL_T_HIGHLIGHT] for row in self._leaf_rows(app)]
         self.assertEqual(leaf_flags, [True, False, False])
 
-    def test_topology_selection_is_never_modified_by_disk_selection(self):
+    def test_disk_selection_clears_topology_selection(self):
         dp, app = self._app()
+        # A topology node and an enclosure row stand selected; choosing a
+        # disk row drops both — one selection per page.
+        app.disks_topology_view.get_selection().paths = [(0, 0)]
+        app.enclosures_view.get_selection().paths = [0]
         self._select_disk(dp, app, 0)
-        self.assertEqual(app.disks_topology_view.get_selection().selected_paths, [])
+        topology_selection = app.disks_topology_view.get_selection()
+        enclosure_selection = app.enclosures_view.get_selection()
+        self.assertEqual(topology_selection.selected_paths, [])
+        self.assertEqual(topology_selection.unselect_all_calls, 1)
+        self.assertEqual(topology_selection.paths, [])
+        self.assertEqual(enclosure_selection.unselect_all_calls, 1)
+        self.assertEqual(enclosure_selection.paths, [])
 
     def test_clearing_disk_selection_clears_topology_highlights(self):
         dp, app = self._app()
@@ -1931,6 +2073,195 @@ class TestEnclosuresSection(unittest.TestCase):
         dp.refresh_disks_page(app)
 
         self.assertEqual(len(app.enclosures_store.rows), 1)
+
+
+class TestEnclosureSelection(unittest.TestCase):
+    """Selecting an enclosure tints its disks across the other panes."""
+
+    def _app(self, enclosure, disks, topologies, disk_rows):
+        app = _make_app(disks=disks, topologies=topologies, enclosures=[enclosure])
+        app.disks_store = FakeListStore(disk_rows)
+        # The Enclosures pane holds the row the handler reads its id from.
+        app.enclosures_store.append([enclosure.id, "", "", "", "", ""])
+        app._disks_pool_selector.get_active_text.return_value = "tank"
+        dp = _import_disks_page()
+        dp._repopulate_topology(app)
+        return dp, app
+
+    def _select_enclosure(self, dp, app):
+        selection = app.enclosures_view.get_selection()
+        selection.paths = [0]
+        dp._on_enclosure_selection_changed(selection, app)
+        return selection
+
+    def test_enclosure_selection_clears_disk_and_topology_selections(self):
+        enclosure = _enclosure(members=["sdb"], pools=["tank"])
+        disks = [_disk(path="/dev/sdb", enclosure_id=enclosure.id)]
+        dp, app = self._app(
+            enclosure,
+            disks,
+            {"tank": _leaves_topology("tank", ("/dev/sdb",))},
+            [_disk_row("/dev/sdb")],
+        )
+        disk_selection = FakeTreeSelection(app.disks_store, paths=[0])
+        app.disks_view.get_selection.return_value = disk_selection
+        app.disks_topology_view.get_selection().paths = [(0, 0, 0)]
+
+        self._select_enclosure(dp, app)
+
+        self.assertEqual(disk_selection.unselect_all_calls, 1)
+        self.assertEqual(disk_selection.paths, [])
+        topology_selection = app.disks_topology_view.get_selection()
+        self.assertEqual(topology_selection.unselect_all_calls, 1)
+        self.assertEqual(topology_selection.paths, [])
+
+    def test_enclosure_selection_tints_member_disks_not_partitions(self):
+        enclosure = _enclosure(members=["sdb"], pools=["tank"])
+        disks = [
+            _disk(path="/dev/sda"),
+            _disk(path="/dev/sdb", enclosure_id=enclosure.id),
+            _disk(path="/dev/sdb1", parent_path="/dev/sdb", enclosure_id=enclosure.id),
+        ]
+        dp, app = self._app(
+            enclosure,
+            disks,
+            {"tank": _leaves_topology("tank", ("/dev/sdb",))},
+            [_disk_row("/dev/sda"), _disk_row("/dev/sdb"), _disk_row("/dev/sdb1")],
+        )
+
+        self._select_enclosure(dp, app)
+
+        self.assertFalse(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(app.disks_store.rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(app.disks_store.rows[2][dp.COL_D_HIGHLIGHT])
+
+    def test_enclosure_selection_tints_devices_and_expands_every_holding_pool(self):
+        enclosure = _enclosure(members=["sdb"], pools=["alpha", "beta"])
+        disks = [
+            _disk(path="/dev/sda", pools=["alpha"]),
+            _disk(path="/dev/sdb", pools=["alpha", "beta"], enclosure_id=enclosure.id),
+        ]
+        dp, app = self._app(
+            enclosure,
+            disks,
+            {
+                "alpha": _leaves_topology("alpha", ("/dev/sda", "/dev/sdb")),
+                "beta": _leaves_topology("beta", ("/dev/sdb",)),
+            },
+            [_disk_row("/dev/sda", "alpha"), _disk_row("/dev/sdb", "alpha, beta")],
+        )
+        view = app.disks_topology_view
+        view.expanded.clear()
+        view.collapsed.clear()
+
+        self._select_enclosure(dp, app)
+
+        alpha_leaves = [c["row"] for c in view.store.root[0]["children"][0]["children"]]
+        beta_leaves = [c["row"] for c in view.store.root[1]["children"][0]["children"]]
+        self.assertEqual([r[dp.COL_T_HIGHLIGHT] for r in alpha_leaves], [False, True])
+        self.assertEqual([r[dp.COL_T_HIGHLIGHT] for r in beta_leaves], [True])
+        # Both holding pools expand fully, so every tinted row stays visible.
+        self.assertIn(((0,), True), view.expanded)
+        self.assertIn(((1,), True), view.expanded)
+
+    def test_empty_enclosure_selection_restores_pool_baseline(self):
+        enclosure = _enclosure(members=["sdb"], pools=["tank"])
+        disks = [
+            _disk(path="/dev/sda", pools=["tank"]),
+            _disk(path="/dev/sdb", enclosure_id=enclosure.id),
+        ]
+        dp, app = self._app(
+            enclosure,
+            disks,
+            {"tank": _leaves_topology("tank", ("/dev/sda",))},
+            [_disk_row("/dev/sda", "tank"), _disk_row("/dev/sdb")],
+        )
+        self._select_enclosure(dp, app)
+        self.assertTrue(app.disks_store.rows[1][dp.COL_D_HIGHLIGHT])
+
+        selection = app.enclosures_view.get_selection()
+        selection.paths = []
+        dp._on_enclosure_selection_changed(selection, app)
+
+        self.assertTrue(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(app.disks_store.rows[1][dp.COL_D_HIGHLIGHT])
+        leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
+        self.assertFalse(leaf[dp.COL_T_HIGHLIGHT])
+
+    def test_sync_guard_suppresses_enclosure_handler(self):
+        enclosure = _enclosure(members=["sdb"], pools=["tank"])
+        disks = [_disk(path="/dev/sdb", enclosure_id=enclosure.id)]
+        dp, app = self._app(
+            enclosure,
+            disks,
+            {"tank": _leaves_topology("tank", ("/dev/sdb",))},
+            [_disk_row("/dev/sdb")],
+        )
+        app._disks_syncing_selection = True
+
+        self._select_enclosure(dp, app)
+
+        app.disks_view.get_selection.return_value.unselect_all.assert_not_called()
+        self.assertEqual(app.disks_topology_view.get_selection().unselect_all_calls, 0)
+        self.assertFalse(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+
+    def test_enclosure_selection_leaves_pool_selector_alone(self):
+        enclosure = _enclosure(members=["sdb"], pools=["tank"])
+        disks = [_disk(path="/dev/sdb", enclosure_id=enclosure.id)]
+        dp, app = self._app(
+            enclosure,
+            disks,
+            {"tank": _leaves_topology("tank", ("/dev/sdb",))},
+            [_disk_row("/dev/sdb")],
+        )
+
+        self._select_enclosure(dp, app)
+
+        app._disks_pool_selector.set_active.assert_not_called()
+        self.assertEqual(app._disks_pool_selector.get_active_text.return_value, "tank")
+
+    def test_enclosure_tints_reapplied_after_refresh_restore(self):
+        """A background refresh rebuilds every store; the restored enclosure
+        selection (GTK fires "changed" on the restore) re-applies its tints
+        on the rebuilt rows."""
+        enclosure = _enclosure(members=["sdb"], pools=["tank"])
+        disks = [_disk(path="/dev/sdb", enclosure_id=enclosure.id)]
+        app = _make_app(
+            disks=disks,
+            enclosures=[enclosure],
+            topologies={"tank": _leaves_topology("tank", ("/dev/sdb",))},
+        )
+        app.config = {"pools": [{"name": "tank", "offsite_candidate": False}]}
+        dp = _import_disks_page()
+        # A populated pane stands selected, as real GTK guarantees.
+        app.enclosures_store.append([enclosure.id, "", "", "", "", ""])
+        app.enclosures_view.get_selection().paths = [0]
+
+        dp.refresh_disks_page(app)
+
+        # The restore selected the row again; the handler runs against the
+        # rebuilt stores and the tint lands on the fresh /dev/sdb row.
+        selection = app.enclosures_view.get_selection()
+        self.assertIn(0, selection.selected_paths)
+        selection.paths = [0]
+        dp._on_enclosure_selection_changed(selection, app)
+        rows = {row[dp.COL_D_NAME]: row for row in app.disks_store.rows}
+        self.assertTrue(rows["/dev/sdb"][dp.COL_D_HIGHLIGHT])
+        leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
+        self.assertTrue(leaf[dp.COL_T_HIGHLIGHT])
+
+    def test_empty_disk_path_set_clears_topology_highlights(self):
+        dp = _import_disks_page()
+        app = _make_app(topologies={"tank": _leaves_topology("tank", ("/dev/sda",))})
+        dp._repopulate_topology(app)
+        app.disks_topology_store.root[0]["children"][0]["children"][0]["row"][
+            dp.COL_T_HIGHLIGHT
+        ] = True
+
+        dp._highlight_topology_nodes_for_disks(app, set())
+
+        leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
+        self.assertFalse(leaf[dp.COL_T_HIGHLIGHT])
 
 
 class TestEnclosureRateProblem(unittest.TestCase):

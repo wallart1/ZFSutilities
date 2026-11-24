@@ -26,7 +26,9 @@ function checkagainst {
 #
 # Return codes
 # 0     Snapshot is ok to delete. It has sufficient counterparts.
-# 4     Did not find any counterpart snapshots (candidate is not common with destination).
+# 4     Did not find any counterpart snapshots (candidate is not common with
+#       destination), or every matched counterpart dataset is absent (missing
+#       on an online pool) - no incremental chain exists to protect.
 # 5     Did not find any eligible entries in the fss array.
 # 6     Counterpart unavailable (pool offline or dataset locked by another
 #       operation) - cannot verify, deletion blocked.
@@ -80,8 +82,21 @@ function checkagainst {
         _ha=$(_zfslock_read_field "$_lf" "acquired" 2>/dev/null) || _ha="?"
         log_msg "WARN: cannot read $1 — locked by $_hs (pid $_hp, since $_ha)."
     }
+    # Log an absent counterpart dataset (its pool is online but the dataset
+    # does not exist) once per run at INFO, then at VERB - keyed on the
+    # caller's $PPID like the no-eligible-entry table-dump marker.
+    _ca_log_absent() {
+        local _ds="$1" _marker="/tmp/caabsentprinted.$PPID"
+        if grep -qFx "$_ds" "$_marker" 2>/dev/null; then
+            log_verb "Counterpart dataset $_ds absent - no chain through this fss row."
+        else
+            printf '%s\n' "$_ds" >> "$_marker" 2>/dev/null
+            log_msg "INFO: Counterpart dataset $_ds absent - no chain through this fss row."
+        fi
+    }
 
     local \
+        _absent_counterparts="" \
         _busy_counterparts="" \
         _ca_from_offsite_ds=() \
         _candidate_dstocheck \
@@ -277,6 +292,7 @@ function checkagainst {
                 _entry_found=false
                 _entry_last_remaining=false
                 _entry_offline_pools=""
+                _entry_absent_counterparts=""
 
                 for dest_root in "${_ca_dest_roots[@]}"; do
                     # Recompute counterpart with the expanded dest_root.
@@ -330,8 +346,15 @@ function checkagainst {
 
                     if ! (zfs list -rt filesystem,volume "$_candidate_dstocheck" \
                         >/dev/null 2>&1); then
-                        log_msg "WARN: Dataset to check $_candidate_dstocheck" \
-                            "does not exist or is offline."
+                        # Pool online, dataset missing: no incremental chain
+                        # can exist through this counterpart. Record it as
+                        # absent - the entry cannot block through this row.
+                        _ca_log_absent "$_candidate_dstocheck"
+                        if [[ -z "$_entry_absent_counterparts" ]]; then
+                            _entry_absent_counterparts="$_candidate_dstocheck"
+                        elif [[ "$_entry_absent_counterparts" != *"$_candidate_dstocheck"* ]]; then
+                            _entry_absent_counterparts="$_entry_absent_counterparts, $_candidate_dstocheck"
+                        fi
                         continue
                     fi
 
@@ -391,6 +414,13 @@ function checkagainst {
                         offline_pools="$offline_pools, $_entry_offline_pools"
                     fi
                     continue
+                elif [[ -n "$_entry_absent_counterparts" ]]; then
+                    if [[ -z "$_absent_counterparts" ]]; then
+                        _absent_counterparts="$_entry_absent_counterparts"
+                    elif [[ "$_absent_counterparts" != *"$_entry_absent_counterparts"* ]]; then
+                        _absent_counterparts="$_absent_counterparts, $_entry_absent_counterparts"
+                    fi
+                    continue
                 fi
             else
                 continue
@@ -420,6 +450,15 @@ function checkagainst {
                 "let the locking operation finish, then re-run."
             _ca_unlock
             return 6
+        fi
+        if [[ $matched_fss_entry = true && -n "$_absent_counterparts" ]]; then
+            # Every matched row's counterpart dataset is absent (missing on
+            # an online pool): no incremental chain exists through any of
+            # them, so nothing protects this snapshot.
+            log_msg "INFO: All matched counterparts absent for $snaptocheck" \
+                "($_absent_counterparts) - nothing to protect."
+            _ca_unlock
+            return 4
         fi
         log_msg "WARN: No eligible enteries in the checkagainst array for $snaptocheck."
         if [[ ! -f /tmp/fssalreadyprinted.$PPID ]]; then

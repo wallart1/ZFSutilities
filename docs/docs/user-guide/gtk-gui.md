@@ -332,13 +332,16 @@ a pool visible and manageable, register it on the Pools tab and save.
 Nearly everything in the GUI explains itself when you hover the mouse
 pointer over it. Every column heading, entry field, and clickable widget on
 the tab pages carries a tooltip describing what it does, and so does every
-dialog opened from them — including the Logs tab's tables. Hovering a
-disabled action button shows the reason it is unavailable, and dialogs that
-ask you to type a pool or disk name to confirm a destructive operation
-explain that rule on the entry itself. Sortable column headings note that
-clicking them sorts the table. Table cells whose text does not fit the
-column are clipped with an ellipsis (`…`); hovering such a cell shows its
-full text.
+dialog opened from them — including the Logs tab's main table. The Logs
+tab's Miscellaneous section is the one exception: neither the collapsed
+section's title bar nor its column headings carries a tooltip — though its
+clipped cells still show their full text on hover, like every other table.
+Hovering a disabled action button shows the reason it is
+unavailable, and dialogs that ask you to type a pool or disk name to
+confirm a destructive operation explain that rule on the entry itself.
+Sortable column headings note that clicking them sorts the table. Table
+cells whose text does not fit the column are clipped with an ellipsis
+(`…`); hovering such a cell shows its full text.
 
 ## Dashboard Tab
 
@@ -843,10 +846,10 @@ Runs at ordinary daytime hours show no UTC text at all, and profile types
 that do not create snapshots (restore, retention, scrub) show a plain
 timestamp.
 
-The **Next Run** cell is always a single line, so every row in the list has
-the same height. When the UTC decoration is too long to fit the
-column, the text is ellipsized (`…`) and hovering the **Next Run** cell
-shows the complete string in a tooltip.
+Every cell in the list is always a single line, so every row in the list has
+the same height. When any cell's text — the UTC decoration, a long profile
+name, a comment — is too long to fit its column, the text is ellipsized
+(`…`) and hovering the cell shows the complete string in a tooltip.
 
 ### Run Now
 
@@ -1869,14 +1872,17 @@ pickers:
 Device scans and SMART probes can be slow, so the inventory is loaded in a
 background thread and cached for a few seconds. Only SSD/NVMe disks get the
 extended SMART query that yields wear data — HDDs keep the quick health check —
-so the sweep stays fast even with many spinning disks. The two panes stay in sync
-visually: selecting a disk or partition that belongs to a pool tints every
-device that resides on it in the Pool Topology pane (drawn in teal), and
-selecting a pool, vdev, or device node in the topology pane tints the
-corresponding disk rows in the inventory. A selection whose Pools cell is
-blank — including a disk whose partitions carry the pool names — clears the
-topology pane's tints and the pool selection instead. Neither pane ever
-changes the other's selection — the correlation is teal text only.
+so the sweep stays fast even with many spinning disks.
+
+The tab's three tables share one selection. Selecting a row in any of them
+clears the selected row in the other two, so exactly one row is selected at a
+time. The panes correlate through teal text instead: selecting a disk or
+partition that belongs to a pool tints every device that resides on it in the
+Pool Topology pane, and selecting an enclosure tints its member disks here (see
+[Enclosures](#enclosures)). A selection whose Pools cell is blank — including a
+disk whose partitions carry the pool names — clears the topology pane's tints
+and the pool selection instead. No pane ever selects a row in another pane —
+the correlation is teal text only.
 
 ### Enclosures
 
@@ -1894,6 +1900,13 @@ hardware reports the same bridge serial as its siblings:
 | Disks         | Number of member disks                                                                            |
 | Pools         | Pool membership across the members (an enclosure can hold disks of several pools); managed pools only — names of unregistered pools appear solely in the Pool Registry |
 | Max I/O Rate  | The configured cap, or `unlimited` when none is set                                               |
+
+Selecting an enclosure correlates it with the rest of the tab. The Disk
+Inventory and Pool Topology drop their selected rows, the enclosure's member
+disks turn teal in the inventory, and every topology device residing on those
+disks turns teal in the Pool Topology. Each pool holding a tinted device
+expands automatically, so every tinted row stays visible. The pool drop-down
+does not move.
 
 Select an enclosure and click **Set Max I/O Rate…** to give it a name and a
 rate cap. The rate accepts the pacer grammar — digits with an optional
@@ -1927,6 +1940,7 @@ pools appear solely in the Pool Registry on the Pools tab. A pool with nothing t
 stays collapsed; a pool expands automatically when it is the selected pool,
 when it contains the topology selection, or when one of its devices is
 tinted, and collapses again when none of that applies. Selecting a node
+clears the selected rows in the Disk Inventory and Enclosures panes and
 highlights the corresponding member disks in the inventory (their text is
 drawn in teal): the pool node highlights every device in the pool, a vdev
 node highlights every device in that vdev, and a device node highlights just
@@ -1937,7 +1951,9 @@ topology selection restores the pool-wide highlight. Selecting a disk or
 partition in the inventory switches the pool selector to that disk's pool and
 tints every topology device that resides on the selected disk (a whole disk
 tints all of its partitions; a partition tints just that device) across every
-pool. Selecting a disk or partition that belongs to no pool clears the
+pool. Selecting an enclosure tints every topology device that resides on its
+member disks the same way (see [Enclosures](#enclosures)). Selecting a disk
+or partition that belongs to no pool clears the
 topology pane instead — tints, the pool selection, and expansion all reset,
 so nothing from the previously shown state stays on screen:
 
@@ -1947,7 +1963,7 @@ so nothing from the previously shown state stays on screen:
 | Type                 | `mirror`, `raidz1/2/3`, `stripe`, `disk`, `special`, `log`, `cache`, `spare`     |
 | State                | ZFS state for the vdev or device                                                 |
 | Read / Write / Cksum | Error counters from `zpool status`                                               |
-| Blocksize            | Effective pool blocksize for the vdev, shown in bytes (512 bytes, 4096 bytes, …) |
+| Blocksize            | Pool rows show the pool's ashift-based blocksize with its derivation, e.g. `4096 bytes (ashift 12)`. Device rows show that disk's physical sector size. Vdev-group rows show `-`, as does any unknown value — including a member whose disk never appears in the inventory above (the boot disk is always hidden from it) |
 
 ### Creating Pools
 
@@ -2086,7 +2102,7 @@ Pick the disks for a new data vdev from the eligible-disk picker (members of
 imported or importable pools are greyed out, as in the create-pool wizard) and
 choose the topology: `stripe`, `mirror`, `raidz1`, `raidz2`, or `raidz3`, with
 the same minimum disk counts and mixed-size warning as pool creation. A
-mixed-size selection warns that vdev capacity is limited to the smallest member.
+mixed-size selection warns that vdev capacity is limited by the smallest member.
 Adding a **mirror** vdev to a pool of mirror vdevs extends a RAID10
 (striped-mirror) layout — that is how a RAID10 pool grows. Because growing the
 wrong pool is hard to undo, the action requires typed
@@ -2331,15 +2347,25 @@ dataset, from the migration snapshot to the cutover snapshot. The catch-up
 brings the destination up to date with writes made while the copy ran.
 
 From the cutover snapshot onward, the pool must be quiesced: stop VMs,
-unmount shares, and make no other writes. The cutover ends by exporting the
-source pool, so writes made after the cutover snapshot are lost — but the
-window is only seconds.
+unmount shares, and make no other writes. The wizard enforces this — it
+does not take your word for it. After the catch-up it queries every
+dataset's `written@<cutover snapshot>` value and refuses to continue while
+any dataset reports bytes written since that snapshot. The refusal dialog
+names each dataset and its written amount, with a **Re-check** button to
+re-query after you stop the writers and a **Defer Cutover** button that
+leaves the migration resumable. Writes made after the cutover snapshot
+would be lost, but the window is only seconds.
 
 Before the catch-up runs, two checks:
 
 - The dataset layout is re-checked at cutover time, with the same structural
   check as at start. A change aborts the cutover with an explanation and
   leaves the copy in place for a re-run.
+- A typed confirmation of the source pool name gates the catch-up itself.
+
+After the catch-up completes and the quiesce check passes, the remaining
+gates run in order:
+
 - The pool's zvols are scanned for running Proxmox VMs with `qm status` —
   run locally in single-node mode, or on the compute host over SSH in
   two-node mode. VMs on non-Proxmox zvols are ignored. If any VM is
@@ -2347,9 +2373,21 @@ Before the catch-up runs, two checks:
   whether to continue. The dialog is a reminder, not an enforcement: the
   check cannot stop the VMs for you. Choose Continue only after shutting
   them down.
+- A disruptive-steps confirmation lists every remaining step verbatim —
+  the export, the destroy and rebuild, the copy-back, the swap — and
+  states that downtime begins the moment you proceed. The pool is verified
+  quiesced at this point; declining defers the cutover with everything
+  left resumable.
+- The export is prepared before it runs, never attempted bare: the wizard
+  unmounts every mounted filesystem in the source pool that has no busy
+  processes or active shares, then re-scans for blockers — busy processes,
+  iSCSI LUN exports, NFS/SMB shares, active sends. Any survivor defers the
+  cutover with a dialog naming each blocker, so `zpool export` never runs
+  into a wall.
 
-A final typed confirmation of the source pool name gates the destructive
-steps. The source pool is exported, and the migrated pool is re-imported
+The source pool is the only pool exported. The holding pool is never
+exported — it stays online for the whole cutover, because it may be a
+production pool serving VMs and shares. The migrated pool is re-imported
 under the source pool's name. That re-import is a permanent rename written
 to the pool label, so every future import uses the normal pool name. Every
 `pool/dataset` path, and everything that references it, survives the swap.

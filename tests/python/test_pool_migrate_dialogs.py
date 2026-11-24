@@ -273,6 +273,9 @@ class TestPureHelpers(unittest.TestCase):
         pmd = _import_dialogs()
         warnings = " ".join(pmd._migrate_warnings(_state(pmd)))
         self.assertIn("quiesced from the cutover snapshot onward", warnings)
+        # The wizard verifies quiescence itself — the warning says so.
+        self.assertIn("verifies no dataset has been written since", warnings)
+        self.assertIn("refuses to continue", warnings)
         self.assertIn("writes after that snapshot are lost", warnings)
         self.assertIn("the window is only seconds", warnings)
         self.assertIn("dataset path survives", warnings)
@@ -746,7 +749,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
 
     def test_new_disks_copy_steps(self):
         pmd = _import_dialogs()
-        copy, _cutover = pmd.build_migration_steps(_request(pmd))
+        copy, _catchup, _destructive = pmd.build_migration_steps(_request(pmd))
         # snapshot + create pool + 2 copies + 2 verifies + hold capture
         self.assertEqual(len(copy), 7)
         self.assertEqual(copy[1].command[0:2], ["zpool", "create"])
@@ -755,7 +758,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
     def test_copy_steps_carry_rate_limit(self):
         pmd = _import_dialogs()
         request = _request(pmd, rate_limit="100m")
-        copy, cutover = pmd.build_migration_steps(request)
+        copy, _catchup, _destructive = pmd.build_migration_steps(request)
         sends = [
             s
             for s in copy
@@ -775,12 +778,12 @@ class TestBuildMigrationSteps(unittest.TestCase):
             ),
             rate_limit="50m",
         )
-        copy, cutover = pmd.build_migration_steps(holding)
+        copy, _catchup, destructive = pmd.build_migration_steps(holding)
         for step in copy[1:3]:
             self.assertIn("transfer_rate_limit=50m", step.command[2])
         copyback = [
             s
-            for s in cutover
+            for s in destructive
             if s.command[0:2] == ["bash", "-c"] and "zfs_migrate_send" in s.command[2]
         ]
         self.assertTrue(copyback)
@@ -789,22 +792,26 @@ class TestBuildMigrationSteps(unittest.TestCase):
 
     def test_new_disks_cutover_steps(self):
         pmd = _import_dialogs()
-        _copy, cutover = pmd.build_migration_steps(_request(pmd))
-        golden.check(self, _plan_text(cutover))
+        _copy, catchup, destructive = pmd.build_migration_steps(_request(pmd))
+        # Catch-up (snapshot + 2 incrementals) runs to completion before the
+        # gate sequence; the destructive list starts at the source export.
+        self.assertEqual(len(catchup), 3)
+        self.assertEqual(destructive[0].command[0:2], ["zpool", "export"])
+        golden.check(self, _plan_text(catchup + destructive))
 
     def test_new_disks_cutover_starts_with_catchup(self):
-        """Cutover opens with the catch-up snapshot on the still-imported
-        source pool, then one incremental per dataset into the temp pool,
-        before any destructive step runs."""
+        """The catch-up opens with the snapshot on the still-imported source
+        pool, then one incremental per dataset into the temp pool; the
+        destructive export is a separate, gated list."""
         pmd = _import_dialogs()
-        _copy, cutover = pmd.build_migration_steps(_request(pmd))
+        _copy, catchup, destructive = pmd.build_migration_steps(_request(pmd))
         self.assertEqual(
-            cutover[0].command,
+            catchup[0].command,
             ["zfs", "snapshot", "-r", "pool1@migrate-2026-09-10T14:30-04:00-cutover"],
         )
         catchups = [
             s
-            for s in cutover
+            for s in catchup
             if s.command[0:2] == ["bash", "-c"]
             and "zfs_migrate_send" in s.command[2]
             and "fromsnap=" in s.command[2]
@@ -815,9 +822,8 @@ class TestBuildMigrationSteps(unittest.TestCase):
             self.assertIn("destfs=pool1_mig/", step.command[2])
             self.assertIn("snapname=migrate-2026-09-10T14:30-04:00-cutover", step.command[2])
             self.assertIn("fromsnap=migrate-2026-09-10T14:30-04:00", step.command[2])
-        # The destructive export comes only after the catch-up steps.
-        kinds = [s.command[0] for s in cutover]
-        self.assertEqual(kinds.index("zpool"), 3)
+        # The destructive list opens with the source export.
+        self.assertEqual(destructive[0].command, ["zpool", "export", "pool1"])
 
     def test_holding_mode_cutover_sequence(self):
         pmd = _import_dialogs()
@@ -832,12 +838,31 @@ class TestBuildMigrationSteps(unittest.TestCase):
                 "/dev/disk/by-id/ata-TESTsdc",
             ),
         )
-        _copy, cutover = pmd.build_migration_steps(request)
-        # catch-up snapshot, 2 catch-up incrementals, export, release holds,
-        # destroy, create, 2 copy-back, 2 verify, export holding,
+        _copy, catchup, destructive = pmd.build_migration_steps(request)
+        # catch-up snapshot + 2 catch-up incrementals, then (gated): export,
+        # release holds, destroy, create, 2 copy-back, 2 verify,
         # import-rename, reapply holds, namespace destroy, remove holds file
-        self.assertEqual(len(cutover), 16)
-        golden.check(self, _plan_text(cutover))
+        self.assertEqual(len(catchup), 3)
+        self.assertEqual(len(destructive), 12)
+        golden.check(self, _plan_text(catchup + destructive))
+
+    def test_holding_mode_never_exports_holding_pool(self):
+        """The holding pool stays online for the whole cutover: exporting it
+        would cut off every VM it serves (it is a production pool)."""
+        pmd = _import_dialogs()
+        request = _request(
+            pmd,
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            new_pool_by_id=(
+                "/dev/disk/by-id/ata-TESTsda",
+                "/dev/disk/by-id/ata-TESTsdb",
+            ),
+        )
+        _copy, catchup, destructive = pmd.build_migration_steps(request)
+        for step in catchup + destructive:
+            if step.command[0:2] == ["zpool", "export"]:
+                self.assertEqual(step.command, ["zpool", "export", "pool1"])
 
     def test_replay_props_steps_after_import_rename(self):
         """One non-fatal zpool set per checked property, between the
@@ -860,21 +885,21 @@ class TestBuildMigrationSteps(unittest.TestCase):
             ),
         ]
         for request in requests:
-            _copy, cutover = pmd.build_migration_steps(request)
+            _copy, _catchup, destructive = pmd.build_migration_steps(request)
             sets = [
                 (index, step)
-                for index, step in enumerate(cutover)
+                for index, step in enumerate(destructive)
                 if step.command[0:2] == ["zpool", "set"]
             ]
             self.assertEqual(len(sets), len(request.replay_pool_props), request.mode)
             imports = [
                 index
-                for index, step in enumerate(cutover)
+                for index, step in enumerate(destructive)
                 if step.command[0:2] == ["zpool", "import"]
             ]
             applies = [
                 index
-                for index, step in enumerate(cutover)
+                for index, step in enumerate(destructive)
                 if step.command[0:2] == ["bash", "-c"] and "reapplyholds_apply" in step.command[2]
             ]
             for index, step in sets:
@@ -885,10 +910,10 @@ class TestBuildMigrationSteps(unittest.TestCase):
 
     def test_replay_props_step_argv(self):
         pmd = _import_dialogs()
-        _copy, cutover = pmd.build_migration_steps(
+        _copy, _catchup, destructive = pmd.build_migration_steps(
             _request(pmd, replay_pool_props=(("comment", "offsite copy"),))
         )
-        step = next(s for s in cutover if s.command[0:2] == ["zpool", "set"])
+        step = next(s for s in destructive if s.command[0:2] == ["zpool", "set"])
         self.assertEqual(step.command, ["zpool", "set", "comment=offsite copy", "pool1"])
         self.assertIn("Reapply pool property comment=offsite copy", step.description)
 
@@ -906,8 +931,8 @@ class TestBuildMigrationSteps(unittest.TestCase):
                 ),
             ),
         ):
-            _copy, cutover = pmd.build_migration_steps(request)
-            self.assertFalse(any(s.command[0:2] == ["zpool", "set"] for s in cutover))
+            _copy, _catchup, destructive = pmd.build_migration_steps(request)
+            self.assertFalse(any(s.command[0:2] == ["zpool", "set"] for s in destructive))
 
     def test_holding_copy_steps_use_reserved_namespace(self):
         """Holding-mode copies land under <holding>/migrate_<source>/ so they
@@ -922,18 +947,18 @@ class TestBuildMigrationSteps(unittest.TestCase):
                 "/dev/disk/by-id/ata-TESTsdb",
             ),
         )
-        copy, cutover = pmd.build_migration_steps(request)
+        copy, catchup, destructive = pmd.build_migration_steps(request)
         texts = [" ".join(step.command) for step in copy[1:3]]
         joined = " ".join(texts)
         self.assertIn("pool2/migrate_pool1/data", joined)
         self.assertIn("pool2/migrate_pool1/vm-100-disk-0", joined)
         for text in texts:
             self.assertNotIn("pool2/pool2/", text)
-        # The cutover catch-up incrementals run from the live source pool into
+        # The catch-up incrementals run from the live source pool into
         # the same reserved namespace.
         catchups = [
             s
-            for s in cutover
+            for s in catchup
             if s.command[0:2] == ["bash", "-c"]
             and "zfs_migrate_send" in s.command[2]
             and "fromsnap=" in s.command[2]
@@ -948,7 +973,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
         # omit it and lose everything the catch-up carried.
         copyback = [
             s
-            for s in cutover
+            for s in destructive
             if s.command[0:2] == ["bash", "-c"]
             and "zfs_migrate_send" in s.command[2]
             and "sourcefs=pool2/migrate_pool1/" in s.command[2]
@@ -958,7 +983,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
             self.assertIn("snapname=migrate-2026-09-10T14:30-04:00-cutover", step.command[2])
             self.assertNotIn("fromsnap=", step.command[2])
             self.assertIn("destfs=pool1_mig/", step.command[2])
-        destroys = [s for s in cutover if s.command[0:2] == ["zfs", "destroy"]]
+        destroys = [s for s in destructive if s.command[0:2] == ["zfs", "destroy"]]
         self.assertEqual(len(destroys), 1)
         self.assertEqual(destroys[0].command[3], "pool2/migrate_pool1")
 
@@ -966,7 +991,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
         """Regression: captured dataset names are full zfs paths; the composed
         copy/verify paths must contain the pool prefix exactly once."""
         pmd = _import_dialogs()
-        copy, _cutover = pmd.build_migration_steps(_request(pmd))
+        copy, _catchup, _destructive = pmd.build_migration_steps(_request(pmd))
         for step in copy:
             text = " ".join(step.command)
             self.assertNotIn("pool1/pool1/", text)
@@ -1141,6 +1166,13 @@ class TestDialogFlow(unittest.TestCase):
             c.args[0] for c in pmd.Gtk.Entry.return_value.set_tooltip_text.call_args_list
         ]
         self.assertTrue(any("rate" in t.lower() for t in entry_texts))
+        # The bandwidth tooltip states the effective-cap rule: enclosure
+        # limits cap the copy alongside this limit.
+        self.assertTrue(
+            any("the effective cap is the minimum of this limit" in t for t in entry_texts),
+            entry_texts,
+        )
+        self.assertTrue(any("disk enclosures" in t for t in entry_texts), entry_texts)
         self.assertTrue(any("type" in t.lower() and "pool" in t.lower() for t in entry_texts))
 
         check_texts = [
@@ -1390,8 +1422,22 @@ def _make_app(pools=("pool1", "pool2"), root_pool=None):
     return app
 
 
-def _drive_handler(pmd, app, request, confirm_cutover=True, zlm=None):
-    """Run on_disks_migrate_pool with the dialog and cutover confirm scripted."""
+def _drive_handler(
+    pmd,
+    app,
+    request,
+    confirm_cutover=True,
+    zlm=None,
+    written=None,
+    disruptive_confirm=True,
+    export_ready=True,
+):
+    """Run on_disks_migrate_pool with the dialog and cutover gates scripted.
+
+    *written* seeds the quiesce oracle: None means quiesced (empty map);
+    a mapping of dataset → bytes keeps those datasets "written since the
+    cutover snapshot" for refusal-path tests.
+    """
     if zlm is None:
         zlm = MagicMock()
         zlm.acquire.return_value = "/lock/pool1"
@@ -1416,6 +1462,9 @@ def _drive_handler(pmd, app, request, confirm_cutover=True, zlm=None):
     patches = [
         patch.object(pmd, "show_migrate_pool_dialog", return_value=request),
         patch.object(pmd, "_show_cutover_confirm", return_value=confirm_cutover),
+        patch.object(pmd, "_written_since", return_value={} if written is None else written),
+        patch.object(pmd, "_show_disruptive_confirm", return_value=disruptive_confirm),
+        patch.object(pmd, "_prepare_pool_export", return_value=export_ready),
         patch.object(pmd, "node_config", nc),
         patch.object(pmd, "zlm", zlm),
     ]
@@ -1615,9 +1664,14 @@ class TestHandlerExecution(unittest.TestCase):
             self.assertTrue(app.dataset_runner.running)
             self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
-            # Cutover phase started after the layout/VM gates and
-            # confirmation; the detail persists across the runner restart.
-            self.assertEqual(len(app.dataset_runner.steps), 7)
+            # Catch-up phase started (snapshot + 2 incrementals) after the
+            # typed confirmation; the detail persists across restarts.
+            self.assertEqual(len(app.dataset_runner.steps), 3)
+            self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
+            app.dataset_runner.finish(rc=0)
+            # Destructive phase started after the quiesce/VM/disruption/export
+            # gates: export, import-rename, reapply holds, remove holds file.
+            self.assertEqual(len(app.dataset_runner.steps), 4)
             self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
@@ -1696,7 +1750,11 @@ class TestHandlerExecution(unittest.TestCase):
         with stack:
             self.assertEqual(len(app.dataset_runner.steps), 6)
             app.dataset_runner.finish(rc=0)
-            self.assertEqual(len(app.dataset_runner.steps), 16)
+            # Catch-up (3), then the gated destructive list (12, no holding
+            # export) in holding mode.
+            self.assertEqual(len(app.dataset_runner.steps), 3)
+            app.dataset_runner.finish(rc=0)
+            self.assertEqual(len(app.dataset_runner.steps), 12)
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
 
@@ -1907,7 +1965,7 @@ class TestRunningVmsWarning(unittest.TestCase):
 
 
 class TestCutoverGates(unittest.TestCase):
-    """The cutover-time layout re-check and running-VM gate in _copy_complete."""
+    """The cutover-time layout re-check and the post-catch-up gates."""
 
     def _app_with_late_layout_change(self):
         """App whose pool1 layout is stable through the pre-copy check but
@@ -1953,7 +2011,9 @@ class TestCutoverGates(unittest.TestCase):
             self.assertIn("changed", info.call_args.args[2])
             self.assertTrue(any("changed at cutover time" in line for line in logs), logs)
 
-    def test_running_vms_gate_offered_before_confirmation(self):
+    def test_running_vms_gate_offered_after_catchup(self):
+        """The running-VM warning fires after the catch-up completes (and the
+        quiesce gate passes), before the disruptive-steps confirmation."""
         pmd = _import_dialogs()
         app = _make_app()
         request = _request(pmd)
@@ -1964,13 +2024,17 @@ class TestCutoverGates(unittest.TestCase):
                     pmd, "_running_vms_on_pool", return_value={"100": ["pool1/vm-100-disk-0"]}
                 ) as vm_check,
                 patch.object(pmd, "_show_running_vms_warning", return_value=True) as warn,
+                patch.object(pmd, "_show_disruptive_confirm") as disruptive,
             ):
-                app.dataset_runner.finish(rc=0)
+                app.dataset_runner.finish(rc=0)  # copy phase
+                self.assertFalse(vm_check.called)
+                app.dataset_runner.finish(rc=0)  # catch-up phase
             vm_check.assert_called_once()
             warn.assert_called_once()
-            # Confirmed continuation starts the cutover phase.
+            disruptive.assert_called_once()
+            # Confirmed continuation starts the destructive phase.
             self.assertTrue(app.dataset_runner.running)
-            self.assertEqual(len(app.dataset_runner.steps), 7)
+            self.assertEqual(len(app.dataset_runner.steps), 4)
 
     def test_declined_running_vm_warning_defers_cutover(self):
         pmd = _import_dialogs()
@@ -1983,14 +2047,203 @@ class TestCutoverGates(unittest.TestCase):
                     pmd, "_running_vms_on_pool", return_value={"100": ["pool1/vm-100-disk-0"]}
                 ),
                 patch.object(pmd, "_show_running_vms_warning", return_value=False),
-                patch.object(pmd, "_show_cutover_confirm") as confirm,
+                patch.object(pmd, "_show_disruptive_confirm") as disruptive,
                 capture_logs() as logs,
             ):
-                app.dataset_runner.finish(rc=0)
-            confirm.assert_not_called()
+                app.dataset_runner.finish(rc=0)  # copy phase
+                app.dataset_runner.finish(rc=0)  # catch-up phase
+            disruptive.assert_not_called()
             self.assertFalse(app.dataset_runner.running)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
             self.assertTrue(any("running VMs declined" in line for line in logs), logs)
+
+
+class TestQuiesceAndDisruptionGates(unittest.TestCase):
+    """The enforced quiesce gate, disruptive confirmation, and export prep."""
+
+    def test_written_dataset_refuses_until_user_defers(self):
+        """A dataset written since the cutover snapshot blocks the gate;
+        Re-check re-queries (still refusing while the writer lives)."""
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(
+            pmd, app, request, written={"pool1": 4096, "pool1/data": 0}
+        )
+        with stack:
+            with (
+                patch.object(
+                    pmd, "_show_quiesce_refusal", side_effect=["recheck", "defer"]
+                ) as refusal,
+                patch.object(pmd, "_show_disruptive_confirm") as disruptive,
+                capture_logs() as logs,
+            ):
+                app.dataset_runner.finish(rc=0)  # copy phase
+                app.dataset_runner.finish(rc=0)  # catch-up → refuse, recheck, refuse, defer
+            self.assertEqual(refusal.call_count, 2)
+            disruptive.assert_not_called()
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+            self.assertTrue(any("not quiesced" in line for line in logs), logs)
+
+    def test_quiesce_refusal_defer_path(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(pmd, app, request, written={"pool1/data": 8192})
+        with stack:
+            with (
+                patch.object(pmd, "_show_quiesce_refusal", return_value="defer"),
+                patch.object(pmd, "_show_disruptive_confirm") as disruptive,
+                capture_logs() as logs,
+            ):
+                app.dataset_runner.finish(rc=0)  # copy phase
+                app.dataset_runner.finish(rc=0)  # catch-up phase → refusal → defer
+            disruptive.assert_not_called()
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+            self.assertTrue(any("not quiesced" in line for line in logs), logs)
+
+    def test_quiesce_recheck_passes_after_writers_stop(self):
+        """Re-check with a quiet oracle passes the gate in the same loop."""
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(pmd, app, request, written={"pool1": 512})
+        with stack:
+            with (
+                patch.object(pmd, "_show_quiesce_refusal", return_value="recheck"),
+                patch.object(pmd, "_running_vms_on_pool", return_value={}),
+                patch.object(pmd, "_show_disruptive_confirm", return_value=True),
+                patch.object(pmd, "_prepare_pool_export", return_value=True),
+            ):
+                app.dataset_runner.finish(rc=0)  # copy phase
+                # First refusal → recheck still sees the writer (loop repeats);
+                # then the writer stops and the gate passes into destructive.
+                pmd._written_since.side_effect = [
+                    {"pool1": 512},  # first query (refusal)
+                    {"pool1": 0},  # recheck query (passes)
+                ]
+                app.dataset_runner.finish(rc=0)  # catch-up phase
+            self.assertTrue(app.dataset_runner.running)
+            self.assertEqual(len(app.dataset_runner.steps), 4)
+            mock_zlm.release.assert_not_called()
+
+    def test_unverifiable_quiescence_defers(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(pmd, app, request)
+        with stack:
+            with (
+                patch.object(pmd, "_written_since", side_effect=RuntimeError("zfs list failed")),
+                patch.object(pmd, "_show_disruptive_confirm") as disruptive,
+                capture_logs() as logs,
+            ):
+                app.dataset_runner.finish(rc=0)  # copy phase
+                app.dataset_runner.finish(rc=0)  # catch-up phase → unverifiable
+            disruptive.assert_not_called()
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+            self.assertTrue(any("quiescence unverifiable" in line for line in logs), logs)
+
+    def test_declined_disruptive_confirm_defers(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(pmd, app, request, disruptive_confirm=False)
+        with stack:
+            with capture_logs() as logs:
+                app.dataset_runner.finish(rc=0)  # copy phase
+                app.dataset_runner.finish(rc=0)  # catch-up phase
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+            self.assertTrue(
+                any("disruptive-steps confirmation declined" in line for line in logs), logs
+            )
+
+    def test_export_blockers_defer_before_destructive(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(pmd, app, request, export_ready=False)
+        with stack:
+            with capture_logs() as logs:
+                app.dataset_runner.finish(rc=0)  # copy phase
+                app.dataset_runner.finish(rc=0)  # catch-up phase
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+            self.assertTrue(any("export blockers remain" in line for line in logs), logs)
+
+
+class TestPreparePoolExport(unittest.TestCase):
+    """_prepare_pool_export: unmount-then-verify before any export runs."""
+
+    @staticmethod
+    def _busy_reason(category, dataset, detail):
+        """A SimpleNamespace that looks like a gui_helpers.BusyReason."""
+
+        return SimpleNamespace(category=category, dataset=dataset, detail=detail)
+
+    def test_no_blockers_passes_without_unmount(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        repo = MagicMock()
+        with (
+            patch.object(pmd, "_collect_export_blockers", return_value=[]) as collect,
+            patch.object(pmd, "_unmount_pool_filesystems") as unmount,
+        ):
+            self.assertTrue(pmd._prepare_pool_export(app, repo, "pool1"))
+        collect.assert_called_once_with(repo, "pool1")
+        unmount.assert_not_called()
+
+    def test_unmountable_pool_passes_after_sweep(self):
+        """Mounted filesystems are unmounted by the sweep; a clean re-collect
+        clears the pool for export."""
+        pmd = _import_dialogs()
+        app = _make_app()
+        repo = MagicMock()
+        blocker = self._busy_reason("mounted", "pool1/data", "mounted")
+        with (
+            patch.object(pmd, "_collect_export_blockers", side_effect=[[blocker], []]),
+            patch.object(pmd, "_unmount_pool_filesystems", return_value=(True, "")) as unmount,
+        ):
+            self.assertTrue(pmd._prepare_pool_export(app, repo, "pool1"))
+        unmount.assert_called_once()
+
+    def test_failed_unmount_refuses(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        repo = MagicMock()
+        blocker = self._busy_reason("mounted", "pool1/data", "mounted")
+        with (
+            patch.object(pmd, "_collect_export_blockers", side_effect=[[blocker], [blocker]]),
+            patch.object(
+                pmd, "_unmount_pool_filesystems", return_value=(False, "umount: target is busy")
+            ),
+            patch.object(pmd, "_show_export_blockers_dialog") as blockers_dialog,
+            capture_logs() as logs,
+        ):
+            self.assertFalse(pmd._prepare_pool_export(app, repo, "pool1"))
+        blockers_dialog.assert_called_once()
+        self.assertTrue(any("could not unmount" in line for line in logs), logs)
+
+    def test_hard_blockers_surviving_sweep_refuse(self):
+        """Busy processes, iSCSI LUNs, and shares survive the unmount sweep;
+        the remaining blockers refuse the export."""
+        pmd = _import_dialogs()
+        app = _make_app()
+        repo = MagicMock()
+        hard = self._busy_reason("busy_processes", "pool1/data", "Open processes: smbd")
+        with (
+            patch.object(pmd, "_collect_export_blockers", side_effect=[[hard], [hard]]),
+            patch.object(pmd, "_unmount_pool_filesystems", return_value=(True, "")),
+            patch.object(pmd, "_show_export_blockers_dialog") as blockers_dialog,
+            capture_logs() as logs,
+        ):
+            self.assertFalse(pmd._prepare_pool_export(app, repo, "pool1"))
+        blockers_dialog.assert_called_once()
+        self.assertTrue(any("export blocker" in line for line in logs), logs)
 
 
 class TestCutoverIscsiRepair(unittest.TestCase):
@@ -2008,13 +2261,14 @@ class TestCutoverIscsiRepair(unittest.TestCase):
             # The cutover-completion hint is only logged in two-node configs.
             pmd.node_config.is_two_node.return_value = two_node_hint
             app.dataset_runner.finish(rc=0)  # copy phase
+            app.dataset_runner.finish(rc=0)  # catch-up phase
             with (
                 patch.object(pmd, "is_iscsi_managed_pool", return_value=managed),
                 patch.object(pmd, "resolve_local_bin", return_value=self.REPAIR_BIN),
                 patch.object(pmd, "offer_proxmox_enrollment") as proxmox_offer,
                 capture_logs() as logs,
             ):
-                app.dataset_runner.finish(rc=cutover_rc)  # cutover phase → chaining decision
+                app.dataset_runner.finish(rc=cutover_rc)  # destructive phase → chaining decision
                 if cutover_rc == 0 and managed:
                     app.dataset_runner.finish(rc=final_rc)  # chained repair phase
         return pmd, app, logs, proxmox_offer
@@ -2035,8 +2289,8 @@ class TestCutoverIscsiRepair(unittest.TestCase):
 
     def test_unmanaged_pool_skips_repair_and_logs_hint(self):
         _pmd, app, logs, _offer = self._run_cutover(managed=False)
-        # The cutover step list (7 steps) was not replaced by a repair step.
-        self.assertEqual(len(app.dataset_runner.steps), 7)
+        # The destructive step list (4 steps) was not replaced by a repair step.
+        self.assertEqual(len(app.dataset_runner.steps), 4)
         self.assertTrue(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
 
@@ -2046,7 +2300,7 @@ class TestCutoverIscsiRepair(unittest.TestCase):
 
     def test_unmanaged_pool_single_node_finishes_silently(self):
         _pmd, app, logs, _offer = self._run_cutover(managed=False, two_node_hint=False)
-        self.assertEqual(len(app.dataset_runner.steps), 7)
+        self.assertEqual(len(app.dataset_runner.steps), 4)
         self.assertFalse(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertFalse(any("setup-iscsi-targets" in line for line in logs), logs)
 

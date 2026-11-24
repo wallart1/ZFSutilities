@@ -61,6 +61,14 @@ class ZFSUtilitiesApp(Gtk.Application):
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
+        # Selectable labels (Log Viewer path line, Schedule page labels, …) must
+        # not select their whole text when they gain keyboard focus — stock GTK
+        # does that via gtk-label-select-on-focus (default on), highlighting the
+        # entire label (e.g. the log path whenever the Log Viewer is popped
+        # out). Click and drag selection still work; only the focus-driven
+        # select-all is disabled.
+        Gtk.Settings.get_default().set_property("gtk-label-select-on-focus", False)
+
         # Lazy import to avoid circular dependency
         from zfsutilities_gui import ZFSUtilitiesWindow
 

@@ -685,6 +685,34 @@ class TestPageConstruction(unittest.TestCase):
             0,
         )
 
+    def test_views_attach_cell_tooltips_and_ellipsized_renderers(self):
+        """All four tables ellipsize and show full text on hover."""
+        app = self._make_app()
+        with (
+            patch.object(cap, "attach_cell_tooltips") as attach_recorder,
+            patch.object(cap, "set_column_header_tooltip") as header_recorder,
+            patch.object(cap, "set_button_markup"),
+        ):
+            # Earlier tests in this module accumulated calls on the shared
+            # renderer mock; reset before counting.
+            cap.Gtk.CellRendererText.reset_mock()
+            cap.create_checkagainst_page(app)
+
+        # Four tables: the editable user table plus three derived sections.
+        self.assertEqual(attach_recorder.call_count, 4)
+        self.assertIn(app._ca_store, [c.args[1] for c in attach_recorder.call_args_list])
+
+        # The header tooltips ride the shared helper now (the old Box
+        # duplicate is gone): 4 columns × 4 tables.
+        self.assertEqual(header_recorder.call_count, 16)
+
+        # Every text renderer ellipsizes (mock_gtk shares one instance).
+        renderer = cap.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 16)
+
     def test_comment_column_appended(self):
         app = self._make_app()
         titles = []

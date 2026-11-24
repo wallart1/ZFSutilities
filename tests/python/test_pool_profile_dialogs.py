@@ -295,6 +295,30 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
         )
         self.assertTrue(any("Delete the selected custom pool profile" in t for t in button_texts))
 
+    def test_manage_dialog_attaches_cell_tooltips(self):
+        """Ellipsized profile cells show their full text on hover."""
+        ppd = _import_pool_profile_dialogs()
+        app = self._dialog_app()
+        view = _make_tree_view(GtkListStoreAdapter(), [])
+        store = MagicMock()
+
+        with (
+            patch.object(
+                ppd,
+                "create_scrolled_dialog",
+                return_value=(
+                    MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+                    MagicMock(),
+                ),
+            ),
+            patch.object(ppd.Gtk, "ListStore", return_value=store),
+            patch.object(ppd.Gtk, "TreeView", return_value=view),
+            patch.object(ppd, "attach_cell_tooltips") as recorder,
+        ):
+            ppd.show_manage_pool_profiles_dialog(app)
+
+        recorder.assert_called_once_with(view, store)
+
     def _drive_with_selection(self, profiles):
         """Build the dialog over *profiles* (row 0 selected); return buttons."""
         ppd = _import_pool_profile_dialogs()

@@ -20,6 +20,7 @@
   rebuilds the identical world, a conflicting explicit variant is
   refused, and a digest the current planner cannot reproduce is refused
   as planner drift.
+
 - **Deeper survey coverage for eight commands (test framework).**
   `zfsresume` validates a real resume token from a truncated receive,
   `zfsdelallsnaps` runs its hold-release flow against a held-and-cloned
@@ -27,6 +28,33 @@
   disks, and `zfscleanup` / `zfsdailybackup` run a real retention
   dry-run and a real send — where earlier surveys exercised only those
   commands' argument validation.
+
+- **Migrate Pool cutover is verified, gated, and prepared.** The cutover
+  now runs as three phases — copy, catch-up, destructive — and the
+  destructive phase starts only after four gates in order: an enforced
+  quiesce check (`written@cutover` per dataset; a pool still receiving
+  writes is refused with a dialog naming each writer and amount, and an
+  unreadable answer defers too), the running-VM warning, an explicit
+  disruptive-steps confirmation that lists every remaining step, and a
+  proactive export preparation that unmounts the pool's filesystems and
+  refuses with a blocker dialog while anything still holds it. A bare
+  export is never attempted.
+
+- **Disks tab: one selection and enclosure correlation.** Selecting a
+  row in any of the tab's three tables deselects the other two.
+  Selecting an enclosure tints its member disks in the inventory and
+  every topology device residing on them, and expands the pools holding
+  them so no tinted row hides; emptying the selection restores the
+  pool baseline.
+
+- **Every table cell ellipsizes with a full-text tooltip.** All
+  remaining tree views — pages and dialogs — now end-ellipsize their
+  text cells and show the cell's full text on hover where it clips.
+  Views whose visible column order differs from the store use a
+  per-column map, and the apply-profile picker's deliberately wrapped
+  Description column stays tooltip-free. Column-heading tooltips are
+  now active across the full heading width (the heading button is armed
+  when realized), not just the title text strip.
 
 ### Fixed
 
@@ -38,12 +66,101 @@
   framework's two-node lab wiring gained the same bounded retry for its
   first-connection step, which showed the same boot-readiness race
   under load.
+
 - **Survey tooling fixes (test framework).** Dash-named commands'
   bespoke recipes dispatch now (their earlier green verdicts were
   vacuous); the GUI probe reads the editable-cell property through
   GTK's property interface and walks every view on stacked pages; the
   single-node survey journey sources its lab library again; and the
   survey sampler's default tree resolves to the repository root.
+
+- **Absent counterparts no longer strand pruning.** A counterpart
+  dataset missing on an online pool — a destination-only store, or a
+  source removed by archiving — used to warn and fall through to the
+  interactive-confirm verdict, which non-interactive prunes treat as
+  keep: the manifest store's own pruning would have been stuck. An
+  absent-only match set is now a firm "not common" verdict (see
+  Changed), each absent dataset is logged once per run at `INFO`, and
+  deletion proceeds.
+
+- **Property replay picked the wrong snapshot family.** Choosing the
+  newest snapshot by name is prefix-blind across families
+  (`offsite-…` outranks `dailybackup-…` regardless of date); the exact
+  generation is now the newest by creation time, and the newest
+  manifest file is the one with the newest mtime (byte order only
+  breaks ties).
+
+- **Blocksize column read as sector sizes.** Pool rows in the Pool
+  Topology now show the pool's ashift-based blocksize with its
+  derivation (e.g. `4096 bytes (ashift 12)`), device rows show that
+  disk's physical sector size, and group rows show `-`.
+
+- **The Log Viewer's path line no longer highlights itself.** Stock GTK
+  selects a selectable label's whole text when it gains focus; the
+  focus-driven select-all is disabled app-wide, while click and drag
+  copying still work.
+
+### Changed
+
+- **`zfscheckagainst` exit code 4 broadened.** "Not common with any
+  counterpart" now includes the case where every matched counterpart
+  dataset is absent (missing on an online pool) — nothing protects the
+  snapshot, so deletion may proceed. Callers that treat 0 and 4 alike
+  (as `zfsdelsnap` and the Retention preview already do) need no
+  change. An absent counterpart never overrides a different row's
+  offline/locked verdict (6) or last-common verdict (7).
+
+- **The holding pool is never exported during a migration cutover.**
+  The plan's holding-pool export step is gone; the holding pool stays
+  online for the whole cutover, so the VMs it serves keep running.
+
+- The Miscellaneous Logs table carries no tooltips at all — not on its
+  title bar, headings, or cells — except the hovered cell's own clipped
+  text, like every other table.
+
+- The Migrate Pool bandwidth-limit tooltip states the effective-cap
+  rule (the minimum of the limit and the involved enclosure limits).
+
+- Boot-disk hiding messages in the disk inventory moved from `VERB` to
+  `DEBUG`.
+
+### Tests
+
+- Cutover gates scripted end to end: written-since refusal with
+  Re-check/Defer, recheck passing after writers stop, unverifiable
+  quiescence deferring, declined disruptive confirmation, and export
+  preparation (clean pass, unmount sweep, failed unmount, surviving
+  blockers); the three-phase step builder and the absent holding-pool
+  export pinned in the plan suite and golden.
+
+- Absent-counterpart trio in the checkagainst suite (absent-only
+  verdict, `INFO` once then `VERB`, absent plus offline still blocks);
+  replay-props exact-generation picks by creation time and manifest
+  newest-file by mtime with byte-order tiebreak.
+
+- Disks-page one-selection law and enclosure tint (deselection both
+  panes, member tinting, multi-pool expansion, baseline restore,
+  refresh re-tint); Blocksize rendering per row kind; column-map
+  routing; heading-button realize wiring; the Miscellaneous-list
+  no-tooltip guard; per-view ellipsis wiring across the affected
+  suites; the realized check pins the migrate-picker geometry and the
+  real Disks-page heading buttons.
+
+### Documentation
+
+- GTK GUI guide: the cutover gates in order (holding pool never
+  exported), the Disks tab's one-selection law and enclosure
+  correlation, the Blocksize column meaning, and the tooltip
+  carve-outs for the Miscellaneous table.
+
+- Messages catalog: the absent-counterpart `INFO` rows, the migration
+  quiesce/export-preparation rows, and the restructured cutover
+  section; the bash modules guide documents the absent-counterpart
+  verdict and the broadened rc 4; the Python modules guide documents
+  the three-phase migration and the quiesce-oracle repository methods.
+
+- GLOSSARY gains *ashift*, *counterpart dataset*, *physical sector
+  size*, and *quiesce*.
 
 ## 0.142.0
 
@@ -251,7 +368,6 @@
   guide rows for every extended suite.
 - Messages catalog rows for each new or reworded `WARN`/`FATAL`; three
   glossary entries (managed pool, online, registered).
-
 
 ## 0.141.0
 
@@ -1550,7 +1666,6 @@
   `INFO`/`VERB` messages. The developer testing guide documents the root
   bytecode cache redirect and its residual.
 
-
 ## 0.136.0
 
 *Released 2026-10-30*
@@ -2619,7 +2734,4 @@
   failure paths complete); the testing overview's orchestrator
   paragraph now describes the real coverage; `tests/AGENTS.md` gained
   the integrated-validation guidance section.
-
-
-
 

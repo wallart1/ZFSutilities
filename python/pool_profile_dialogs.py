@@ -25,6 +25,7 @@ from feature_config import (
 )
 from gi.repository import Gtk
 from gui_helpers import (
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     create_scrolled_dialog,
@@ -231,10 +232,14 @@ def show_manage_pool_profiles_dialog(app):
     ]
     for col_idx, title_text, width, header_tip in cols:
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         set_column_header_tooltip(col, title_text, header_tip)
         configure_treeview_column(col, width=width)
         view.append_column(col)
+
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(view, store)
 
     # Non-expanding, like every GUI table: the list is only as tall as its
     # rows (up to the 20-row cap) and scrolls inside beyond that; the

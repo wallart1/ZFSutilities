@@ -169,6 +169,7 @@ def create_pools_page(app):
 
     # Pool name — colored by registration state
     name_renderer = Gtk.CellRendererText()
+    name_renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     name_col = Gtk.TreeViewColumn("Pool", name_renderer, text=COL_NAME)
     name_col.set_cell_data_func(name_renderer, _pool_name_cell_func)
     configure_treeview_column(name_col, width=120)
@@ -197,6 +198,7 @@ def create_pools_page(app):
 
     # Health — replaces the removed Status column at position 1
     health_renderer = Gtk.CellRendererText()
+    health_renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     health_col = Gtk.TreeViewColumn("Health", health_renderer, text=COL_HEALTH)
     health_col.set_cell_data_func(health_renderer, _pool_health_cell_func)
     configure_treeview_column(health_col, width=80)
@@ -211,6 +213,7 @@ def create_pools_page(app):
 
     # Errors summary from zpool status
     errors_renderer = Gtk.CellRendererText()
+    errors_renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     errors_col = Gtk.TreeViewColumn("Errors", errors_renderer, text=COL_ERRORS)
     errors_col.set_cell_data_func(errors_renderer, _pool_errors_cell_func)
     configure_treeview_column(errors_col, width=120)
@@ -234,6 +237,7 @@ def create_pools_page(app):
     for title, col_idx, width, header_tip in numeric_cols:
         renderer = Gtk.CellRendererText()
         renderer.set_property("xalign", 1.0)
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         col = Gtk.TreeViewColumn(title, renderer, text=col_idx)
         col.set_alignment(1.0)  # right-align the header
         configure_treeview_column(col, width=width)
@@ -247,6 +251,28 @@ def create_pools_page(app):
         else:
             app.pool_store.set_sort_func(col_idx, _numeric_sort_func, col_idx)
         app.pool_view.append_column(col)
+
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # registry's visible order (Name, Offsite, Health, Errors, numeric) does
+    # not follow the store layout, so a column_map routes each visible
+    # position to its store column; the Offsite toggle's bool falls through.
+    attach_cell_tooltips(
+        app.pool_view,
+        app.pool_store,
+        column_map=[
+            COL_NAME,
+            COL_OFFSITE,
+            COL_HEALTH,
+            COL_ERRORS,
+            COL_SIZE,
+            COL_ALLOC,
+            COL_FREE,
+            COL_FREEING,
+            COL_CKPOINT,
+            COL_FRAG,
+            COL_CAP,
+        ],
+    )
 
     # Right-click context menu (Copy + Send details to log)
     app.pool_view.connect("button-press-event", _on_pool_button_press, app)

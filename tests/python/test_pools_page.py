@@ -679,26 +679,53 @@ class TestPoolsPageLayout(unittest.TestCase):
             "both table windows must pack non-expanding",
         )
 
-    def test_scrub_view_attaches_cell_tooltips(self):
-        """Ellipsized scrub cells show their full text on hover."""
+    def test_registry_and_scrub_views_attach_cell_tooltips(self):
+        """Ellipsized registry and scrub cells show their full text on hover.
+
+        The registry's visible column order (Name, Offsite, Health, Errors,
+        numeric) does not follow its store layout, so it routes each visible
+        position through a column_map; the scrub table, whose visible
+        columns match the store, uses the plain offset form.
+        """
         pp = _import_pools_page()
         with patch.object(pp, "refresh_pools_page", MagicMock()):
             with patch.object(pp, "ScrubQueue", MagicMock()):
-                app = self._make_app()
-                pp.create_pools_page(app)
+                with patch.object(pp, "attach_cell_tooltips") as recorder:
+                    app = self._make_app()
+                    pp.create_pools_page(app)
 
-        # pools_page was imported under a fresh mock context; reach the
-        # handler through the helper it actually bound rather than through
-        # sys.modules, which mock_gtk(fresh=True) restores on exit.
-        expected_handler = pp.attach_cell_tooltips.__globals__["_on_cell_query_tooltip"]
+        calls = recorder.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertIs(calls[0].args[0], app.pool_view)
+        self.assertIs(calls[0].args[1], app.pool_store)
+        self.assertEqual(
+            calls[0].kwargs["column_map"],
+            [
+                pp.COL_NAME,
+                pp.COL_OFFSITE,
+                pp.COL_HEALTH,
+                pp.COL_ERRORS,
+                pp.COL_SIZE,
+                pp.COL_ALLOC,
+                pp.COL_FREE,
+                pp.COL_FREEING,
+                pp.COL_CKPOINT,
+                pp.COL_FRAG,
+                pp.COL_CAP,
+            ],
+        )
+        self.assertIs(calls[1].args[0], app.scrub_view)
+        self.assertIs(calls[1].args[1], app.scrub_store)
 
-        view, store = app.scrub_view, app.scrub_store
-        view.set_has_tooltip.assert_any_call(True)
-        handler_calls = [c for c in view.connect.call_args_list if c.args[:1] == ("query-tooltip",)]
-        self.assertEqual(len(handler_calls), 1)
-        self.assertIs(handler_calls[0].args[1], expected_handler)
-        self.assertIs(handler_calls[0].args[2], store)
-        self.assertEqual(handler_calls[0].args[3], 0)
+        # Every text renderer ellipsizes: 10 registry columns (Pool, Health,
+        # Errors, and the seven numeric ones) plus the 5 scrub columns.
+        # Under mock_gtk all renderers share one instance, so count the
+        # ellipsize calls rather than the interleaved xalign/font ones.
+        renderer = pp.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 15)
 
     def test_pool_and_scrub_table_headers_carry_tooltips(self):
         """Every pool-table and scrub-table header explains its column."""

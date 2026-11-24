@@ -555,7 +555,7 @@ class DiskRepository:
         if len(kept) == len(disks):
             return disks
         log_msg(
-            f"VERB: hiding system boot disk {boot_path} "
+            f"DEBUG: hiding system boot disk {boot_path} "
             f"({hidden_parts} partitions) from the disk inventory"
         )
         return kept

@@ -176,6 +176,47 @@ class TestSetColumnHeaderTooltip(unittest.TestCase):
         header.show_all.assert_called_once()
         col.set_widget.assert_called_once_with(header)
 
+    def test_label_arms_header_button_on_realize(self):
+        """The label connects realize so it can arm the full-width button."""
+        with mock_gtk() as gtk_mock:
+            gui_helpers = import_gui_fresh("gui_helpers")
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                col = MagicMock()
+                gui_helpers.set_column_header_tooltip(col, "Wear/Test", "Wear or test state")
+
+        header = gtk_mock.Label.return_value
+        header.connect.assert_called_once_with("realize", gui_helpers._on_header_label_realize)
+
+
+class TestOnHeaderLabelRealize(unittest.TestCase):
+    """_on_header_label_realize arms the enclosing header button."""
+
+    def test_arms_button_with_labels_tooltip(self):
+        """The button ancestor receives the label's tooltip text."""
+        gui_helpers = _import_gui_helpers()
+        label = MagicMock()
+        label.get_tooltip_text.return_value = "Wear or test state"
+        button = MagicMock()
+        label.get_ancestor.return_value = button
+
+        gui_helpers._on_header_label_realize(label)
+
+        label.get_ancestor.assert_called_once_with(gui_helpers.Gtk.Button)
+        button.set_tooltip_text.assert_called_once_with("Wear or test state")
+
+    def test_no_button_ancestor_is_a_noop(self):
+        """Without a button ancestor there is nothing to arm."""
+        gui_helpers = _import_gui_helpers()
+        label = MagicMock()
+        label.get_tooltip_text.return_value = "Wear or test state"
+        label.get_ancestor.return_value = None
+
+        gui_helpers._on_header_label_realize(label)
+
+        label.get_tooltip_text.assert_not_called()
+        label.get_ancestor.assert_called_once_with(gui_helpers.Gtk.Button)
+
 
 class TestAttachCellTooltips(unittest.TestCase):
     """attach_cell_tooltips wires the shared handler with store and offset."""
@@ -187,7 +228,7 @@ class TestAttachCellTooltips(unittest.TestCase):
         gui_helpers.attach_cell_tooltips(view, store)
         view.set_has_tooltip.assert_called_once_with(True)
         view.connect.assert_called_once_with(
-            "query-tooltip", gui_helpers._on_cell_query_tooltip, store, 0
+            "query-tooltip", gui_helpers._on_cell_query_tooltip, store, 0, None
         )
 
     def test_connects_handler_with_explicit_offset(self):
@@ -196,8 +237,82 @@ class TestAttachCellTooltips(unittest.TestCase):
         store = MagicMock()
         gui_helpers.attach_cell_tooltips(view, store, 1)
         view.connect.assert_called_once_with(
-            "query-tooltip", gui_helpers._on_cell_query_tooltip, store, 1
+            "query-tooltip", gui_helpers._on_cell_query_tooltip, store, 1, None
         )
+
+    def test_connects_handler_with_column_map(self):
+        """A column_map rides along in place of the offset arithmetic."""
+        gui_helpers = _import_gui_helpers()
+        view = MagicMock()
+        store = MagicMock()
+        gui_helpers.attach_cell_tooltips(view, store, column_map=[0, 10, 1])
+        view.connect.assert_called_once_with(
+            "query-tooltip",
+            gui_helpers._on_cell_query_tooltip,
+            store,
+            0,
+            [0, 10, 1],
+        )
+
+
+class TestCellQueryTooltipColumnMap(unittest.TestCase):
+    """column_map routes visible positions to store columns, None skips."""
+
+    def _make_view(self, hovered_index):
+        """A view whose hover hit lands on visible column *hovered_index*."""
+        view = MagicMock()
+        view.convert_widget_to_bin_window_coords.return_value = (3, 4)
+        hovered = MagicMock(name="hovered-column")
+        view.get_path_at_pos.return_value = (
+            MagicMock(name="path"),
+            hovered,
+            5,
+            9,
+        )
+        columns = [MagicMock(name=f"col{i}") for i in range(hovered_index + 1)]
+        columns[hovered_index] = hovered
+        view.get_columns.return_value = columns
+        return view
+
+    def test_mapped_column_reads_the_named_store_column(self):
+        gui_helpers = _import_gui_helpers()
+        store = MagicMock(name="store")
+        store.__getitem__.return_value = ["pool0", True, "ONLINE"]
+        view = self._make_view(hovered_index=0)
+        path = view.get_path_at_pos.return_value[0]
+
+        with patch.object(gui_helpers, "_cell_text_fits", return_value=False):
+            shown = gui_helpers._on_cell_query_tooltip(
+                view, 3, 4, False, MagicMock(), store, 0, [2, None, 0]
+            )
+
+        self.assertTrue(shown)
+        store.__getitem__.assert_called_once_with(path)
+
+    def test_none_entry_never_tooltips(self):
+        gui_helpers = _import_gui_helpers()
+        store = MagicMock(name="store")
+        view = self._make_view(hovered_index=1)
+
+        shown = gui_helpers._on_cell_query_tooltip(
+            view, 3, 4, False, MagicMock(), store, 0, [2, None, 0]
+        )
+
+        self.assertFalse(shown)
+        store.__getitem__.assert_not_called()
+
+    def test_position_beyond_the_map_never_tooltips(self):
+        """A visible column without a map entry shows nothing."""
+        gui_helpers = _import_gui_helpers()
+        store = MagicMock(name="store")
+        view = self._make_view(hovered_index=2)
+
+        shown = gui_helpers._on_cell_query_tooltip(
+            view, 3, 4, False, MagicMock(), store, 0, [2, None]
+        )
+
+        self.assertFalse(shown)
+        store.__getitem__.assert_not_called()
 
 
 class _FakeIter:

@@ -25,6 +25,7 @@ from gui_helpers import (
     ACTIVE_COLUMN_WIDTH,
     DirtyTracker,
     add_var_row,
+    attach_cell_tooltips,
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
@@ -261,12 +262,17 @@ def create_offsite_page(app, ctx):
     for col_idx, col_title, width, header_tip in col_defs:
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", True)
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         renderer.connect("edited", on_cell_edited, app.offsite_step_store, col_idx)
         renderer.connect("editing-started", _on_editing_started, step_view, col_idx)
         col = Gtk.TreeViewColumn(col_title, renderer, text=col_idx)
         configure_treeview_column(col, width=width)
         set_column_header_tooltip(col, col_title, header_tip)
         step_view.append_column(col)
+
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # Active toggle (store column 0) falls through the handler's str check.
+    attach_cell_tooltips(step_view, app.offsite_step_store)
 
     step_view.connect("row-activated", on_row_activated, 1)
     step_view.set_reorderable(True)

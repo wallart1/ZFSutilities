@@ -23,8 +23,9 @@ from feature_config import (
     get_managed_pool_names,
     save_enclosures_config,
 )
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
+    attach_cell_tooltips,
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
@@ -37,9 +38,10 @@ from logging_config import log_msg
 from zfs_repository import TopologyNode, ZfsRepository, valid_rate_limit
 
 # Foreground color used to tint the rows in one pane that correlate with the
-# current selection in the other: the physical disks backing the selected
-# pool or topology node in the Disk Inventory, and the devices of the
-# selected inventory disk in the Pool Topology.
+# current selection in another: the physical disks backing the selected
+# pool or topology node in the Disk Inventory, the devices of the selected
+# inventory disk in the Pool Topology, and the member disks plus their
+# devices of a selected enclosure in both panes.
 POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 
 # Minimum height of the page content. Keeps the panes usable
@@ -402,6 +404,7 @@ def create_disks_page(app):
     ]
     for col_idx, title_text, width, header_tip in disk_cols:
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         col.set_cell_data_func(renderer, _disk_cell_highlight_func)
         configure_treeview_column(col, width=width)
@@ -409,6 +412,8 @@ def create_disks_page(app):
         app.disks_view.append_column(col)
 
     app.enable_treeview_copy(app.disks_view)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(app.disks_view, app.disks_store)
 
     disks_scrolled = capped_treeview_scroll(app.disks_view)
     setup_row_scroll(disks_scrolled, app.disks_view)
@@ -459,12 +464,16 @@ def create_disks_page(app):
     ]
     for col_idx, title_text, width, header_tip in enclosure_cols:
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         configure_treeview_column(col, width=width)
         set_column_header_tooltip(col, title_text, header_tip)
         app.enclosures_view.append_column(col)
 
     app.enable_treeview_copy(app.enclosures_view)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    # Offset 1: the unrendered id column precedes the visible ones.
+    attach_cell_tooltips(app.enclosures_view, app.enclosures_store, 1)
 
     enclosures_scrolled = capped_treeview_scroll(app.enclosures_view)
     setup_row_scroll(enclosures_scrolled, app.enclosures_view)
@@ -506,12 +515,17 @@ def create_disks_page(app):
         (
             COL_T_ASHIFT,
             "Blocksize",
-            90,
-            ("On-disk sector size from the member's ashift (e.g. 4096 bytes); '-' when unknown."),
+            150,
+            (
+                "Pool row: the pool's ashift-based blocksize, e.g. 4096 bytes "
+                "(ashift 12); device rows: that disk's physical sector size; "
+                "'-' otherwise."
+            ),
         ),
     ]
     for col_idx, title_text, width, header_tip in topo_cols:
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         col.set_cell_data_func(renderer, _topology_cell_highlight_func)
         configure_treeview_column(col, width=width)
@@ -519,6 +533,8 @@ def create_disks_page(app):
         app.disks_topology_view.append_column(col)
 
     app.enable_treeview_copy(app.disks_topology_view)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(app.disks_topology_view, app.disks_topology_store)
 
     topo_scrolled = capped_treeview_scroll(app.disks_topology_view)
     setup_row_scroll(topo_scrolled, app.disks_topology_view)
@@ -800,8 +816,42 @@ def on_disks_surface_test(app):
     refresh_surface_test_status(app)
 
 
+def _deselect_other_views(app, current_view) -> None:
+    """Clear the selection of every Disks-page treeview except *current_view*.
+
+    The page keeps at most one selected row: choosing a row anywhere drops
+    the selections in the other two panes. The sync guard keeps the
+    programmatic unselect-all from re-entering the changed handlers, so the
+    deselected panes never fight the active handler's tints.
+    """
+    app._disks_syncing_selection = True
+    try:
+        for view in (app.disks_view, app.enclosures_view, app.disks_topology_view):
+            if view is not current_view:
+                view.get_selection().unselect_all()
+    finally:
+        app._disks_syncing_selection = False
+
+
 def _on_enclosure_selection_changed(selection, app):
-    """An Enclosures selection only drives the Set Max I/O Rate… button."""
+    """An Enclosures selection tints its disks across the page's other panes.
+
+    Selecting an enclosure clears the rows selected in the Disk Inventory
+    and Pool Topology, tints the enclosure's member disks in the inventory
+    and every topology device residing on them, and expands the pools
+    holding tinted devices. The pool selector stays where the user put it;
+    an emptied selection restores the pool-selector baseline.
+    """
+    if getattr(app, "_disks_syncing_selection", False):
+        return
+    enclosure_id = _selected_enclosure_id(app)
+    if enclosure_id:
+        _deselect_other_views(app, app.enclosures_view)
+        _highlight_enclosure_disks(app, enclosure_id)
+    else:
+        _clear_topology_highlights(app)
+        _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
+    _apply_topology_expansion(app)
     update_disks_button_sensitivity(app)
 
 
@@ -985,18 +1035,21 @@ def on_disks_set_enclosure_rate(app):
 def _on_disk_selection_changed(selection, app):
     """When a disk/partition is selected, tint its devices across all pools.
 
-    The pool selector follows the disk's pool, but the topology pane never
-    selects a node: the devices residing on the selected disk are tinted
-    teal instead (see _sync_topology_highlight_from_inventory). A disk or
-    partition that belongs to no pool clears the topology pane instead —
-    tints, pool selector, and expansion all reset so nothing stale from the
-    previously shown state stays on screen.
+    The selection clears the rows selected in the Enclosures and Pool
+    Topology panes (one selection per page), and the pool selector follows
+    the disk's pool. The topology pane never selects a node: the devices
+    residing on the selected disk are tinted teal instead (see
+    _sync_topology_highlight_from_inventory). A disk or partition that
+    belongs to no pool clears the topology pane instead — tints, pool
+    selector, and expansion all reset so nothing stale from the previously
+    shown state stays on screen.
     """
     if getattr(app, "_disks_syncing_selection", False):
         return
     model, pathlist = selection.get_selected_rows()
     selector = app._disks_pool_selector
     if pathlist:
+        _deselect_other_views(app, app.disks_view)
         tree_iter = model.get_iter(pathlist[0])
         pools_str = model.get_value(tree_iter, COL_D_POOLS)
         if pools_str:
@@ -1020,16 +1073,19 @@ def _on_topology_selection_changed(selection, app):
     A device node highlights that device, a vdev node highlights every device
     in the vdev, and the pool node highlights every device in the pool. Every
     member resolves to its backing physical disk, so the tint lands on disk
-    rows, never on partition rows. The pool selector follows the pool
-    containing the selection, and an empty selection (or a node with no
-    devices) restores the pool-wide highlight. The inventory selection is
-    never modified; the correlation is teal foreground text only.
+    rows, never on partition rows. The selection clears the rows selected in
+    the Disk Inventory and Enclosures panes (one selection per page), the
+    pool selector follows the pool containing the selection, and an empty
+    selection (or a node with no devices) restores the pool-wide highlight.
+    No pane ever selects a row in another pane; the correlation is teal
+    foreground text only.
     """
     if getattr(app, "_disks_syncing_selection", False):
         return
     model, pathlist = selection.get_selected_rows()
     selector = app._disks_pool_selector
     if pathlist:
+        _deselect_other_views(app, app.disks_topology_view)
         containing_pool = _topology_selection_pool(model, pathlist[0])
         if containing_pool and selector.get_active_text() != containing_pool:
             _set_combo_active_text(selector, containing_pool)
@@ -1062,8 +1118,11 @@ def _repopulate_topology(app):
     app.disks_topology_store.clear()
     data = app._disks_inventory_cache.get()
     display_pools = managed_display_pool_names(app, data)
+    sector_for_member = _member_sector_lookup(data.disks)
     for pool_name in sorted(display_pools):
-        _populate_topology_store(app.disks_topology_store, None, data.topologies[pool_name])
+        _populate_topology_store(
+            app.disks_topology_store, None, data.topologies[pool_name], sector_for_member
+        )
     _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
     _sync_topology_highlight_from_inventory(app)
     _apply_topology_expansion(app)
@@ -1272,6 +1331,26 @@ def _highlight_pool_disks(app, pool_name):
         it = app.disks_store.iter_next(it)
 
 
+def _highlight_enclosure_disks(app, enclosure_id: str) -> None:
+    """Tint the enclosure's member disks and their topology devices.
+
+    Members resolve to whole-disk rows — a partition follows its parent
+    disk, mirroring _highlight_pool_disks — and the topology tint marks
+    every device residing on a member disk across all pools, so the pools
+    that hold them expand (see _apply_topology_expansion).
+    """
+    data = app._disks_inventory_cache.get()
+    member_paths = {
+        disk.parent_path or disk.path for disk in data.disks if disk.enclosure_id == enclosure_id
+    }
+    it = app.disks_store.get_iter_first()
+    while it:
+        path = app.disks_store.get_value(it, COL_D_NAME)
+        app.disks_store.set_value(it, COL_D_HIGHLIGHT, path in member_paths)
+        it = app.disks_store.iter_next(it)
+    _highlight_topology_nodes_for_disks(app, member_paths)
+
+
 def _disk_cell_highlight_func(column, renderer, model, tree_iter, data=None):
     """Tint the foreground text of disk rows that belong to the selected pool."""
     highlighted = model.get_value(tree_iter, COL_D_HIGHLIGHT)
@@ -1313,15 +1392,23 @@ def _topology_node_matches_disk(node_name: str, disk_path: str) -> bool:
         return False
 
 
-def _highlight_topology_nodes_for_disk(app, disk_path: str) -> None:
-    """Set the teal highlight on every topology device residing on *disk_path*."""
+def _highlight_topology_nodes_for_disks(app, disk_paths: set[str]) -> None:
+    """Set the teal highlight on every topology device residing on any of *disk_paths*.
+
+    An empty set clears the highlight on every row, matching the
+    single-disk caller's clear-on-deselect semantics.
+    """
     store = app.disks_topology_store
 
     def _walk(parent_iter):
         it = store.iter_children(parent_iter)
         while it:
             name = store.get_value(it, COL_T_NAME)
-            store.set_value(it, COL_T_HIGHLIGHT, _topology_node_matches_disk(name, disk_path))
+            store.set_value(
+                it,
+                COL_T_HIGHLIGHT,
+                any(_topology_node_matches_disk(name, path) for path in disk_paths),
+            )
             _walk(it)
             it = store.iter_next(it)
 
@@ -1360,7 +1447,7 @@ def _sync_topology_highlight_from_inventory(app) -> None:
     disk_path = model.get_value(tree_iter, COL_D_NAME)
     if not isinstance(disk_path, str):
         return
-    _highlight_topology_nodes_for_disk(app, disk_path)
+    _highlight_topology_nodes_for_disks(app, {disk_path})
 
 
 def _topology_selection_pool(model, path) -> str | None:
@@ -1512,8 +1599,48 @@ def _highlight_topology_devices(app, device_paths):
         it = app.disks_store.iter_next(it)
 
 
-def _populate_topology_store(store, parent_iter, node: TopologyNode) -> None:
-    """Recursively append *node* and its children to *store*."""
+def _member_sector_lookup(disks: list[DiskInfo]) -> Callable[[str], str | None]:
+    """Return a member-path -> physical-sector text resolver for topology rows.
+
+    Members arrive as ``/dev/disk/by-id`` (or by-path) links while the
+    inventory lists kernel ``/dev`` nodes, so each member resolves through
+    ``os.path.realpath`` — the same normalization ``_collect_disk_paths``
+    records. A member whose disk is absent from the inventory (the boot
+    disk is always hidden from it) resolves to None and renders "-".
+    """
+    by_path = {disk.path: disk for disk in disks}
+
+    def lookup(member_path: str) -> str | None:
+        try:
+            real = os.path.realpath(member_path)
+        except OSError:
+            real = member_path
+        disk = by_path.get(real)
+        if disk is None or disk.physical_sector is None:
+            return None
+        return f"{disk.physical_sector} bytes"
+
+    return lookup
+
+
+def _populate_topology_store(
+    store,
+    parent_iter,
+    node: TopologyNode,
+    sector_for_member: Callable[[str], str | None],
+) -> None:
+    """Recursively append *node* and its children to *store*.
+
+    The Blocksize cell is row-kind specific: the pool row carries the
+    ashift-based blocksize with its derivation, a device row that disk's
+    physical sector size, and vdev-group rows nothing.
+    """
+    if node.ashift is not None:
+        blocksize = f"{1 << node.ashift} bytes (ashift {node.ashift})"
+    elif node.vdev_type == "disk":
+        blocksize = sector_for_member(node.name) or "-"
+    else:
+        blocksize = "-"
     row = [
         node.name,
         node.vdev_type,
@@ -1521,9 +1648,9 @@ def _populate_topology_store(store, parent_iter, node: TopologyNode) -> None:
         str(node.read),
         str(node.write),
         str(node.cksum),
-        f"{1 << node.ashift} bytes" if node.ashift is not None else "-",
+        blocksize,
         False,
     ]
     it = store.append(parent_iter, row)
     for child in node.children:
-        _populate_topology_store(store, it, child)
+        _populate_topology_store(store, it, child, sector_for_member)

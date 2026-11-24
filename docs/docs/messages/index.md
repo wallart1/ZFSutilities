@@ -469,7 +469,8 @@ Builds the two-part restore script. The messages below are emitted inside the ge
 | `WARN: Cannot verify counterpart - offline: ...[; locked: ...]` | Every counterpart for the matched fss rows is unavailable — its pool is offline, or another operation holds the dataset — and no hold-based verification succeeded | Deletion blocked for safety (return 6); bring the counterpart pool online or let the locking operation finish, then rerun |
 | `WARN: cannot read <dataset> — locked by <script> (pid ..., since ...).` | The dataset's shared read lock could not be taken; the named holder owns the conflict | That counterpart is treated as unavailable (see the row above) |
 | `WARN: Cannot verify <snapshot> — source dataset is locked.` | The candidate's own dataset is locked, so the snapshot list cannot be read safely | Deletion blocked for safety (return 6); re-run once the locking operation finishes |
-| `WARN: Dataset to check ... does not exist or is offline.` | The counterpart dataset cannot be listed | That destination root is skipped; other fss rows are still checked |
+| `INFO: Counterpart dataset ... absent - no chain through this fss row.` | The counterpart's pool is online but the dataset does not exist (destination-only dataset such as a manifest store, or a source removed by archiving) | Logged once per run per dataset; that fss row cannot block deletion |
+| `INFO: All matched counterparts absent for ... (...) - nothing to protect.` | Every fss row matching the snapshot found no counterpart dataset | Verified as not common (return 4); deletion may proceed |
 | `VERB: Offline pool ...: another snapshot carries hold '...' — incremental chain intact.` | The counterpart pool is offline, but the `offsite-<pool>` hold on another snapshot proves the chain is intact | Counts as verified; deletion may proceed |
 | `WARN: <offsite> used in source root but no offsite candidate pools are configured. Skipping fss row: ...` / `WARN: <offsite> placeholder used but no offsite candidate pools are configured. Snapshot: ...` | The fss table uses the `<offsite>` placeholder while the JSON config lists no offsite-candidate pools | The fss row is skipped, or the snapshot counts as unverifiable (deletion may be blocked) |
 | `FATAL: Unexpected RC=... from .../zfscommsnap.` / `FATAL: Internal error = ...` | An unexpected return code from the common-snapshot helper or an internal inconsistency | Script aborts (exit 8) |
@@ -2095,11 +2096,11 @@ GUI dialogs for growing and maintaining pools: add data vdev, expand vdev (attac
 
 ### [pool_migrate_dialogs](../commands-and-modules/python-modules.md#pool_migrate_dialogspy)
 
-GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cutover phase gated by typed confirmation, layout re-checks, and a running-VM warning.
+GUI Migrate Pool wizard (storage host only): copy, catch-up, and destructive phases, gated by typed confirmation, layout re-checks, an enforced quiesce check, a running-VM warning, a disruptive-steps confirmation, and a proactive export preparation.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `WARN: Could not list zvols of pool '...': ...` | Zvol listing failed while finding VMs on the source pool | No running-VM check possible; cutover still gated by confirm/export |
+| `WARN: Could not list zvols of pool '...': ...` | Zvol listing failed while finding VMs on the source pool | No running-VM check possible; cutover still gated by the quiesce check, confirmations, and export preparation |
 | `WARN: Could not read the node configuration: ...` | Node config unreadable during the VM check | Continue as single-node (local `qm` used) |
 | `WARN: No compute host configured; skipping the running check for VM ...` | Two-node mode but no compute host is set | That VM's status check skipped (non-fatal by design) |
 | `WARN: Could not check the status of VM ...: ...` | `qm status` (local or via SSH) failed | That VM skipped |
@@ -2117,12 +2118,18 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `INFO: Migrate pool cancelled for ...` | The copy phase was cancelled | Lock released; holds file discarded; refresh |
 | `WARN: Migrate pool copy failed for '...' (rc=...); no destructive step was run` | The copy phase exited non-zero | Aborted before cutover; lock released; holds file discarded |
 | `WARN: Migrate pool start failed for '...' (...); captured-holds file discarded` | Starting the run itself failed (step build, lock acquisition, runner start) after the holds TSV was reserved | Nothing ran; lock released if taken; a dataset-lock conflict (holder named in the message) is an expected refusal — wait for the holder or address it and rerun; unexpected errors are re-raised |
-| `INFO: Migrate pool copy complete for '...'; waiting for cutover confirmation` | Copy phase finished; the destructive phase is gated | Layout re-check and running-VM warning, then the cutover dialog |
+| `INFO: Migrate pool copy complete for '...'; waiting for cutover confirmation` | Copy phase finished; the destructive phase is gated | Layout re-check and typed confirmation, then the catch-up phase |
 | `WARN: Migrate Pool aborted for '...': pool changed at cutover time (...)` | Safety gate — the layout changed since review at the cutover moment | Cutover aborted; snapshot/copies remain; re-review |
-| `INFO: Cutover deferred for '...' (running VMs declined); the migration snapshot and copies remain in place — rerun Migrate Pool to finish` | The running-VMs warning was declined at cutover | Cutover not run; state preserved for a later rerun |
-| `INFO: Cutover deferred for '...'; the migration snapshot and copies remain in place — rerun Migrate Pool to finish` | The typed cutover confirmation was cancelled | Cutover not run; state preserved |
-| `INFO: Migrate pool cutover cancelled for ...` | The cutover phase was cancelled mid-run | Holds-preservation info logged next |
-| `WARN: Migrate pool cutover failed for '...' (rc=...) — the pool may be left exported; investigate before retrying` | The cutover phase exited non-zero | Holds file preserved; investigate the export state before retrying |
+| `INFO: Migrate pool catch-up cancelled for ...` | The catch-up phase was cancelled mid-run | Lock released; holds file discarded; refresh |
+| `WARN: Migrate pool catch-up failed for '...' (rc=...); no destructive step was run` | The catch-up phase exited non-zero | Aborted before any destructive step; lock released; holds file discarded |
+| `WARN: Migrate cutover: pool '...' is not quiesced — ... dataset(s) written since the cutover snapshot` | Enforced quiesce gate — datasets still receive writes after the cutover snapshot | The refusal dialog names each dataset and amount; stop the writers and Re-check, or Defer |
+| `WARN: Migrate cutover could not verify quiescence of '...': ...` | The `written@<cutover snapshot>` query failed | Cutover deferred — an unreadable answer is not a quiesced pool |
+| `INFO: Cutover deferred for '...' (...); the migration snapshot and copies remain in place — rerun Migrate Pool to finish` | A cutover gate deferred the run — reason in parentheses: `typed confirmation cancelled`, `quiescence unverifiable`, `pool not quiesced`, `running VMs declined`, `disruptive-steps confirmation declined`, or `export blockers remain` | Cutover not run; state preserved for a later rerun |
+| `WARN: Migrate cutover could not unmount '...': ...` | The export preparation's unmount sweep failed on a filesystem | Blocker dialog shown; cutover deferred |
+| `INFO: Unmounted '...' filesystems for the migration export` | The export preparation unmounted the source pool's mounted filesystems | Informational; the export now runs on a quiet pool |
+| `WARN: Migrate cutover deferred for '...': ... export blocker(s) remain` | The export preparation re-scan still found blockers (busy processes, iSCSI LUNs, shares, sends) | Blocker dialog names each; resolve them and rerun Migrate Pool |
+| `INFO: Migrate pool cutover cancelled for ...` | The destructive phase was cancelled mid-run | Holds-preservation info logged next |
+| `WARN: Migrate pool cutover failed for '...' (rc=...) — the pool may be left exported; investigate before retrying` | The destructive phase exited non-zero | Holds file preserved; investigate the export state before retrying |
 | `INFO: Pool '...' migrated successfully (mode: ...)` | Final success | Holds file discarded; iSCSI repair or Proxmox offer follows |
 | `INFO: Reminder: pool '...' had ... vdev(s) before the migration and the new pool does not; re-add them with Add Infrastructure Vdev` | The source pool had infrastructure vdevs (special/log/cache/spare), which are never recreated by the migration | Re-add them after the cutover with Add Infrastructure Vdev (and remove the old ones from the source disks if they were reused) |
 | `INFO: iSCSI LUN re-registration for '...' cancelled` | The post-migration `repair-iscsi-luns` step was cancelled (iSCSI-managed pool) | Refresh; the Proxmox offer still follows |
@@ -2283,7 +2290,7 @@ Repository layer for the disk inventory (lsblk parsing and boot-disk hiding).
 | `WARN: could not probe for the boot disk: ...` / `boot-disk probe failed` / `could not resolve the boot disk: ...` / `boot-disk resolution failed` / `could not parse boot-disk ... output: ...` / `could not resolve boot disk from ...` / `could not resolve a boot-disk path from ...` | The boot-disk detection probe failed at some stage (findmnt, PKNAME chain, or mountpoint fallback) | Boot disk not hidden; all disks shown |
 | `DEBUG: root source ... is not a block-device path` | The findmnt SOURCE is a dataset/subvolume (e.g. ZFS root) — the fallback path is taken | Detection continues via mountpoint |
 | `DEBUG: no root-filesystem device found; boot disk not hidden` | The fallback found no device mounted at / | All disks shown |
-| `VERB: hiding system boot disk ... (... partitions) from the disk inventory` | Safety decision — the boot disk and its partitions are excluded from the inventory | Boot disk not offered for pool use |
+| `DEBUG: hiding system boot disk ... (... partitions) from the disk inventory` | Safety decision — the boot disk and its partitions are excluded from the inventory | Boot disk not offered for pool use |
 
 ### [disk_actions](../commands-and-modules/python-modules.md#disk_actionspy)
 

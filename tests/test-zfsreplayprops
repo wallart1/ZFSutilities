@@ -45,16 +45,32 @@ _rmock_store=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_store.XXXXXX")
 zfs() {
     echo "zfs $*" >> "$_zfs_capture_file"
     local -a a=()
-    local target value prop d _new
+    local target value prop d _new i skey grab
     case "$1" in
         list)
             a=("${@:2}")
             target="${a[${#a[@]}-1]}"
             if [[ "$*" == *" -t snapshot"* ]]; then
-                # Snapshot listing for one dataset, name-sorted descending
-                # (the -S name form the replay lookup uses).
-                awk -v ds="$target" 'index($0, ds "@") == 1' \
-                    "$_rmock_snaps_file" 2>/dev/null | LC_ALL=C sort -r
+                # Snapshot listing for one dataset, sorted by the caller's
+                # -S key (creation for the replay lookup). Fixture lines
+                # carry an optional TAB-separated creation epoch; a missing
+                # epoch defaults to fixture line order, so add order is
+                # chronology.
+                skey="name" grab=0
+                for i in "${a[@]}"; do
+                    if (( grab )); then skey="$i" grab=0; continue; fi
+                    [[ "$i" == "-S" ]] && grab=1
+                done
+                if [[ "$skey" == "creation" ]]; then
+                    awk -v ds="$target" 'index($0, ds "@") == 1 {
+                        split($0, f, "\t")
+                        printf "%d\t%s\n", (f[2] == "" ? NR : f[2] + 0), f[1]
+                    }' "$_rmock_snaps_file" 2>/dev/null \
+                        | LC_ALL=C sort -t$'\t' -k1,1gr -k2,2r | cut -f2-
+                else
+                    awk -v ds="$target" 'index($0, ds "@") == 1' \
+                        "$_rmock_snaps_file" 2>/dev/null | LC_ALL=C sort -r
+                fi
                 return 0
             fi
             case " ${_rmock_existing:-} " in
@@ -154,9 +170,15 @@ add_store() {
     printf '%s\t%s\n' "$1" "$2" >> "$_rmock_mounts_file"
 }
 
-# Register a snapshot on a backup-copy dataset.
+# Register a snapshot on a backup-copy dataset. The optional creation
+# epoch feeds the mock's -S creation sort; without it, fixture line
+# order is the chronology.
 add_snap() {
-    printf '%s@%s\n' "$1" "$2" >> "$_rmock_snaps_file"
+    if [[ -n "${3:-}" ]]; then
+        printf '%s@%s\t%s\n' "$1" "$2" "$3" >> "$_rmock_snaps_file"
+    else
+        printf '%s@%s\n' "$1" "$2" >> "$_rmock_snaps_file"
+    fi
 }
 
 reset_state() {
@@ -203,14 +225,23 @@ test_store_derivation() {
     test_pass
 }
 
-test_newest_file_byte_order() {
-    test_start "newest-file selection uses byte order over generation names"
+test_newest_file_prefers_mtime_then_name() {
+    test_start "newest-file selection takes the mtime-newest; ties fall to byte order"
 
     local dir
     dir=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_newest.XXXXXX")
+    # Byte-order tie-break: same mtime, greatest generation name wins.
     printf x > "$dir/ds@20261101T0500Z-d"
     printf x > "$dir/ds@20261102T0500Z-d"
     printf x > "$dir/ds@20261031T0500Z-d"
+    touch -d '@1794493560' "$dir/ds@20261101T0500Z-d" \
+        "$dir/ds@20261102T0500Z-d" "$dir/ds@20261031T0500Z-d"
+    assert_equals "$dir/ds@20261102T0500Z-d" \
+        "$(propmanifest_newest_file "$dir/ds@")"
+    # mtime wins across generation-name families: offsite- is the
+    # greater name but the older file.
+    printf x > "$dir/ds@offsite-20261103T0153Z-s"
+    touch -d '@1793670780' "$dir/ds@offsite-20261103T0153Z-s"
     assert_equals "$dir/ds@20261102T0500Z-d" \
         "$(propmanifest_newest_file "$dir/ds@")"
     assert_equals "" "$(propmanifest_newest_file "$dir/none@")"
@@ -573,6 +604,55 @@ test_replay_falls_back_to_newest_manifest() {
 using the newest available (tank%2Fsrc%2Fdata@daily-20261101T0500Z-d)."
     assert_contains "$(cat "$_zfs_capture_file")" \
         "zfs set compression=on tank/src/data"
+    test_pass
+}
+
+test_replay_exact_generation_uses_creation_not_name() {
+    test_start "exact generation is the creation-newest snapshot, not the name-newest"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    # Name sort ranks offsite- above daily-; creation says daily- is newest.
+    add_snap backup/tank/src/data offsite-20261103T0153Z-s 1793670780
+    add_snap backup/tank/src/data daily-20261112T1426Z-d 1794493560
+    write_manifest "$_rmock_store" tank/src/data daily-20261112T1426Z-d \
+        compression=lz4
+
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_zfs_capture_file")" \
+        "zfs set compression=lz4 tank/src/data"
+    if [[ "$(get_log)" == *"WARN"* ]]; then
+        test_fail "an exact hit must not WARN: $(get_log)"
+        return
+    fi
+    test_pass
+}
+
+test_replay_fallback_prefers_newest_mtime() {
+    test_start "fallback takes the mtime-newest manifest when name order disagrees"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261113T0500Z-d 1794500000
+    write_manifest "$_rmock_store" tank/src/data offsite-20261103T0153Z-s \
+        compression=on
+    write_manifest "$_rmock_store" tank/src/data daily-20261112T1426Z-d \
+        compression=lz4
+    touch -d '@1793670780' \
+        "$_rmock_store/tank%2Fsrc%2Fdata@offsite-20261103T0153Z-s"
+    touch -d '@1794493560' \
+        "$_rmock_store/tank%2Fsrc%2Fdata@daily-20261112T1426Z-d"
+
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: Exact-generation manifest @daily-20261113T0500Z-d not found for tank/src/data — \
+using the newest available (tank%2Fsrc%2Fdata@daily-20261112T1426Z-d)."
+    assert_contains "$(cat "$_zfs_capture_file")" \
+        "zfs set compression=lz4 tank/src/data"
     test_pass
 }
 
@@ -977,7 +1057,7 @@ test_wrapper_standalone_overrides() {
 # ---------------------------------------------------------------------------
 
 test_store_derivation
-test_newest_file_byte_order
+test_newest_file_prefers_mtime_then_name
 test_parse_verifies_good_manifest
 test_parse_empty_body
 test_parse_unknown_version
@@ -997,6 +1077,8 @@ test_apply_file_corrupt_fails_open
 test_apply_file_dryrun
 test_replay_exact_generation
 test_replay_falls_back_to_newest_manifest
+test_replay_exact_generation_uses_creation_not_name
+test_replay_fallback_prefers_newest_mtime
 test_replay_no_manifest_keeps_defaults
 test_replay_no_store_predates_feature
 test_replay_derivation_guard

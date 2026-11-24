@@ -2008,6 +2008,35 @@ class TestTreeviewColumnHelpers(unittest.TestCase):
                     column_names=["source", "dest"],
                 )
 
+    def test_editable_list_view_ellipsizes_and_attaches_cell_tooltips(self):
+        """Text cells ellipsize and show their full text on hover."""
+        with mock_gtk() as gtk_mock:
+            gui_helpers = import_gui_fresh("gui_helpers")
+
+            elv, _created = self._elv_with_recorded_columns(
+                gui_helpers,
+                gtk_mock,
+                columns=[(1, "Source", 120), (2, "Destination", 120)],
+            )
+
+        # Every text renderer ellipsizes (mock_gtk shares one instance).
+        renderer = gtk_mock.CellRendererText.return_value
+        ellipsize = gui_helpers.Pango.EllipsizeMode.END
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", ellipsize)
+        ]
+        self.assertEqual(len(ellipsize_calls), 2)
+
+        # The view arms the shared clipped-cell tooltip handler; the Active
+        # toggle's bool store value falls through the handler's str check.
+        elv.view.set_has_tooltip.assert_called_once_with(True)
+        handler_calls = [
+            c for c in elv.view.connect.call_args_list if c.args[:1] == ("query-tooltip",)
+        ]
+        self.assertEqual(len(handler_calls), 1)
+        self.assertIs(handler_calls[0].args[1], gui_helpers._on_cell_query_tooltip)
+        self.assertIs(handler_calls[0].args[2], elv.store)
+
     def _elv_with_recorded_columns(self, gui_helpers, gtk_mock, **kwargs):
         """Build an EditableListView whose TreeViewColumns and Labels are
         fresh, individually recorded mocks (default mock_gtk shares one

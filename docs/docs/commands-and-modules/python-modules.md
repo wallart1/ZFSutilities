@@ -355,6 +355,8 @@ and tests easy to mock.
 | `build_recursive_snapshot_command()`     | Pure `zfs snapshot -r` argv builder for migration snapshots                                                                                            |
 | `valid_rate_limit()`                     | Pure rate-grammar validator mirroring `lib/pace_stream.py` (digits plus an optional `k`/`m`/`g`/`t`/`p`/`e` multiplier with optional `i`/`b`); shared by the migration command builder and the Migrate Pool dialog so the GUI never refuses a value the pacer accepts                                                                                                            |
 | `parse_rate_limit()`                     | Parse a pacer-grammar rate string into bytes/second through the shared resolver's `pace_stream` (`None` for empty or non-grammar); feeds the Performance tab's % of cap so the numeric view cannot drift from the pacer                                                                                                                        |
+| `parse_zfs_bytes()`                      | Parse a `zfs list` human-size field ("0B", "72K", "1.50M") into bytes (`None` for anything else, e.g. `-` when a dataset lacks the snapshot)                                                                                                                               |
+| `datasets_written_since(pool, snapshot_bare)` | Quiesce oracle behind the Migrate Pool cutover gate: bytes written per dataset since *snapshot_bare*, from one recursive `zfs list -o name,written@<snap>` query; a dataset without the snapshot maps to `None`; a failed query raises and the caller defers |
 | `ZfsRepository.effective_transfer_rate(pools, activity_rate)` | Python seam of per-enclosure rate governance: delegates to the shared resolver `lib/enclosure_rate.py` (min of *activity_rate* and every enclosure cap touched by *pools*; `""` = unlimited; resolver failure fails open to *activity_rate* with a loud WARN)                                                                                      |
 | `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` enforced by the pacer `lib/pace_stream.py`; optional `from_snap` switches the send to an incremental catch-up — `-Rw -I`, or plain `-w -I` when the source is a clone, whose streams must not reference the origin) |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
@@ -658,25 +660,36 @@ GTK dialog and Disks-page execution handler for Migrate Pool, the copy-based
 pool-expansion path (see `pool_migrate.py`). The dialog collects the source
 pool and destination mode (new disks + topology, or an existing holding
 pool), shows the full step plan, and gates the run behind typed confirmation
-of the source pool name. Execution is two runner phases: the copy phase
+of the source pool name. Execution is three runner phases: the copy phase
 (recursive migration snapshot, one resumable `zfs-migrate-send` step —
 `zfs send -Rw` received with `zfs receive -u -F -s -v`, with `pv` in the
 pipeline and an optional bandwidth limit — per top-level dataset, then
-per-dataset tree verification) and the cutover
-phase, which starts only after a second typed confirmation. Before that
-confirmation two cutover-time gates run: the source pool's dataset layout
-is re-checked (a change since the review aborts the cutover with the copy
-left in place for a re-run), and the pool's zvols are scanned for running
-Proxmox VMs (`qm status` locally, or on the compute host over SSH in
-two-node mode) — any running VM triggers a warning dialog listing the VM
-IDs and their disks that must be declined until they are stopped. The
-cutover itself first catches the destination up: a recursive cutover
-snapshot (migration snapshot name + `-cutover`) and one incremental
+per-dataset tree verification), the catch-up phase (a recursive cutover
+snapshot — migration snapshot name + `-cutover` — plus one incremental
 `zfs send -Rw -I` per top-level dataset from the migration snapshot to it,
-so only writes made after the cutover snapshot — the seconds between it
-and the export — can be lost. Then the source pool is exported and the
-migrated pool is re-imported under the source pool's name
-(new disks) or destroy/rebuild/copy-back/swap (holding pool). In holding
+so writes made while the copy ran are not lost), and the destructive
+phase (export the source pool — the only export; the holding pool stays
+online for the whole cutover — then re-import the migrated pool under the
+source pool's name (new disks) or destroy/rebuild/copy-back/swap (holding
+pool)). The catch-up phase starts only after a second typed confirmation,
+preceded by a layout re-check: the source pool's dataset layout is
+re-read, and a change since the review aborts the cutover with the copy
+left in place for a re-run. The destructive phase starts only after four
+gates in order: the enforced quiesce gate (no dataset written since the
+cutover snapshot — verified through `written@cutover`, not assumed; a
+still-written dataset triggers a refusal dialog naming each writer and
+amount, with Re-check to re-query and Defer to keep everything in place,
+and an unverifiable query defers too, since an unreadable answer is not a
+quiesced pool), the running-VM warning (the pool's zvols are scanned for
+running Proxmox VMs — `qm status` locally, or on the compute host over
+SSH in two-node mode; any running VM triggers a warning dialog listing
+the VM IDs and their disks that must be declined until they are stopped),
+the disruptive-steps confirmation (every remaining step listed verbatim;
+downtime begins with them), and a proactive export preparation (mounted
+filesystems unmounted, remaining blockers — busy processes, iSCSI LUNs,
+shares — refused with a blocker dialog; a bare export is never
+attempted). Only writes made after the cutover snapshot — the seconds
+between it and the export — can be lost. In holding
 mode the user chooses the rebuild disks: the source pool's data members
 (pre-selected, since the cutover destroy frees them) plus any eligible
 unused disks, so the new topology may use the old disks, new disks, or any
@@ -690,7 +703,7 @@ holding mode the verified copy remains on the holding pool and the resumable
 copies can be re-run to finish. Before anything starts, the
 handler re-reads the source pool's dataset layout and aborts with an
 explanation when it changed after the review. The pool
-hosting the root filesystem is never offered; both phases hold a `zlm`
+hosting the root filesystem is never offered; every phase holds a `zlm`
 write lock on the source pool.
 
 Snapshot holds are preserved end to end. The executor creates a TSV
@@ -698,11 +711,13 @@ Snapshot holds are preserved end to end. The executor creates a TSV
 hold on the source pool into it (`reapplyholds_capture`, run with locking
 skipped since the executor already holds the pool write lock). Holding-mode
 cutover releases all source holds after capture and before the destroy
-(held snapshots cannot be destroyed); the last cutover step reapplies the
-captured holds once the migrated pool has been imported under the source
-pool's name, and a non-fatal step removes the TSV. The TSV is never applied
-to the holding tree, so the namespace destroy cannot fail on a hold. On
-cutover failure or cancel the TSV is kept and its path logged with the
+(held snapshots cannot be destroyed); the last destructive step reapplies
+the captured holds once the migrated pool has been imported under the
+source pool's name, and a non-fatal step removes the TSV. The TSV is never
+applied to the holding tree, so the namespace destroy cannot fail on a
+hold. A copy-phase or catch-up failure or cancel discards the TSV (nothing
+destructive ran); on destructive-phase failure or cancel the TSV is kept
+and its path logged with the
 manual `zfsreapplyholds --apply` command; holds placed on the source while a
 migration is running (after the capture step) are not preserved.
 
@@ -710,10 +725,10 @@ Non-default pool properties survive the migration too. When the dialog
 opens, the source pool's properties are read with their SOURCE column and
 filtered (`pool_profiles.replayable_pool_properties`) down to the locally
 set ones outside the curated profile set; the dialog shows each as a
-checkbox (all checked by default), and the cutover replays the checked
-subset with one non-fatal `zpool set` step per property, right after the
-import-rename — by then the data is already migrated, so a refused property
-is logged and skipped rather than failing the cutover.
+checkbox (all checked by default), and the destructive phase replays the
+checked subset with one non-fatal `zpool set` step per property, right
+after the import-rename — by then the data is already migrated, so a
+refused property is logged and skipped rather than failing the cutover.
 
 **Key functions:**
 
@@ -721,13 +736,15 @@ is logged and skipped rather than failing the cutover.
 | ---------------------------- | ---------------------------------------------------------------------------------------- |
 | `show_migrate_pool_dialog()` | Run the dialog; returns a `MigrationRequest` or None                                     |
 | `build_request()`            | Build the execution request from a validated dialog state                                |
-| `build_migration_steps()`    | Build the (copy, cutover) `BashStep` lists for a request                                 |
+| `build_migration_steps()`    | Build the (copy, catch-up, destructive) `BashStep` lists for a request                    |
 | `_apply_origin_defaults()`   | Derive the Match-origin pseudo-profile, data-vdev topology default, and replayable-property set from the source pool |
-| `_source_layout_changed()`   | Compare the request's dataset list against a fresh pool listing; abort reason when stale (checked at start and again at cutover) |
+| `_source_layout_changed()`   | Compare the request's dataset list against a fresh pool listing; abort reason when stale (checked at start and again after the copy phase) |
 | `_source_pool_data_member_disks()` | Source-pool data-vdev member disks only (infra-vdev leaves excluded; drives the holding-mode pre-selection) |
 | `_running_vms_on_pool()`     | Map the pool's zvols to running Proxmox VMs (`qm status` locally or over SSH on the compute host; failures are non-fatal) |
 | `_show_running_vms_warning()` | y/n warning dialog listing running VMs and their disks; declines defer the cutover     |
-| `on_disks_migrate_pool()`    | Disks-page action: gates, data gathering, two-phase runner execution                     |
+| `_show_quiesce_refusal()`    | Quiesce-gate refusal dialog naming each dataset written since the cutover snapshot; Re-check re-queries, Defer preserves the migration state |
+| `_prepare_pool_export()`     | Proactive export preparation: collect blockers, unmount safe filesystems, refuse with a blocker dialog when survivors remain (reuses the Pools-page export machinery) |
+| `on_disks_migrate_pool()`    | Disks-page action: gates, data gathering, three-phase runner execution                    |
 
 **Called modules / imported helpers:**
 

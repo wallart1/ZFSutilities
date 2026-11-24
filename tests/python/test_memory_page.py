@@ -422,6 +422,22 @@ class TestPerformanceStaticTooltips(unittest.TestCase):
         for title, tip in recorded:
             self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
 
+    def test_device_tables_attach_cell_tooltips(self):
+        """Ellipsized device-table cells show their full text on hover."""
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+
+            app = _make_app()
+            with patch.object(mp, "attach_cell_tooltips") as recorder:
+                mp.create_memory_page(app)
+
+        calls = recorder.call_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(
+            [c.args[1] for c in calls],
+            [app._memory_l2_store, app._memory_slog_store, app._memory_enclosures_store],
+        )
+
     def test_alignment_view_headers_carry_tooltips(self):
         """The alignment view's four tables carry header tooltips."""
         with mock_gtk(fresh=True):

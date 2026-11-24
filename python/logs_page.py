@@ -39,10 +39,12 @@ from gui_helpers import (
     LOG_FONT_STATE_LOGS,
     LogPopoutWindow,
     TextViewSearch,
+    attach_cell_tooltips,
     bold_label,
     capped_treeview_scroll,
     configure_treeview_column,
     restore_log_font_scale,
+    set_column_header_tooltip,
     set_monospace_font,
 )
 from log_index import LogIndex
@@ -372,8 +374,16 @@ def _on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer):
         app.logs_popout_window.hide()
 
 
-def _make_log_view_columns(view, type_tooltip):
-    """Attach the shared column set to a log-list treeview."""
+def _make_log_view_columns(view, type_tooltip=None, header_tooltips=True):
+    """Attach the shared column set to a log-list treeview.
+
+    Cells ellipsize on every list. Column headings carry tooltips only
+    when *header_tooltips* is set (via the shared
+    ``set_column_header_tooltip``, which arms the full heading); the
+    Miscellaneous list runs heading-free by request, so it passes False
+    and keeps the plain default headings (*type_tooltip*, the per-list
+    Type text, is unused then).
+    """
     cols = [
         (COL_DATETIME, "Date/Time", 160, "Session log timestamp"),
         (COL_TYPE, "Type", 70, type_tooltip),
@@ -386,18 +396,15 @@ def _make_log_view_columns(view, type_tooltip):
     for col_idx, title_text, width, tooltip in cols:
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", False)
+        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
         if col_idx == COL_DATETIME:
             set_monospace_font(renderer)
         column = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         configure_treeview_column(column, width=width)
         column.set_sort_column_id(col_idx)
 
-        # TreeViewColumn is not a Gtk.Widget, so tooltips must live on the
-        # header label instead of on the column itself.
-        header = Gtk.Label(label=title_text)
-        header.set_tooltip_text(tooltip)
-        header.show_all()
-        column.set_widget(header)
+        if header_tooltips:
+            set_column_header_tooltip(column, title_text, tooltip)
 
         view.append_column(column)
 
@@ -447,6 +454,10 @@ def create_logs_page(app):
         app.logs_view,
         "Log type: backup, offsite, restore, prune, dataset, gui, or cron",
     )
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # visible columns (0-6) match their store positions; the hidden path
+    # column trails at the end.
+    attach_cell_tooltips(app.logs_view, app.logs_store)
     app._ui_state.bind_treeview(app.logs_view, "logs_view")
 
     list_scroll = capped_treeview_scroll(app.logs_view)
@@ -458,21 +469,21 @@ def create_logs_page(app):
     # viewer.  Holds the high-volume non-runner logs (CLI script sessions,
     # scrub-manager, rsync-pull) so the main list stays focused on runner
     # output.  Either list feeds the shared Log Viewer below.
+    # No tooltip anywhere in this section — not on the expander either:
+    # a widget without its own tooltip shows the nearest armed ancestor's,
+    # so one tooltip on the expander would surface over the whole treeview.
     app.logs_misc_expander = Gtk.Expander(label="Miscellaneous Logs (0)")
-    app.logs_misc_expander.set_tooltip_text(
-        "Session logs from directly-executed CLI scripts plus the persistent "
-        "scrub-manager and rsync-pull logs"
-    )
     misc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     app.logs_misc_store = Gtk.ListStore(str, str, str, str, str, str, str, str)
     app.logs_misc_view = Gtk.TreeView(model=app.logs_misc_store)
     app.logs_misc_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.logs_misc_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
-    _make_log_view_columns(
-        app.logs_misc_view,
-        "Log type: cli (directly-executed scripts) or a persistent log (scrub, rsync)",
-    )
+    _make_log_view_columns(app.logs_misc_view, header_tooltips=False)
+    # Clipped-cell tooltips apply here like on every other table; the
+    # heading- and expander-free guarantee is unchanged (the handler shows
+    # only the hovered cell's own text, and only where it clips).
+    attach_cell_tooltips(app.logs_misc_view, app.logs_misc_store)
     app._ui_state.bind_treeview(app.logs_misc_view, "logs_misc_view")
 
     misc_scroll = capped_treeview_scroll(app.logs_misc_view)

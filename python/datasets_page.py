@@ -23,6 +23,7 @@ from gui_helpers import (
     _row_fg_color,
     add_scrolled_text_view,
     append_treeview_copy_items,
+    attach_cell_tooltips,
     build_full_dataset_name,
     capped_treeview_scroll,
     configure_treeview_column,
@@ -159,6 +160,7 @@ def create_datasets_page(app):
     ]
     for title, col_idx, width, header_tip, header_xalign in ds_columns:
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         if title == "Created":
             set_monospace_font(renderer)
         col = Gtk.TreeViewColumn(title, renderer, text=col_idx, foreground=9)
@@ -172,6 +174,11 @@ def create_datasets_page(app):
         elif col_idx == 6:
             pass  # No special rendering needed for origin/clones column
         app.datasets_view.append_column(col)
+
+    # Cells ellipsize; the shared handler shows the full text on hover. The
+    # visible text columns (0-6) match their store positions directly; the
+    # store holds plain names — the cell data func only styles the font.
+    attach_cell_tooltips(app.datasets_view, app.datasets_store)
 
     app._ui_state.bind_treeview(app.datasets_view, "datasets_view")
 

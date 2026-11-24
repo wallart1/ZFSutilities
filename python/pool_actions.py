@@ -15,6 +15,7 @@ from backup_config import get_pool_names, log_msg, save_pools
 from gi.repository import Gtk
 from gui_helpers import (
     add_scrolled_text_view,
+    attach_cell_tooltips,
     capped_treeview_scroll,
     collect_dataset_busy_reasons,
     configure_treeview_column,
@@ -70,8 +71,8 @@ class _BoundedExport:
 
     def _work(self):
         try:
-            self._outcome["success"], self._outcome["stderr"] = (
-                self._repo.export_pool_detailed(self._pool)
+            self._outcome["success"], self._outcome["stderr"] = self._repo.export_pool_detailed(
+                self._pool
             )
         finally:
             self._outcome["done"] = True
@@ -338,9 +339,12 @@ def on_pools_import(app):
     tree_view = Gtk.TreeView(model=list_store)
     tree_view.set_headers_visible(False)
     renderer = Gtk.CellRendererText()
+    renderer.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
     col = Gtk.TreeViewColumn("Pool", renderer, text=0)
     configure_treeview_column(col, width=150)
     tree_view.append_column(col)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(tree_view, list_store)
 
     scrolled = capped_treeview_scroll(tree_view)
     content.add(scrolled)
@@ -1003,10 +1007,7 @@ def _recover_stalled_export(app, pool_name, export):
         _show_export_blockers_dialog(app, pool_name, unresolvable)
 
     if not resolvable:
-        log_msg(
-            f"WARN: Export of '{pool_name}' stays kernel-blocked; "
-            "no removable holders found"
-        )
+        log_msg(f"WARN: Export of '{pool_name}' stays kernel-blocked; no removable holders found")
         return False
 
     if not _resolve_export_blockers(app, pool_name, blockers):
@@ -1026,8 +1027,7 @@ def _recover_stalled_export(app, pool_name, export):
             return True
         if retry_finished:
             log_msg(
-                f"WARN: Export of '{pool_name}' still failed after recovery: "
-                f"{retry_stderr.strip()}"
+                f"WARN: Export of '{pool_name}' still failed after recovery: {retry_stderr.strip()}"
             )
             return False
 

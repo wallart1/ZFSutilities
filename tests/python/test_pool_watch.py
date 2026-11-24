@@ -47,6 +47,34 @@ class TestPoolWatchWindow(unittest.TestCase):
         mock_refresh.assert_called_once()
         mock_start.assert_called_once()
 
+    def test_view_attaches_cell_tooltips_and_ellipsizes(self):
+        """Ellipsized cells show their full text on hover, like Datasets."""
+        parent = self._make_parent()
+        with (
+            patch.object(PoolWatchWindow, "refresh"),
+            patch.object(PoolWatchWindow, "_start_timer"),
+            patch("pool_watch.attach_cell_tooltips") as recorder,
+        ):
+            win = PoolWatchWindow("tank", parent)
+
+        recorder.assert_called_once_with(win.view, win.store)
+
+        # Every text renderer ellipsizes (mock_gtk shares one instance);
+        # the watch tree reuses the Datasets column set. Earlier tests in
+        # this module accumulated calls on the shared renderer mock.
+        pool_watch.Gtk.CellRendererText.reset_mock()
+        parent = self._make_parent()
+        with (
+            patch.object(PoolWatchWindow, "refresh"),
+            patch.object(PoolWatchWindow, "_start_timer"),
+        ):
+            PoolWatchWindow("tank", parent)
+        renderer = pool_watch.Gtk.CellRendererText.return_value
+        ellipsize_calls = [
+            c for c in renderer.set_property.call_args_list if c.args == ("ellipsize", 3)
+        ]
+        self.assertEqual(len(ellipsize_calls), 7)
+
     def test_refresh_clears_and_seeds_store(self):
         parent = self._make_parent()
         with (

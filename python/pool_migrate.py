@@ -373,12 +373,6 @@ def plan_migration_steps(
         )
         steps.append(
             MigrationStep(
-                STEP_EXPORT_SOURCE,
-                f"Export holding pool '{dest_label}'",
-            )
-        )
-        steps.append(
-            MigrationStep(
                 STEP_IMPORT_RENAME,
                 f"Import '{source_pool}{_TEMP_SUFFIX}' under the name '{source_pool}'",
             )

@@ -367,7 +367,7 @@ def mixed_size_warning(selected: list[DiskInfo]) -> str | None:
     """Warn when selected members have differing known sizes, else None."""
     sizes = {disk.size_bytes for disk in selected if disk.size_bytes > 0}
     if len(sizes) > 1:
-        return "members differ in size; vdev capacity is limited to the smallest member"
+        return "members differ in size; vdev capacity is limited by the smallest member"
     return None
 
 

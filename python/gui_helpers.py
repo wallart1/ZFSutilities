@@ -294,19 +294,37 @@ def configure_treeview_column(col, width=None, min_width=20, resizable=True):
 def set_column_header_tooltip(col, title, tooltip, xalign=None):
     """Put *tooltip* on *col*'s header, titled *title*.
 
-    TreeViewColumn is not a Gtk.Widget, so the tooltip must live on the
-    header label instead of on the column itself: the label is set as the
-    column's title widget via ``col.set_widget()``. *xalign*, when given,
-    mirrors an explicit column heading alignment (e.g. right-aligned
-    numeric headings) on the label, which the header button would
-    otherwise center.
+    TreeViewColumn is not a Gtk.Widget, so the tooltip must live on real
+    widgets. The label set as the column's title widget via
+    ``col.set_widget()`` carries it — but GTK seats that label inside the
+    header button at its natural text width, so the label alone leaves
+    most of a wide heading without a tooltip. Once realized, the label
+    also arms the enclosing header button (``_on_header_label_realize``),
+    which spans the full heading. *xalign*, when given, mirrors an
+    explicit column heading alignment (e.g. right-aligned numeric
+    headings) on the label, which the header button would otherwise
+    center.
     """
     header = Gtk.Label(label=title)
     header.set_tooltip_text(tooltip)
     if xalign is not None:
         header.set_xalign(xalign)
+    header.connect("realize", _on_header_label_realize)
     header.show_all()
     col.set_widget(header)
+
+
+def _on_header_label_realize(label):
+    """Arm the enclosing header button with the label's tooltip.
+
+    Runs when the header label is realized inside its column's header
+    ``Gtk.Button``; the button spans the full heading width, unlike the
+    label, which GTK allocates only its natural text width. Without a
+    button ancestor (exotic backends) there is nothing to arm.
+    """
+    button = label.get_ancestor(Gtk.Button)
+    if button is not None:
+        button.set_tooltip_text(label.get_tooltip_text())
 
 
 # Slack subtracted from a column's width when deciding whether cell text
@@ -315,19 +333,23 @@ def set_column_header_tooltip(col, title, tooltip, xalign=None):
 _CELL_FIT_SLACK_PX = 6
 
 
-def attach_cell_tooltips(view, store, offset=0):
+def attach_cell_tooltips(view, store, offset=0, column_map=None):
     """Show hovered cells' full text on an ellipsizing treeview.
 
     Enables the view's tooltip window and connects the shared
     ``_on_cell_query_tooltip`` handler with *store* and *offset* (the
     number of leading store columns — typically a hidden identity key —
-    that precede the visible columns).
+    that precede the visible columns). *column_map*, when given,
+    overrides the offset arithmetic for views whose visible column
+    order does not match the store order: one store column index (or
+    None, meaning that visible column never tooltips) per visible
+    column position.
     """
     view.set_has_tooltip(True)
-    view.connect("query-tooltip", _on_cell_query_tooltip, store, offset)
+    view.connect("query-tooltip", _on_cell_query_tooltip, store, offset, column_map)
 
 
-def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset):
+def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset, column_map=None):
     """Show the full text of a hovered cell whose text does not fit.
 
     Cells ellipsize, so the tooltip matters only where the rendered text
@@ -336,7 +358,9 @@ def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset):
     Hovers over empty space, cells whose text fits, and empty cells
     return False so GTK falls through to the default behaviour. The
     store column is the visible column index plus *offset* (the hidden
-    identity key occupies column 0 when present).
+    identity key occupies column 0 when present), unless *column_map*
+    names the store column for each visible position — a None entry
+    suppresses the tooltip for that column.
     """
     bin_x, bin_y = view.convert_widget_to_bin_window_coords(x, y)
     hit = view.get_path_at_pos(bin_x, bin_y)
@@ -344,7 +368,13 @@ def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset):
         return False
     path, column = hit[0], hit[1]
     col_index = view.get_columns().index(column)
-    text = store[path][col_index + offset]
+    if column_map is not None:
+        if col_index >= len(column_map) or column_map[col_index] is None:
+            return False
+        store_col = column_map[col_index]
+    else:
+        store_col = col_index + offset
+    text = store[path][store_col]
     if not isinstance(text, str) or not text:
         return False
     if _cell_text_fits(view, column, text):
@@ -1724,6 +1754,7 @@ class EditableListView:
         ):
             r = Gtk.CellRendererText()
             r.set_property("editable", True)
+            r.set_property("ellipsize", Pango.EllipsizeMode.END)
             r.connect("edited", self._on_edited, idx)
             r.connect("editing-started", self._on_editing_started, idx)
             col = Gtk.TreeViewColumn(title, r, text=idx)
@@ -1731,6 +1762,11 @@ class EditableListView:
             if tooltip:
                 set_column_header_tooltip(col, title, tooltip)
             self.view.append_column(col)
+
+        # Cells ellipsize; the shared handler shows the full text on hover.
+        # The Active toggle (store column 0) precedes the text columns, and
+        # its bool value falls through the handler's str check.
+        attach_cell_tooltips(self.view, self.store)
 
         self.view.connect("row-activated", on_row_activated, self.columns[0][0])
         self.view.set_reorderable(True)
