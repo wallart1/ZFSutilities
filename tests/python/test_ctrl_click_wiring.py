@@ -19,16 +19,33 @@ below instead, which checks every TreeView site in python/.
 """
 
 import ast
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from contextlib import contextmanager
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
+
+# Real page and dialog builds reach the persistent state dir: the schedule
+# page refreshes its profile list at build time and the profile dialogs
+# list existing profiles, both landing in paths.get_profiles_dir()'s
+# makedirs. On a host without the root-owned /var/lib/zfsutilities — the
+# CI runner — that makedirs fails with EACCES. Redirect the state dir to a
+# private temp dir so every build sees an empty profiles list anywhere the
+# suite runs; an explicitly exported value is respected, matching the
+# conftest lock-dir fence.
+if "ZFSUTILITIES_STATE_DIR" not in os.environ:
+    _isolated_state_dir = tempfile.mkdtemp(prefix="zfsutilities-ctrlclick-state-")
+    os.environ["ZFSUTILITIES_STATE_DIR"] = _isolated_state_dir
+    atexit.register(shutil.rmtree, _isolated_state_dir, ignore_errors=True)
 
 from test_support import mock_gtk
 
@@ -150,15 +167,32 @@ class TestSharedBuilders(unittest.TestCase):
 
 
 class TestDialogBuilders(unittest.TestCase):
+    # Both dialogs build their picker TreeView only when a profile of the
+    # requested tab type exists; without a seeded list they return early
+    # and no view is created (dev hosts passed by reading the real
+    # profiles dir). Fixture shape mirrors test_profile_dialogs.
+    _BACKUP_DAILY: ClassVar[dict] = {
+        "tab_type": "backup",
+        "profile_name": "tester-backup-daily",
+        "cron": {"minute": "30", "hour": "4"},
+    }
+
     def test_add_profile_dialog(self):
         with _mock_gtk_distinct_treeviews() as views:
             import profile_dialogs
 
-            with patch.object(
-                profile_dialogs,
-                "create_dialog",
-                return_value=MagicMock(
-                    run=MagicMock(return_value=profile_dialogs.Gtk.ResponseType.CANCEL)
+            with (
+                patch.object(
+                    profile_dialogs,
+                    "create_dialog",
+                    return_value=MagicMock(
+                        run=MagicMock(return_value=profile_dialogs.Gtk.ResponseType.CANCEL)
+                    ),
+                ),
+                patch.object(
+                    profile_dialogs,
+                    "list_profiles",
+                    return_value=[dict(self._BACKUP_DAILY)],
                 ),
             ):
                 profile_dialogs.show_add_profile_dialog(_fake_app(), "backup", {})
@@ -168,11 +202,18 @@ class TestDialogBuilders(unittest.TestCase):
         with _mock_gtk_distinct_treeviews() as views:
             import profile_dialogs
 
-            with patch.object(
-                profile_dialogs,
-                "create_dialog",
-                return_value=MagicMock(
-                    run=MagicMock(return_value=profile_dialogs.Gtk.ResponseType.CANCEL)
+            with (
+                patch.object(
+                    profile_dialogs,
+                    "create_dialog",
+                    return_value=MagicMock(
+                        run=MagicMock(return_value=profile_dialogs.Gtk.ResponseType.CANCEL)
+                    ),
+                ),
+                patch.object(
+                    profile_dialogs,
+                    "list_profiles",
+                    return_value=[dict(self._BACKUP_DAILY)],
                 ),
             ):
                 profile_dialogs.show_recall_profile_dialog(_fake_app(), "backup", lambda *_a: None)
