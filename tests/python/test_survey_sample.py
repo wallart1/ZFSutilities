@@ -585,6 +585,7 @@ def test_gui_catalog_roles_known():
         "cycle-combo",
         "set-entry",
         "adjust-spin",
+        "edit-spin-cell",
         "toggle-dry-run",
         "navigate",
         "expand-first",
@@ -593,6 +594,20 @@ def test_gui_catalog_roles_known():
     for interactions in gui_catalog.L2_INTERACTIONS.values():
         for inter in interactions:
             assert inter["role"] in known, inter
+
+
+def test_gui_catalog_spin_rows_point_at_real_widgets():
+    # The retention buckets are editable CellRendererSpin columns, so the
+    # row must drive the cell (edit-spin-cell), never a standalone
+    # SpinButton walk; the schedule page has no spin widget of any kind,
+    # so it must not carry an adjust-spin row at all (2026-11-23 survey).
+    import gui_catalog
+
+    retention = gui_catalog.L2_INTERACTIONS["retention"]
+    spin_rows = [r for r in retention if r["suffix"] == "adjust-spin"]
+    assert spin_rows and spin_rows[0]["role"] == "edit-spin-cell"
+    schedule = gui_catalog.L2_INTERACTIONS["schedule"]
+    assert not [r for r in schedule if r["suffix"] == "adjust-spin"]
 
 
 def test_gui_catalog_covers_every_page():

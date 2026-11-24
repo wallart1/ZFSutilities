@@ -92,5 +92,153 @@ EOF
 
 test_zfsresume_acquires_lock
 
+# ------------------------------------------------------------------
+# Verdict reporting (2026-11-23 j22 survey, F-052): the token dry-run's
+# exit code is stack-dependent — rc 0 with decoded contents is
+# live-proven on zfs 2.2.2 — so decoded contents, not the exit code,
+# are the validity signal.
+# ------------------------------------------------------------------
+
+_zfsresume_probe_case() {
+    # $1 workdir, $2 send stdout text, $3 send rc; prints the product's
+    # combined output; records receive -A calls in <workdir>/recv.log.
+    local work="$1"
+    printf '%s\n' "$2" > "$work/send_out"
+    printf '%s' "$3" > "$work/send_rc"
+
+    cat > "$work/rootcheck" << 'EOF'
+rootcheck() { true; }
+EOF
+
+    cat > "$work/bashreturn" << 'EOF'
+return ${1:-8}
+EOF
+
+    cat > "$work/zfslockmanager" << EOF
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    echo "\$1 \$2" >> "$work/lock_calls.log"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+
+    cat > "$work/zfs" << 'EOF'
+#!/usr/bin/bash
+case "$1" in
+    list)
+        echo "pool/dest"
+        ;;
+    get)
+        printf 'pool/dest\treceive_resume_token\t1-abc\n'
+        ;;
+    receive)
+        [[ "$2" == "-A" ]] && echo "receive -A $3" >> "$RECV_LOG"
+        ;;
+    send)
+        [[ "$2" == "-nP" && "$3" == "-t" ]] || exit 0
+        cat "$SEND_OUT"
+        exit "$(cat "$SEND_RC")"
+        ;;
+esac
+exit 0
+EOF
+    chmod +x "$work/zfs"
+
+    : > "$work/recv.log"
+    SEND_OUT="$work/send_out" SEND_RC="$work/send_rc" RECV_LOG="$work/recv.log" \
+        PATH="$work:$PATH" bash -c \
+        "mydir='$work'; source '$old_mydir/bin/zfsresume' pool/dest" 2>&1
+}
+
+test_zfsresume_reports_valid_token_rc0() {
+    test_start "zfsresume reports a valid token when the dry-run exits 0"
+
+    local work out rc=0
+    work=$(mktemp -d)
+    out=$(_zfsresume_probe_case "$work" "resume token contents:
+nvlist version: 0
+toname = pool/src@snap
+size 1488" 0) || rc=$?
+
+    if [[ "$out" != *"seems valid"* ]]; then
+        test_fail "missing 'seems valid' verdict (rc=$rc, output: $out)"
+        rm -rf "$work"
+        return
+    fi
+
+    test_pass
+    rm -rf "$work"
+}
+
+test_zfsresume_reports_valid_token_nonzero_contents() {
+    test_start "zfsresume reports a valid token when the dry-run exits nonzero with contents"
+
+    local work out rc=0
+    work=$(mktemp -d)
+    out=$(_zfsresume_probe_case "$work" "nvlist version: 0
+toname = pool/src@snap
+size 1488" 1) || rc=$?
+
+    if [[ "$out" != *"seems valid"* ]]; then
+        test_fail "missing 'seems valid' verdict (rc=$rc, output: $out)"
+        rm -rf "$work"
+        return
+    fi
+
+    test_pass
+    rm -rf "$work"
+}
+
+test_zfsresume_stale_token_warns_and_aborts() {
+    test_start "zfsresume warns and aborts a stale resume token"
+
+    local work out rc=0
+    work=$(mktemp -d)
+    out=$(_zfsresume_probe_case "$work" "cannot receive resume token: object no longer exists" 1) || rc=$?
+
+    if [[ "$out" != *"invalid or stale"* ]]; then
+        test_fail "missing stale WARN (rc=$rc, output: $out)"
+        rm -rf "$work"
+        return
+    fi
+    if [[ "$(<"$work/recv.log")" != *"receive -A pool/dest"* ]]; then
+        test_fail "resume token not aborted (recv log: $(<"$work/recv.log"))"
+        rm -rf "$work"
+        return
+    fi
+
+    test_pass
+    rm -rf "$work"
+}
+
+test_zfsresume_undecodable_token_warns_honestly() {
+    test_start "zfsresume warns honestly when the token cannot be decoded"
+
+    local work out rc=0
+    work=$(mktemp -d)
+    out=$(_zfsresume_probe_case "$work" "permission denied" 1) || rc=$?
+
+    if [[ "$out" != *"validation failed with unexpected error"* ]]; then
+        test_fail "missing unexpected-error WARN (rc=$rc, output: $out)"
+        rm -rf "$work"
+        return
+    fi
+    if [[ "$out" == *"seems valid"* ]]; then
+        test_fail "undecodable token misreported as valid (output: $out)"
+        rm -rf "$work"
+        return
+    fi
+
+    test_pass
+    rm -rf "$work"
+}
+
+test_zfsresume_reports_valid_token_rc0
+test_zfsresume_reports_valid_token_nonzero_contents
+test_zfsresume_stale_token_warns_and_aborts
+test_zfsresume_undecodable_token_warns_honestly
+
 test_summary
 teardown_test_env

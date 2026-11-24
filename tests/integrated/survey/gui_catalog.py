@@ -32,6 +32,7 @@ resolve, and interactable widgets it finds that the catalog missed.
 #   cycle-combo     change the first ComboBoxText
 #   set-entry       replace the text of the first Entry
 #   adjust-spin     nudge the first SpinButton by one step
+#   edit-spin-cell  commit an edit into the first editable spin cell
 #   toggle-dry-run  flip the page's Dry Run toggle button
 #   navigate        switch the stack to this page (sidebar click path)
 #   expand-first    expand the first row of the page's tree
@@ -81,7 +82,9 @@ L2_INTERACTIONS = {
             "role": "select-multi",
         },
         {"suffix": "set-entry", "label": "edit a schedule field", "role": "set-entry"},
-        {"suffix": "adjust-spin", "label": "adjust a schedule spinbutton", "role": "adjust-spin"},
+        # No adjust-spin here: the schedule rows carry a toggle and text
+        # renderers only — the page has no spin widget of any kind, so the
+        # entry could only ever block (same class as the old pools combo).
         {"suffix": "navigate", "label": "open the Schedule page", "role": "navigate"},
     ],
     "disks": [
@@ -128,7 +131,9 @@ L2_INTERACTIONS = {
             "label": "select a retention policy row",
             "role": "select-first",
         },
-        {"suffix": "adjust-spin", "label": "adjust a bucket spinbutton", "role": "adjust-spin"},
+        # The bucket counts/min-age are editable CellRendererSpin columns,
+        # not standalone SpinButtons — the cell role drives the real thing.
+        {"suffix": "adjust-spin", "label": "adjust a bucket spin cell", "role": "edit-spin-cell"},
         {"suffix": "navigate", "label": "open the Retention page", "role": "navigate"},
     ],
 }

@@ -229,7 +229,8 @@ Diagnostic/repair tool for receive resume tokens; it never performs the resume s
 | `FATAL: Could not acquire write lock on resumable destination ...` | The dataset's write lock is unavailable | Script aborts (exit 8); resolve the lock and rerun |
 | `FATAL: Unable to retrive receive_resume_token for ....` (message spelling) | The token lookup over the dataset and its descendants failed | Script aborts (exit 8); check the dataset name |
 | `WARN: Resume token is invalid or stale. Deleting resume token.` | The token probe matched a known stale pattern | The token is discarded with `zfs receive -A`, rolling back the partial receive |
-| `INFO: Resume token for ... seems valid.` | The probe failed with an unrecognized (non-stale) error — the token was not positively validated | Inspect the token manually; it is left in place |
+| `INFO: Resume token for ... seems valid.` | The token dry-run decoded the token's contents (exit status is stack-dependent, so contents — not the exit code — are the validity signal) | Informational; the token is left in place for the resuming transfer |
+| `WARN: Resume token validation failed with unexpected error: ...` | The token probe failed without decoding contents and without matching a stale pattern | Inspect the reported error; the token is left in place |
 
 ### [zfs-migrate-send](../commands-and-modules/commands.md#zfs-migrate-send)
 

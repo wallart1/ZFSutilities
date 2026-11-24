@@ -36,17 +36,23 @@ else
         log_msg "FATAL: Unable to retrive receive_resume_token for $resumeds."
         source "$(find_zfsutility_script bashreturn)" 8
     else
-        if ! resumedata=$(zfs send -nP -t "$resumetoken" 2>&1); then
-            if [[ $resumedata == *"no longer exists"* ]] \
-              || [[ $resumedata == *"@--head--"* ]] \
-              || [[ $resumedata == *"Invalid argument"* ]]; then
-                log_msg "WARN: Resume token is invalid or stale. Deleting resume token."
-                log_msg "WARN: $resumedata"
-                zfs receive -A "$resumeds"
-            else
-                log_msg "INFO: Resume token for $resumeds seems valid."
-                log_msg "INFO: $resumedata"
-            fi
+        resumedata=$(zfs send -nP -t "$resumetoken" 2>&1)
+        sendrc=$?
+        if [[ $resumedata == *"no longer exists"* ]] \
+          || [[ $resumedata == *"@--head--"* ]] \
+          || [[ $resumedata == *"Invalid argument"* ]]; then
+            log_msg "WARN: Resume token is invalid or stale. Deleting resume token."
+            log_msg "WARN: $resumedata"
+            zfs receive -A "$resumeds"
+        elif [[ $resumedata == *"nvlist version"* ]] \
+          || { [[ -n $resumedata ]] && (( sendrc == 0 )); }; then
+            # The token dry-run prints the decoded contents and exits 0 on
+            # some stacks (live-proven on zfs 2.2.2) and nonzero on others;
+            # decoded contents are the validity signal either way.
+            log_msg "INFO: Resume token for $resumeds seems valid."
+            log_msg "INFO: $resumedata"
+        else
+            log_msg "WARN: Resume token validation failed with unexpected error: $resumedata"
         fi
     fi
 fi

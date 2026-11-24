@@ -2320,7 +2320,9 @@ sudo zfsresume <destination-dataset>
 **Globals:** none.
 
 Retrieves the resume token, validates it, and either reports that the token
-is stale (and clears it with `zfs receive -A`) or that it seems valid. This
+is stale (and clears it with `zfs receive -A`) or that it seems valid; a
+probe failure that matches no stale pattern and decodes no contents is
+reported as an unexpected error. This
 command is token validation only — it runs no transfer pipeline and
 therefore has no rate pacing of its own; the actual resumed transfer is
 performed (and paced, activity limit and enclosure caps alike) by the
@@ -2334,9 +2336,9 @@ send/receive engines that own the token.
 
 1. Validate that `$1` names a dataset.
 2. Extract the `receive_resume_token` from the destination dataset.
-3. Run `zfs send -nP -t <token>` to validate the token.
+3. Run `zfs send -nP -t <token>` to validate the token; the dry-run's exit status is stack-dependent, so decoded contents are the validity signal.
 4. If validation fails with `no longer exists`, `@--head--`, or `Invalid argument`, clear the stale token with `zfs receive -A`.
-5. Otherwise report that the token appears valid.
+5. Otherwise report that the token appears valid when contents were decoded, or an unexpected error when the probe failed without contents.
 
 **Return codes:**
 

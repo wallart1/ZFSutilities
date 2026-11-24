@@ -585,7 +585,11 @@ for r in plan["ladder"]:
     full = f"{base}/{r['dataset']}@{r['name']}"
     if full not in names:
         problems.append(f"missing {full}")
-    elif abs(names[full] - r["epoch"]) > 5:
+    elif abs(names[full] - r["epoch"]) > 30:
+        # The clock walk's landing jitter (clock set over ssh + zfssnapbuild
+        # startup) can run past the original ±5s — live-observed +6s on a
+        # replayed world (run-20261123-202102). Bucket/day semantics are
+        # minute-scale, so the tolerance absorbs jitter, not exactness.
         problems.append(f"{full} creation {names[full]} != planned {r['epoch']}")
     if r["hold"] and (full, r["hold"]) not in holds:
         problems.append(f"hold {r['hold']} missing on {full}")

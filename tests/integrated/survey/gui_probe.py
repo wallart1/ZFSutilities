@@ -586,6 +586,58 @@ class GuiProbe:
             if not saw_rows:
                 return "blocked: no rows to edit"
             raise RuntimeError("no editable text renderer on page")
+        if role == "edit-spin-cell":
+            if not views:
+                raise RuntimeError(f"no treeview on page ({self._census(page)})")
+            saw_rows = False
+            for view in views:
+                store = view.get_model()
+                if store is None or store.iter_n_children(None) == 0:
+                    continue
+                saw_rows = True
+                for col in view.get_columns():
+                    for rend in col.get_cells():
+                        # Numeric columns edit through CellRendererSpin
+                        # (a CellRendererText subclass — match the specific
+                        # type so text cells never satisfy this role).
+                        # "editable" has no C getter; property read, same
+                        # law as edit-cell.
+                        if isinstance(rend, Gtk.CellRendererSpin) and rend.get_property("editable"):
+                            it = store.iter_nth_child(None, 0)
+                            path = store.get_path(it)
+                            # Column attributes are write-only in PyGObject
+                            # (no get_attributes introspection), so resolve
+                            # the spin's bound store column as the first
+                            # int-typed column; the readback below verifies
+                            # the edit landed there.
+                            col_idx = next(
+                                (
+                                    n
+                                    for n in range(store.get_n_columns())
+                                    if store.get_column_type(n).name == "gint"
+                                ),
+                                None,
+                            )
+                            if col_idx is None:
+                                continue
+                            current = store.get_value(it, col_idx)
+                            new_val = int(current) + 1
+                            adj = rend.get_property("adjustment")
+                            if adj is not None and new_val > adj.get_property("upper"):
+                                new_val = max(int(adj.get_property("lower")), int(current) - 1)
+                            # Commit through the renderer's "edited" — the
+                            # same signal a real spin-cell edit commits
+                            # through (the page's callback writes the store).
+                            rend.emit("edited", path.to_string(), str(new_val))
+                            self.pump(5)
+                            after = store.get_value(it, col_idx)
+                            return (
+                                f"committed spin edit on first editable cell "
+                                f"({current} -> {after})"
+                            )
+            if not saw_rows:
+                return "blocked: no rows to adjust"
+            raise RuntimeError("no editable spin renderer on page")
         if role == "cycle-combo":
             combo = self.combos(page)[0] if self.combos(page) else None
             if combo is None:

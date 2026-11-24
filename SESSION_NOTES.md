@@ -1451,3 +1451,41 @@ desktop-menu and test-logging bashinit entries.)
   with-soak gate line recorded in the turn report. Changelog 0.143.0
   section written; GLOSSARY needed nothing further (compositing +
   loginctl rode their campaigns).
+
+## 2026-11-23 (pub) — j22 survey against the merged 0.143.0 tree
+
+- Fresh random draw (106 items, two-node, lived-in world) GREEN in ~8 min
+  (run-20261123-194723): 164/151/0 — first survey of the merged tree;
+  no product defects in the draw. 3 blocked: 2 logs empty-state
+  (by design) + 1 catalog defect — gui-w-retention-adjust-spin pointed
+  at a standalone SpinButton, but retention buckets are editable
+  CellRendererSpin columns.
+- Catalog fix: retention row re-pointed to a new edit-spin-cell probe
+  role (commits through the renderer's "edited", same law as
+  edit-cell); schedule adjust-spin row DROPPED (page has toggle/text
+  renderers only — could only ever block; same class as the old pools
+  combo). Universe 212 → 211 items; tracked archive regenerated from
+  the verification replay (old one replays-refuses on digest by
+  design).
+- Pinned-seed verification (seed 3) exposed two more, both fixed:
+  - F-052 (product): bin/zfsresume printed NO verdict for a valid
+    token on zfs 2.2.2 — zfs send -nP -t exits 0 with decoded
+    contents, and both report branches sat inside the failure path;
+    unrecognized probe errors were misreported as "seems valid".
+    Fixed: decoded contents (not exit code) are the validity signal;
+    unexpected failures now reuse zfs-migrate-send's WARN wording.
+    4 regression tests in tests/test-zfsresume, red-proven against
+    the old logic. First-ever live run of the recipe's real path —
+    the Nov 17 "real" draw actually took the old no-arg surface.
+  - Probe: TreeViewColumn.get_attributes is NOT introspectable in
+    PyGObject (always AttributeError → fallback) — the spin role now
+    resolves the first gint store column and verifies by readback
+    (live-proven "3 -> 4").
+- World-verify tolerance ±5s → ±30s (run-20261123-202102: one ladder
+  snapshot landed +6s; clock-walk landing jitter, minute-scale
+  semantics unaffected).
+- Final replay GREEN: run-20261123-202938 (165/152/0, both fixed
+  items pass, world verified, lab auto-destroyed). F-052 verified.
+  Suites: zfsresume/send-receive-resume/survey-journey/sampler/docs
+  green; full suite once at wrap-up. Docs: messages/index.md rows +
+  commands.md zfsresume narrative/flow updated.
