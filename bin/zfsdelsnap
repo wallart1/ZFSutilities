@@ -172,8 +172,8 @@ function delsnap {
     source_helper zfslockmanager
     source_helper zfs-diagnose-busy
 
-    if [[ "$1" != '' ]]; then
-        snaptoremove=$1
+    if [[ "${1:-}" != '' ]]; then
+        snaptoremove="${1:-}"
     else
         log_msg "FATAL: A snapshot to be removed must be given."
         source "$(find_zfsutility_script bashfatal)" 8
@@ -196,15 +196,15 @@ function delsnap {
     fi
     local delsnap_lock="$zfslock_id"
 
-    if [[ "$2" != '' ]]; then
-        minage=$2
+    if [[ "${2:-}" != '' ]]; then
+        minage="${2:-}"
     else
         log_msg "FATAL: A minimum age (in days) must be specified. Use 0 to skip age check."
         zfslock_release "$delsnap_lock"
         source "$(find_zfsutility_script bashfatal)" 8
     fi
 
-    if [[ $3 = 'releaseholds' ]]; then
+    if [[ ${3:-} = 'releaseholds' ]]; then
         releaseholds='Y'
     else
         releaseholds='N'
@@ -233,7 +233,7 @@ function delsnap {
         fi
     fi
 
-    if [[ $4 != 'nocheckagainst' ]]; then
+    if [[ ${4:-} != 'nocheckagainst' ]]; then
         exec 3>&1  # Save stdout to fd 3
         checkagainst "$snaptoremove" >&3
         rc=$?

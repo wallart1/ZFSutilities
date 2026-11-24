@@ -57,6 +57,27 @@ test_exclude_pattern_honored() {
         || test_pass
 }
 
+test_two_node_conf_resolves_lowercase_pair() {
+    test_start "two-node conf: lowercase host pair resolves from uppercase names"
+    local two_conf="$RSYNC_TEST_DIR/two-node.conf"
+    cat > "$two_conf" <<'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stor"
+COMPUTE_HOST="comp"
+STORAGE_IP="10.1.1.1"
+IQN_PREFIX="iqn.2000-01.test"
+EOF
+    local out
+    out=$( (
+        NODE_CONF="$two_conf" rsync_dailybackup_jobs=() \
+            source "$mydir/bin/rsync-dailybackup"
+        echo "storage=${storage_host:-UNSET}"
+        echo "compute=${compute_host:-UNSET}"
+    ) 2>&1 )
+    assert_contains "$out" "storage=stor"
+    assert_contains "$out" "compute=comp"
+}
+
 test_malformed_job_is_skipped() {
     test_start "Malformed job is skipped and returns 0"
     rsync_dailybackup_jobs=("nope")
@@ -120,6 +141,7 @@ test_no_jobs_returns_zero
 test_local_rsync_copies_files
 test_exclude_pattern_honored
 test_malformed_job_is_skipped
+test_two_node_conf_resolves_lowercase_pair
 test_node_conf_prefers_fhs_conf
 test_node_conf_falls_back_to_legacy_node_conf
 test_missing_node_config_is_nonfatal

@@ -600,10 +600,12 @@ last=$ep" ;;
     assert_contains "$out" "tokens-rendered"
     assert_contains "$out" "env-extended"
     # Phase 3 adds the config-rows stage after the walk: the enriched
-    # pinned config overwrite plus the four schedule profiles.
+    # pinned config overwrite plus the four schedule profiles.  The
+    # site-pair tail pushes the realistic site's orchestrator trio.
     assert_contains "$out" "pass:survey config rows staged"
+    assert_contains "$out" "pass:survey site pair staged"
     assert_contains "$out" \
-        "puts=survey-env.sh;survey-config.json;survey-world-ladder.tsv;world-stage.sh;survey-env.sh;survey-config.json;root-backup-survey.json;root-offsite-survey.json;root-retention-survey.json;root-scrub-survey.json;"
+        "puts=survey-env.sh;survey-config.json;survey-world-ladder.tsv;world-stage.sh;survey-env.sh;survey-config.json;root-backup-survey.json;root-offsite-survey.json;root-retention-survey.json;root-scrub-survey.json;zfsdailybackup;rsync-dailybackup;bashinit;"
     test_pass
 }
 
@@ -734,6 +736,9 @@ assert sr == {"active": True, "source": "zfstest1/survey-cfg",
 pull = cfg["backup"]["pull_steps"][0]
 assert pull["active"] is False and pull["excludes"] == []
 off = cfg["offsite"]["steps"][0]
+ca = cfg["checkagainst"]["user_entries"]
+assert len(ca) == 1 and ca[0]["label"] == "survey-compare", ca
+assert ca[0]["source_root"] == "zfstest1/survey-cfg" and ca[0]["dest_root"].endswith("-recv")
 assert isinstance(off["includes"], str) and off["includes"] == "backup-src"
 assert off["excludes"] == "clone-work" and off["dest"] == "<offsite>/survey"
 
@@ -832,7 +837,7 @@ test_recipe_zfsdelallsnaps() {
     printf '%s\n' "$out" | grep -q "zfs release offsite-survey" \
         || { test_fail "converge never released the hold"; return; }
     printf '%s\n' "$out" | grep -qF \
-        'zfsdelallsnaps "$SURVEY_DS" delme releaseholds recursive' \
+        'zfsdelallsnaps zfstest1/survey-da delme releaseholds recursive' \
         || { test_fail "item invocation is not the releaseholds recursive form"; return; }
     test_pass
 }
@@ -879,49 +884,57 @@ test_recipe_vmdisk_flows() {
     printf '%s\n' "$out" | grep -q "remove-vm-disk" \
         || { test_fail "converge never used the product teardown"; return; }
     printf '%s\n' "$out" | grep -qF \
-        './bin/resize-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 2G' \
-        || { test_fail "resize invocation shape drifted"; return; }
+        './bin/resize-vm-disk zfstest1 101 9 2G' \
+        || { test_fail "resize invocation shape drifted: $out"; return; }
     printf '%s\n' "$out" | grep -qF \
-        './bin/move-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK" 9101' \
+        './bin/move-vm-disk 101 9 9101' \
         || { test_fail "move invocation shape drifted"; return; }
     test_pass
 }
 
 test_table_overrides_invokes() {
-    test_start "table invokes: overrides strings reach the guest intact"
-    local root run db_row cl_row out
+    test_start "override legs: the bespoke recipes keep the table invoke shapes"
+    local root run out
     root="$(make_itf_root "$tmp_root/root21")"
     run="$tmp_root/run21"; mkdir -p "$run"
-    db_row="$(awk -F'\t' '$1=="cli-zfsdailybackup"' "$root/survey/universe.tsv")"
-    cl_row="$(awk -F'\t' '$1=="cli-zfscleanup"' "$root/survey/universe.tsv")"
-    [[ -n "$db_row" && -n "$cl_row" ]] \
-        || { test_fail "universe rows missing"; return; }
-    # The rows carry single quotes (the overrides strings), so they cross
-    # the eval boundary via files, not interpolated heredoc words.
-    printf '%s\n' "$db_row" > "$run/db.row"
-    printf '%s\n' "$cl_row" > "$run/cl.row"
     out="$(_source_survey "$root" "$run" '
         SURVEY_POOL=zfstest1 SURVEY_DS=zfstest1/survey-ov SURVEY_DS2=zfstest2/survey-ov
         CAP=""
-        itf_guest_exec_feed() { CAP="$3"; echo "INFO: canned"; return 0; }
-        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert < "'"$run"'/db.row"
-        itf_survey_run_cli_item 10.0.0.1 cli-zfsdailybackup "$_cmd" "$depth" \
-            "$invoke" "$profiles" "$rcs" "$feeds" "$assert" accept storage
-        echo "cap-db=$CAP"
-        CAP=""
-        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert < "'"$run"'/cl.row"
-        itf_survey_run_cli_item 10.0.0.1 cli-zfscleanup "$_cmd" "$depth" \
-            "$invoke" "$profiles" "$rcs" "$feeds" "$assert" accept storage
-        echo "cap-cl=$CAP"
+        itf_guest_exec_feed() {
+            CAP+="$3@@@"
+            case "$3" in
+                *zfscleanup*) printf "INFO: Dry run: Would remove prey\n" ;;
+                *zfsdailybackup*)
+                    printf "INFO: New snapshot: @dailybackup-x\n"
+                    printf "INFO: zfs send shipped\n"
+                    printf "INFO: zfsdailybackup completed.\n" ;;
+            esac
+            return 0
+        }
+        survey_recipe_zfscleanup 10.0.0.1 cli-zfscleanup accept "'"$run"'/cl.log"
+        survey_recipe_zfsdailybackup 10.0.0.1 cli-zfsdailybackup accept "'"$run"'/db.log"
+        echo "steps=$_steps"
+        echo "cap=$CAP"
     ')"
-    printf '%s\n' "$out" | grep -qF \
-        "sourcefs=zfstest1/survey-ov;destfs=zfstest2/survey-ov-recv;send-receive" \
-        || { test_fail "zfsdailybackup overrides invoke lost its shape: $out"; return; }
-    printf '%s\n' "$out" | grep -qF "pull_rocky='N'" \
+    assert_contains "$out" "pass:item cli-zfscleanup"
+    assert_contains "$out" "pass:item cli-zfsdailybackup"
+    assert_contains "$out" "zfscleanup dry-run override leg"
+    assert_contains "$out" "zfsdailybackup override leg"
+    # The %q-escaped eval line keeps each invoke ONE argument: the
+    # semicolons inside the overrides strings must arrive ESCAPED (the
+    # raw-string form let ssh's parse eat the quotes and the eval split
+    # on the semicolons — run-20261124-000928).
+    printf '%s\n' "$out" | grep -qF "./bin/zfscleanup" \
+        || { test_fail "zfscleanup invoke missing: $out"; return; }
+    printf '%s\n' "$out" | grep -qF "dryrun=\'Y\'\;retain_verb=\'Y\'" \
+        || { test_fail "zfscleanup overrides not one escaped argument: $out"; return; }
+    printf '%s\n' "$out" | grep -qF "zfstest1 '' dailybackup" \
+        || { test_fail "zfscleanup empty argument lost: $out"; return; }
+    printf '%s\n' "$out" | grep -qF "pull_rocky=\'N\'" \
         || { test_fail "site pulls are not disabled in the invoke"; return; }
     printf '%s\n' "$out" | grep -qF \
-        "./bin/zfscleanup zfstest1 '' dailybackup \"dryrun='Y';retain_verb='Y'\"" \
-        || { test_fail "zfscleanup dry-run invoke lost its shape: $out"; return; }
+        "sourcefs=\'zfstest1/survey-ov\'\;destfs=\'zfstest2/survey-ov-recv\'\;send-receive" \
+        || { test_fail "dailybackup overrides not one escaped argument: $out"; return; }
     test_pass
 }
 
@@ -931,7 +944,7 @@ test_wrap_depth_distribution() {
     root="$(make_itf_root "$tmp_root/root22")"
     run="$tmp_root/run22"; mkdir -p "$run"
     printf 'id\tkind\tname\tpage\tprofile\n' > "$run/survey-items.tsv"
-    printf 'cli-zfscleanup\tcli\tzfscleanup\t-\taccept\n' >> "$run/survey-items.tsv"
+    printf 'cli-zfsholds\tcli\tzfsholds\t-\taccept\n' >> "$run/survey-items.tsv"
     printf 'cli-zfsresume\tcli\tzfsresume\t-\tinvalid\n' >> "$run/survey-items.tsv"
     printf 'gui-b-x\tgui-button\tx\tpage\taccept\n' >> "$run/survey-items.tsv"
     printf '%s\n' \
@@ -972,10 +985,12 @@ test_wrap_depth_distribution() {
 }
 
 test_select_forwards_world_knob() {
-    test_start "select forwards the world knob; archive carries the world"
-    local root run
+    test_start "select: world default lived-in; thin knob; thin replay needs no pin"
+    local root run run2 run3
     root="$(make_itf_root "$tmp_root/root13")"
     run="$tmp_root/run13"; mkdir -p "$run"
+    run2="$tmp_root/run13b"; mkdir -p "$run2"
+    run3="$tmp_root/run13c"; mkdir -p "$run3"
     local out
     out="$(_source_survey "$root" "$run" '
         ITF_SURVEY_SEED=unitseed itf_survey_select > /dev/null 2>&1
@@ -983,13 +998,32 @@ test_select_forwards_world_knob() {
         echo "steps=$_steps"
     ')"
     assert_contains "$out" "rc=0"
-    assert_contains "$out" "world=thin"   # lab-shape info step
-    grep -q '^# world thin$' "$run/survey-select.out" \
-        || { test_fail "select.out missing '# world thin'"; return; }
+    assert_contains "$out" "world=lived-in"   # lab-shape info step
+    grep -q '^# world lived-in$' "$run/survey-select.out" \
+        || { test_fail "select.out missing '# world lived-in'"; return; }
     grep -q '^# world-seed unitseed$' "$run/survey-select.out" \
         || { test_fail "world seed did not default to the run seed"; return; }
-    grep -q '"variant": "thin"' "$run/survey-archive.json" \
+    grep -q '"variant": "lived-in"' "$run/survey-archive.json" \
         || { test_fail "archive missing world.variant"; return; }
+    # An explicit thin knob is forwarded and archived.
+    out="$(_source_survey "$root" "$run2" '
+        ITF_SURVEY_WORLD=thin ITF_SURVEY_SEED=unitseed \
+            itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+    ')"
+    assert_contains "$out" "rc=0"
+    grep -q '"variant": "thin"' "$run2/survey-archive.json" \
+        || { test_fail "explicit thin knob not archived"; return; }
+    # Replaying a thin archive with NO env pin must not read as a
+    # conflict (the --rerun list-reuse law with the flipped default).
+    out="$(_source_survey "$root" "$run3" '
+        ITF_SURVEY_ARCHIVE="'"$run2"'/survey-archive.json" \
+            itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+    ')"
+    assert_contains "$out" "rc=0"
+    grep -q '^# world thin$' "$run3/survey-select.out" \
+        || { test_fail "thin replay did not report the archived world"; return; }
     test_pass
 }
 
@@ -1090,6 +1124,435 @@ test_select_replay_world_conflict_refused() {
     test_pass
 }
 
+test_world_checkpoint_sequence() {
+    test_start "world checkpoint: stopped snapshot, restart, record rewrite"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root23")"
+    run="$tmp_root/run23"; mkdir -p "$run"
+    printf 'base.invalid 8001 10.0.0.5 j22-run23\n' > "$run/guest-storage.txt"
+    out="$(_source_survey "$root" "$run" '
+        CALLS=""
+        itf_guest_stop() { CALLS+="stop:$2;"; return 0; }
+        itf_guest_snapshot() { CALLS+="snapshot:$3;"; return 0; }
+        itf_guest_start() { CALLS+="start:$2;"; return 0; }
+        itf_guest_ip() { echo "10.0.0.9"; return 0; }
+        itf_wait_ssh() { CALLS+="ssh:$1;"; return 0; }
+        _survey_world_checkpoint
+        echo "rc=$?"
+        echo "calls=$CALLS"
+        echo "steps=$_steps"
+        echo "record=$(cat "'"$run"'/guest-storage.txt")"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:world checkpoint"
+    assert_contains "$out" "snapshot:world-staged"
+    assert_contains "$out" "record=base.invalid 8001 10.0.0.9 j22-run23"
+    local calls
+    calls="$(printf '%s\n' "$out" | sed -n 's/^calls=//p')"
+    case "$calls" in
+        stop:*snapshot:*start:*ssh:*) : ;;
+        *) test_fail "call order wrong: $calls"; return ;;
+    esac
+    test_pass
+}
+
+test_world_restore_paths() {
+    test_start "world restore: stale sweep + rollback + verify; restage fallback"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root24")"
+    run="$tmp_root/run24"; mkdir -p "$run"
+    printf 'base.invalid 8001 10.0.0.5 j22-run24\n' > "$run/guest-storage.txt"
+    printf 'SURVEY_RID=run24\nSURVEY_DS=zfstest1/survey-run24\n' \
+        > "$run/survey-env.sh"
+    printf '{"ladder": [], "dailybackup": []}\n' > "$run/survey-world-plan.json"
+    out="$(_source_survey "$root" "$run" '
+        CALLS="" VERIFIED=0
+        itf_qm() {
+            case "$*" in
+                *"listsnapshot 8001"*)
+                    printf "\x60-> world-staged  today  1.5 GiB\n"
+                    printf "\x60-> full-leg-product  today  0 B\n"
+                    printf "\x60-> current  You are here!\n" ;;
+                *delsnapshot*) CALLS+="delsnap:$4;" ;;
+                *rollback*) CALLS+="rollback:$4;" ;;
+            esac
+            return 0
+        }
+        itf_guest_stop() { CALLS+="stop;"; return 0; }
+        itf_guest_start() { CALLS+="start;"; return 0; }
+        itf_guest_ip() { echo "10.0.0.9"; return 0; }
+        itf_wait_ssh() { return 0; }
+        _survey_world_verify() { echo "ladder=1 holds=0"; return 0; }
+        _survey_world_restore
+        echo "rc=$?"
+        echo "calls=$CALLS"
+        echo "steps=$_steps"
+        echo "record=$(cat "'"$run"'/guest-storage.txt")"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "delsnap:full-leg-product;"
+    assert_contains "$out" "rollback:world-staged;"
+    # The pass message carries the (stubbed) verify summary: the
+    # rollback must pass the same plan verification the staging ran.
+    assert_contains "$out" "pass:world restore"
+    assert_contains "$out" "ladder=1 holds=0"
+    assert_contains "$out" "record=base.invalid 8001 10.0.0.9 j22-run24"
+
+    # A failed rollback escalates to the deterministic restage: the
+    # stale checkpoint is dropped, the world rebuilt, re-checkpointed.
+    out="$(_source_survey "$root" "$run" '
+        CALLS="" STAGED=0 CKPT=0
+        itf_qm() {
+            case "$*" in
+                *"listsnapshot 8001"*)
+                    printf "\x60-> world-staged  today  1.5 GiB\n"
+                    printf "\x60-> current  You are here!\n" ;;
+                *delsnapshot*) CALLS+="delsnap:$4;" ;;
+                *rollback*) CALLS+="rollback:$4;"; return 1 ;;
+            esac
+            return 0
+        }
+        itf_guest_stop() { return 0; }
+        itf_guest_start() { return 0; }
+        itf_guest_ip() { echo "10.0.0.9"; return 0; }
+        itf_wait_ssh() { return 0; }
+        itf_guest_exec() { return 0; }
+        _survey_scratch_destroy() { CALLS+="scratch-destroy;"; return 0; }
+        itf_survey_stage_world() { STAGED=1; return 0; }
+        _survey_world_checkpoint() { CKPT=1; return 0; }
+        _survey_world_restore
+        echo "rc=$?"
+        echo "calls=$CALLS"
+        echo "staged=$STAGED ckpt=$CKPT"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "fail:world restore"
+    assert_contains "$out" "pass:world restage"
+    assert_contains "$out" "staged=1 ckpt=1"
+    assert_contains "$out" "delsnap:world-staged;"
+    assert_contains "$out" "scratch-destroy;"
+    test_pass
+}
+
+test_site_pair_render_shapes() {
+    test_start "site pair: rendered from the tree templates, per lab shape"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root25")"
+    run="$tmp_root/run25"; mkdir -p "$run"
+    printf '# enum-root %s\n' "$REAL_REPO" > "$run/survey-select.out"
+    out="$(_source_survey "$root" "$run" '
+        EXECS="" PUTS=""
+        itf_guest_exec() { EXECS+="$2;"; return 0; }
+        itf_guest_put() { PUTS+="$(basename "$3");"; return 0; }
+        SURVEY_RID=sp SURVEY_DS=zfstest1/survey-sp
+        unset SURVEY_RECV_DS
+        itf_survey_stage_site_pair 10.0.0.1
+        echo "rc=$?"
+        echo "puts=$PUTS"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey site pair staged"
+    assert_contains "$out" "puts=zfsdailybackup;rsync-dailybackup;bashinit;"
+    assert_contains "$out" "pulls: local"
+    grep -qF "pull_rocky='N'" "$run/survey-site/zfsdailybackup" \
+        || { test_fail "absent-site pull not disabled"; return; }
+    grep -qF "pull_tweety='N'" "$run/survey-site/zfsdailybackup" \
+        || { test_fail "the compute push pull must stay off (local-pull site)"; return; }
+    grep -qF 'sourcefs="zfstest1/survey-sp/backup-src"' \
+        "$run/survey-site/zfsdailybackup" \
+        || { test_fail "backup source not the world backup-src"; return; }
+    grep -qF 'destfs="zfstest2/survey-sp-recv"' \
+        "$run/survey-site/zfsdailybackup" \
+        || { test_fail "backup dest not the receive tree (RID fallback)"; return; }
+    grep -qF '"/etc/|/zfstest1/survey-sp/backup-src/etc/"' \
+        "$run/survey-site/rsync-dailybackup" \
+        || { test_fail "local rsync job missing"; return; }
+    grep -qF '"root@compute-guest:' "$run/survey-site/rsync-dailybackup" \
+        && { test_fail "compute job in a single-node lab"; return; }
+    cmp -s "$run/survey-site/bashinit" "$REAL_REPO/bin/bashinit" \
+        || { test_fail "site bashinit is not the tree own"; return; }
+
+    # Two-node shape: the compute pull joins, its drop dir is prepared.
+    printf 'base.invalid 8002 10.0.0.7\n' > "$run/guest-compute.txt"
+    out="$(_source_survey "$root" "$run" '
+        EXECS="" PUTS=""
+        itf_guest_exec() {
+            EXECS+="$2;"
+            [[ "$2" == "hostname -s" ]] && echo compute-guest
+            return 0
+        }
+        itf_guest_put() { PUTS+="$(basename "$3");"; return 0; }
+        SURVEY_RID=sp SURVEY_DS=zfstest1/survey-sp \
+        SURVEY_RECV_DS=zfstest2/survey-sp-recv
+        itf_survey_stage_site_pair 10.0.0.1
+        echo "rc=$?"
+        echo "execs=$EXECS"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    grep -qF "pull_tweety='N'" "$run/survey-site/zfsdailybackup" \
+        || { test_fail "two-node shape must also stay local-pull"; return; }
+    grep -qF '"root@compute-guest:/etc/|/zfstest1/survey-sp/backup-src/compute-etc/"' \
+        "$run/survey-site/rsync-dailybackup" \
+        || { test_fail "compute rsync job missing"; return; }
+    printf '%s\n' "$out" | grep -q \
+        "ln -sfn /root/ZFSutilities/lib /root/survey-site/lib" \
+        || { test_fail "site lib link missing (resolver layout)"; return; }
+    test_pass
+}
+
+test_full_function_stage_gating() {
+    test_start "stage F: thin discloses skips; lived-in runs drawn legs only"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root26")"
+    run="$tmp_root/run26"; mkdir -p "$run"
+    printf 'cli-zfscleanup\tcli\tzfscleanup\t-\taccept\n' > "$run/survey-items.tsv"
+    out="$(_source_survey "$root" "$run" '
+        SURVEY_WORLD=thin SURVEY_ITEMS="'"$run"'/survey-items.tsv"
+        itf_survey_run_full_function 10.0.0.1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "skip:full-function cli-zfscleanup"
+    assert_contains "$out" "ITF_SURVEY_WORLD=lived-in"
+
+    printf 'cli-zfsdailybackup\tcli\tzfsdailybackup\t-\taccept\n' >> "$run/survey-items.tsv"
+    out="$(_source_survey "$root" "$run" '
+        SURVEY_WORLD=lived-in SURVEY_ITEMS="'"$run"'/survey-items.tsv"
+        RAN=""
+        _survey_storage_ip() { echo 10.0.0.1; }
+        _survey_full_function_zfscleanup() { RAN+="$1;"; return 0; }
+        _survey_full_function_zfsdailybackup() { RAN+="$1;"; return 0; }
+        itf_survey_run_full_function 10.9.9.9
+        echo "rc=$?"
+        echo "ran=$RAN"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "ran=10.0.0.1;10.0.0.1;"
+
+    # Undrawn commands get no leg — the draw governs, as for every item.
+    printf 'cli-zfssend\tcli\tzfssend\t-\taccept\n' > "$run/survey-items.tsv"
+    out="$(_source_survey "$root" "$run" '
+        SURVEY_WORLD=lived-in SURVEY_ITEMS="'"$run"'/survey-items.tsv"
+        RAN=""
+        _survey_full_function_zfscleanup() { RAN+=cleanup; return 0; }
+        _survey_full_function_zfsdailybackup() { RAN+=dailybackup; return 0; }
+        itf_survey_run_full_function 10.0.0.1
+        echo "rc=$?"
+        echo "ran=${RAN:-none}"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "ran=none"
+    test_pass
+}
+
+test_full_function_zfscleanup_verdict() {
+    test_start "full-function zfscleanup: real-deletion verdict + world restore"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root27")"
+    run="$tmp_root/run27"; mkdir -p "$run"
+    python3 - "$run/survey-world-plan.json" <<'PYEOF'
+import json, sys
+
+plan = {
+    "ladder": [
+        {"dataset": "home/user/docs",
+         "name": "dailybackup-2026-01-02T03:04Z-d",
+         "label": "dailybackup", "bucket": "d", "hold": "", "epoch": 1},
+        {"dataset": "home/user/docs",
+         "name": "dailybackup-2026-01-09T03:04Z-d",
+         "label": "dailybackup", "bucket": "d", "hold": "", "epoch": 2},
+        {"dataset": "home/user/docs",
+         "name": "clone-2026-01-05T03:04Z-c",
+         "label": "clone", "bucket": "c", "hold": "", "epoch": 3},
+        {"dataset": "home/user/photos",
+         "name": "offsite-2026-01-06T03:04Z-s",
+         "label": "offsite", "bucket": "s", "hold": "offsite-abc123", "epoch": 4},
+    ],
+    "dailybackup": [{"epoch": 5}],
+}
+with open(sys.argv[1], "w") as f:
+    json.dump(plan, f)
+PYEOF
+    out="$(_source_survey "$root" "$run" '
+        RESTORED=0
+        itf_guest_exec_feed() {
+            printf "INFO: Applying retention\nINFO: removed 2 snapshots\n"
+            return 0
+        }
+        itf_guest_exec() {
+            cat <<STATE
+== config ==
+{"retention": {"zfstest1": [
+  {"name": "d", "retain": 1}, {"name": "w", "retain": 3},
+  {"name": "m", "retain": 3}, {"name": "s", "retain": 6}]}}
+== snaps ==
+zfstest1/survey-ff/home/user/docs@dailybackup-2026-01-02T03:04Z-d
+zfstest1/survey-ff/home/user/docs@clone-2026-01-05T03:04Z-c
+zfstest1/survey-ff/home/user/photos@offsite-2026-01-06T03:04Z-s
+== holds ==
+zfstest1/survey-ff/home/user/photos@offsite-2026-01-06T03:04Z-s offsite-abc123
+STATE
+            return 0
+        }
+        _survey_world_restore() { RESTORED=1; return 0; }
+        SURVEY_DS=zfstest1/survey-ff
+        _survey_full_function_zfscleanup 10.0.0.1
+        echo "rc=$?"
+        echo "restored=$RESTORED"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:full-function zfscleanup"
+    assert_contains "$out" "removed=1"
+    assert_contains "$out" "restored=1"
+
+    # Dry-run hedging in a no-override run is a failure, not a pass.
+    out="$(_source_survey "$root" "$run" '
+        RESTORED=0
+        itf_guest_exec_feed() {
+            printf "INFO: Dry run: Would remove prey\n"
+            return 0
+        }
+        itf_guest_exec() { return 0; }
+        _survey_world_restore() { RESTORED=1; return 0; }
+        SURVEY_DS=zfstest1/survey-ff
+        _survey_full_function_zfscleanup 10.0.0.1
+        echo "rc=$?"
+        echo "restored=$RESTORED"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=1"
+    assert_contains "$out" "fail:full-function zfscleanup"
+    assert_contains "$out" "restored=0"
+    test_pass
+}
+
+test_full_function_zfsdailybackup_verdict() {
+    test_start "full-function zfsdailybackup: leg evidence + post-state + restore"
+    local root run out
+    root="$(make_itf_root "$tmp_root/root28")"
+    run="$tmp_root/run28"; mkdir -p "$run"
+    printf '{"ladder": [], "dailybackup": [{"epoch": 1}, {"epoch": 2}]}\n' \
+        > "$run/survey-world-plan.json"
+    out="$(_source_survey "$root" "$run" '
+        RESTORED=0
+        itf_guest_exec_feed() {
+            printf "INFO: New snapshot: @dailybackup-x\n"
+            printf "INFO: Pulling rsync backup from storage (local)\n"
+            printf "INFO: rsync-dailybackup: /etc/ -> dest\n"
+            printf "INFO: Backing up backup-src to recv\n"
+            printf "INFO: Pruning snapshots.\n"
+            printf "INFO: zfsdailybackup completed.\n"
+            return 0
+        }
+        itf_guest_exec() {
+            cat <<STATE
+== src ==
+zfstest1/survey-ff/backup-src@snap1
+zfstest1/survey-ff/backup-src@snap2
+zfstest1/survey-ff/backup-src@snap3
+== recv ==
+zfstest2/survey-ff-recv@snap1
+zfstest2/survey-ff-recv@snap2
+zfstest2/survey-ff-recv@snap3
+== snapfile ==
+== pulled ==
+PULLED local
+STATE
+            return 0
+        }
+        _survey_world_restore() { RESTORED=1; return 0; }
+        SURVEY_DS=zfstest1/survey-ff
+        _survey_full_function_zfsdailybackup 10.0.0.1
+        echo "rc=$?"
+        echo "restored=$RESTORED"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:full-function zfsdailybackup"
+    assert_contains "$out" "src=3 recv=3"
+    assert_contains "$out" "restored=1"
+
+    # A missing leg fails the item honestly.
+    out="$(_source_survey "$root" "$run" '
+        RESTORED=0
+        itf_guest_exec_feed() {
+            printf "INFO: New snapshot: @dailybackup-x\n"
+            return 0
+        }
+        itf_guest_exec() { return 0; }
+        _survey_world_restore() { RESTORED=1; return 0; }
+        _survey_full_function_zfsdailybackup 10.0.0.1
+        echo "rc=$?"
+        echo "restored=$RESTORED"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=1"
+    assert_contains "$out" "fail:full-function zfsdailybackup"
+    assert_contains "$out" "restored=0"
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
+# Guest IP discovery: the P2P pair never wins the pick (guest-lib)
+# ------------------------------------------------------------------------------
+
+test_guest_ip_skips_p2p_pair() {
+    test_start "guest IP discovery: the P2P pair never wins the pick"
+    local out
+    # The P2P interface listed FIRST still loses: the management
+    # address is the pick whenever the pair is loaded.
+    out="$(
+        (
+            # shellcheck disable=SC1090
+            source "$mydir/tests/integrated/lib/guest-lib.sh"
+            itf_qm() {
+                printf '[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.101.1"}]}, {"name": "eth0", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.1.55"}]}]\n'
+            }
+            sleep() { :; }
+            ITF_ISCSI_STORAGE_IP=192.168.101.1 ITF_ISCSI_COMPUTE_IP=192.168.101.2 \
+                itf_guest_ip base.invalid 8003 30
+        ) 2>/dev/null
+    )"
+    assert_contains "$out" "192.168.1.55"
+    # A guest whose ONLY address is the P2P one never yields it: the
+    # discovery times out instead (the checkpoint-restart shape from
+    # run-20261123-235048 — DHCP not leased yet, static P2P up).
+    out="$(
+        (
+            # shellcheck disable=SC1090
+            source "$mydir/tests/integrated/lib/guest-lib.sh"
+            itf_qm() {
+                printf '[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.101.1"}]}]\n'
+            }
+            sleep() { :; }
+            ITF_ISCSI_STORAGE_IP=192.168.101.1 \
+                itf_guest_ip base.invalid 8003 1
+            echo "rc=$?"
+        ) 2>/dev/null
+    )"
+    assert_contains "$out" "rc=1"
+    # Without the two-node pair loaded, the first address wins as before.
+    out="$(
+        (
+            # shellcheck disable=SC1090
+            source "$mydir/tests/integrated/lib/guest-lib.sh"
+            itf_qm() {
+                printf '[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.101.1"}]}]\n'
+            }
+            sleep() { :; }
+            itf_guest_ip base.invalid 8003 30
+        ) 2>/dev/null
+    )"
+    assert_contains "$out" "192.168.101.1"
+    test_pass
+}
+
 test_select_new_creates_archive_and_half_sample
 test_select_new_deterministic
 test_select_replay_reproduces_the_list
@@ -1101,6 +1564,7 @@ test_baseline_install_stage_shape
 test_journey_profile_gates
 test_wrap_residue_gate_and_summary
 test_guest_time_fence
+test_guest_ip_skips_p2p_pair
 test_world_stage_dispatches_thin
 test_world_stage_refuses_unimplemented
 test_world_stage_dispatches_lived_in
@@ -1117,6 +1581,12 @@ test_select_lived_in_passes_with_digest_guard
 test_select_busy_still_refused
 test_select_digest_guard_refuses_drift
 test_select_replay_world_conflict_refused
+test_world_checkpoint_sequence
+test_world_restore_paths
+test_site_pair_render_shapes
+test_full_function_stage_gating
+test_full_function_zfscleanup_verdict
+test_full_function_zfsdailybackup_verdict
 
 rm -rf "$tmp_root"
 teardown_test_env

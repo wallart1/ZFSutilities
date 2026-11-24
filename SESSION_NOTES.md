@@ -1489,3 +1489,108 @@ desktop-menu and test-logging bashinit entries.)
   Suites: zfsresume/send-receive-resume/survey-journey/sampler/docs
   green; full suite once at wrap-up. Docs: messages/index.md rows +
   commands.md zfsresume narrative/flow updated.
+
+## 2026-11-23/24 — docs for the campaign/repair/register processes + j22 full-function legs (pub3)
+
+User direction (four numbered items): document (1) what a campaign plan
+is and how it comes into being (itf-coverage.md), (2) the finding →
+repair-plan process, (3) the UX/future-direction → requirements-register
+seeding (both integrated-testing.md), and (4) stop taking shortcuts in
+j22 — keep the override tests, but also create a realistic world, run
+FULL-FUNCTION tests against it, and manage the world lifecycle
+(snapshot → simple revert; re-create when consumed).
+
+- Docs A1–A3 landed: new "Campaign plans" section in itf-coverage.md
+  (S/M ID law, gates, the standard plan workflow, durable residue);
+  Findings-and-repair-loop and Requirements-register sections in
+  integrated-testing.md rewritten as stepwise processes drawn from
+  repair-plans/README.md, FINDINGS.md, REQUIREMENTS.md.
+- j22 (item 4):
+  - Default world flipped thin → lived-in (user-approved): sampler
+    --world default, survey-lib fallbacks. Replay-conflict semantics
+    tightened to "explicit requests only" (unset knob never conflicts;
+    --rerun of a thin archive still works; explicit thin vs lived-in
+    archive now refuses, matching the documented law).
+  - World lifecycle: `world-staged` stopped-guest qm checkpoint after
+    staging + GUI env (_survey_world_checkpoint);
+    _survey_world_restore (stale-newer-snapshot sweep → rollback →
+    restart → IP re-resolve → plan re-verify via factored
+    _survey_world_verify); _survey_world_restage fallback (drop stale
+    checkpoint, scratch destroy, deterministic restage, re-checkpoint).
+  - Site-adapted pair staged by the lived-in world
+    (itf_survey_stage_site_pair): zfsdailybackup + rsync-dailybackup +
+    bashinit rendered from the staged tree's own templates; pulls per
+    lab shape (local; + compute host two-node; absent site off);
+    backup leg on backup-src → recv; prune on.
+  - Recipes: cli-zfscleanup/cli-zfsdailybackup now bespoke — leg 1 =
+    the old table invoke verbatim; stage F (after GUI probe, before
+    wrap) runs the full-function legs for drawn commands: zfscleanup
+    with NO overrides (real retention; verdict vs plan + pinned
+    config: deletions happened, holds/clone survive, bucket bounds),
+    zfsdailybackup via the site pair with NO overrides (leg banners +
+    post-state: snap on src+recv, snapfile clean, pulled files).
+    Thin runs disclose per-command skips.
+  - Journey wiring: checkpoint after staging; stage F; wrap address
+    re-resolved (restores may re-lease DHCP).
+- Tests: test-itf-survey-journey +6 tests (checkpoint order, restore
+  paths + restage fallback, site-pair render shapes both lab shapes,
+  stage-F gating, both full-function verdicts incl. fail paths);
+  updated: override-invoke test → recipe leg shapes, default-world
+  test (lived-in + thin knob + thin replay no-pin), depth fixture.
+  test_survey_sample updated for the flip + explicit-conflict law.
+  Full suite green once; mkdocs build clean.
+- Live proof: run-20261123-235048-j22-function-survey (seed proof-j,
+  world lived-in via the new default, 106 items, two-node lab shape).
+
+### Live-proof post-mortems (runs 20261123-235048, 20261124-000928)
+
+- Run 1 red at the world checkpoint: post-restart IP discovery grabbed
+  the STATIC P2P address (up before DHCP leased; dev cannot route the
+  P2P subnet). Fix (guest-lib): itf_guest_ip now skips the site's
+  ITF_ISCSI_STORAGE_IP/COMPUTE_IP pair — benefits every post-restart
+  rediscovery. Regression test in test-itf-survey-journey. Run 2's
+  checkpoint passed live (guest back at the management address).
+- Run 2 red on four command failures, one root cause:
+  _survey_guest_run's raw-string eval sat behind ssh's remote sh -c,
+  whose parse CONSUMES quote characters — the wrapper's eval then
+  re-parsed unquoted text. Casualties: the overrides argument vanished
+  (zfscleanup ran mislabeled, no dry-run), its semicolons split the
+  line (zfsdailybackup executed the trailing `send-receive` call in
+  the wrapper shell, rc 127), and empty '' args collapsed (the
+  full-function zfscleanup lost its label, FATAL rc 8). Fix: the
+  helper takes command WORDS and %q-escapes them into the eval line;
+  all 17 call sites converted. Existing recipes had survived only
+  because their quoted args held no spaces or semicolons.
+- Second cause: the GUI stage's `rm -rf /root/survey-harness` wiped
+  the site pair staged inside it — stage F found no orchestrator. Fix:
+  the pair lives in /root/survey-site (its own directory).
+- Open for run 3: the gui-w-checkagainst-edit-cell failure ("no
+  editable text renderer") — if it repeats on a healthy world it is a
+  finding-class defect (triage then, not now).
+
+### F-053/F-054: two product defects found by the full-function legs (all fixed + verified)
+
+- F-053: zfsdailybackup/rsync-dailybackup left `compute_host` unset on
+  two-node sites (hand-rolled node resolution, lowercase pair defined
+  single-node only). Fix: the orchestrator now source_helpers
+  node-lib.sh (owns precedence + both modes); rsync keeps its soft
+  skip and resolves the pair for both modes. Two-node regression
+  tests in both suites.
+- F-054: the prune leg dies under the strictness the templates leak
+  and re-leak (rsync-dailybackup carries set -euo pipefail; the SEND
+  leg re-arms it mid-run by sourcing strict standalone zfsdelfs via
+  zfs-send-receive). The whole prune chain's unguarded reads were
+  hardened (`:-` scalars/positionals, declare -p tag arrays, guarded
+  element reads in zfsretain) AND the orchestrator now re-asserts its
+  documented non-strict mode at the rsync source point and at the
+  prune leg. Live-traced with bash -x in the kept lab.
+- The full-function dailybackup leg's feed now pre-feeds the prune's
+  checkagainst confirmations (ask_yn rc-5 path) the way profile_runner
+  pre-feeds cron prompts; the site pair is a TREE-SHAPED layout
+  (bin/ + lib symlink) so helper resolution matches a real install;
+  the site is local-pull (the compute /etc rides the P2P link).
+- Checkagainst GUI gap: the lived-in config rows now seed a
+  comparison row (the page's only editable tree was empty).
+- GREEN: run-20261124-052832 (172 steps, 158 pass / 0 fail / 2 skip,
+  lab auto-destroyed) — both full-function legs + checkpoint/restore
+  cycle live-proven.

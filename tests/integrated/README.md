@@ -121,7 +121,7 @@ is running right now, not just what already finished.
 | `FINDINGS.md` | product issues found by journeys |
 | `REQUIREMENTS.md` | the recovery-requirements register — UX gaps and design directions seeded from journey outcomes, directing future coding |
 | `repair-plans/` | numbered fix proposals awaiting user approval |
-| `survey/` | the j22 function-survey engine: the CLI universe manifest (`universe.tsv`), the seeded sampler/archiver (`sample.py`), the GUI interaction catalog (`gui_catalog.py`), the in-guest GUI probe (`gui_probe.py`), and the durable sample archives (`archives/`) |
+| `survey/` | the j22 function-survey engine: the CLI universe manifest (`universe.tsv`), the seeded sampler/archiver (`sample.py`), the world planner (`world.py` + `world-stage.sh` — the lived-in ladder and its clock-walk staging), the GUI interaction catalog (`gui_catalog.py`), the in-guest GUI probe (`gui_probe.py`), and the durable sample archives (`archives/`) |
 | `results/` | run outputs (`run-*` gitignored) + curated phase reports |
 
 ## Safety model

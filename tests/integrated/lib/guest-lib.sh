@@ -572,13 +572,21 @@ itf_guest_rollback() {
 #
 # Polls the qemu guest agent for the guest's first non-loopback IPv4
 # address and echoes it.  The agent is installed by the preseed, so this
-# works from the first boot after install.
+# works from the first boot after install.  The site's P2P pair
+# (ITF_ISCSI_STORAGE_IP / ITF_ISCSI_COMPUTE_IP, when the two-node
+# parameters are loaded) is skipped: those static addresses come up the
+# instant a two-node guest boots — before DHCP has leased the management
+# address — and the dev host cannot route the P2P subnet, so a
+# post-restart rediscovery that grabbed one would wait on an
+# unreachable ssh target (live-observed at the j22 world checkpoint,
+# run-20261123-235048).
 itf_guest_ip() {
     local base="$1" vmid="$2" timeout="${3:-300}"
     # Live-report only inside a run; stdout stays clean — callers
     # capture the discovered address.
     [[ -n "${ITF_RUN_DIR:-}" ]] \
         && itf_step_start "guest IP discovery" "vmid $vmid — up to ${timeout}s" > /dev/null
+    local skip="${ITF_ISCSI_STORAGE_IP:-},${ITF_ISCSI_COMPUTE_IP:-}"
     local deadline=$(( SECONDS + timeout )) ip out
     while (( SECONDS < deadline )); do
         out="$(itf_qm "$base" guest cmd "$vmid" network-get-interfaces 2>/dev/null)" || true
@@ -588,8 +596,10 @@ try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
+# The P2P pair rides argv[1] (comma-separated; empty entries dropped).
+skip = {a for a in sys.argv[1].split(",") if a}
 # qm guest cmd prints the raw result list; pvesh-style wrappers may
-# hand back the {"result": [...]} envelope instead.  Accept both.
+# hand back the {"result": [...]} envelope instead. Accept both.
 ifaces = data.get("result", []) if isinstance(data, dict) else data
 if not isinstance(ifaces, list):
     sys.exit(0)
@@ -598,9 +608,11 @@ for iface in ifaces:
         continue
     for addr in iface.get("ip-addresses", []):
         if addr.get("ip-address-type") == "ipv4" and not addr["ip-address"].startswith("127."):
+            if addr["ip-address"] in skip:
+                continue
             print(addr["ip-address"])
             sys.exit(0)
-' )" || true
+' "$skip" )" || true
         if [[ -n "$ip" ]]; then
             echo "$ip"
             return 0

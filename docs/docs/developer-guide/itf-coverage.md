@@ -25,8 +25,30 @@ are described in [Integrated Testing](integrated-testing.md) and `tests/integrat
 | Interrupted & contradictory operations: SIGINT half states, collisions, concurrent mutators (fenced), mistyped input | — | j17 (S10–S14, S12 fence, M2, M3, M5) |
 | Compute & power events: compute reboot, both-node cycle with unreachable storage, orphan LUN teardown | — | j18 (S15–S17) |
 
-Scenario IDs (S/M) are specified in the campaign plan and tested by the
-journeys.
+## Campaign plans
+
+Scenario IDs (S/M) in the table above are specified in a **campaign
+plan** and tested by the journeys.
+
+- A **campaign** is a roadmap phase (`tests/integrated/README.md`) that
+  groups related journeys under one goal. The model is phase 3.9, the
+  recovery-scenario campaign: gates G0–G5 delivered the shared lab, the
+  j15–j18 scenario journeys, and the wrap.
+- A **campaign plan** is the user-approved plan that scopes the campaign
+  before any of it is built. It enumerates the scenario catalog with
+  stable IDs — `S` for full scenarios, `M` for the small wrong-input
+  cases (mistyped identifiers, garbage at prompts, wrong passphrases) —
+  assigns the scenarios to journeys, orders the gates, and names the
+  wrap criteria: findings triaged to terminal states, the requirements
+  register seeded, the coverage map updated, fresh runs green.
+- **How it comes into being.** The standard planning workflow produces
+  it: the agent investigates and proposes the plan; the user approves or
+  revises it. A campaign starts only when the user names the need — the
+  same law as the gap rows above.
+- **Where it lives on.** The plan itself is not a repository file. Its
+  durable residue is the roadmap row, the journeys, the S/M IDs in
+  `journeys/README.md` rows and `REQUIREMENTS.md` source cells, and this
+  coverage map.
 
 ## Gap rows (future candidates — built only when a real need names them)
 

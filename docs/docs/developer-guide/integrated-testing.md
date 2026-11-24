@@ -333,13 +333,14 @@ with per-command recipes whose depth (full flow vs
 argument-validation surface) is disclosed per item.
 
 The **world** — the guest state the items run against — is a named,
-seeded variant (`ITF_SURVEY_WORLD`). 
+seeded variant (`ITF_SURVEY_WORLD`, default `lived-in`; `thin` is the
+explicit cold-start choice for quick iteration). 
 
-- `thin` (the default) is the
+- `thin` is the
     cold-start world: survey-owned scratch datasets plus the pre-determined
     config, which keeps every feature's cold-start branch reachable.
 
-- `lived-in` stages the aged world on top of the same playground: a
+- `lived-in` (the default) stages the aged world on top of the same playground: a
 deterministic snapshot sequence. 
 
     ZFS snapshot `creation`
@@ -381,16 +382,60 @@ deterministic snapshot sequence.
     so archives recorded before the config
     rows existed stay replayable.
 
+    The lived-in world finally stages the **site-adapted daily-backup
+    pair** (below): the realistic site whose orchestrator the
+    full-function leg runs.
+
 The survey's depth axis grows with the world: `zfsresume` validates a
 real resume token, `zfsdelallsnaps` runs its releaseholds
-path against a held snapshot staged under its own label,
+path against a held snapshot staged under its own label, and
 the two-node vm-disk commands run full flows on the lab VM's scratch
-disks, and
-`zfscleanup` / `zfsdailybackup` run with overrides — a retention
-dry-run over the aged ladder, and a real send into the scratch receive
-tree. Every recipe creates its own prey and converges it afterward, so
+disks. Every recipe creates its own prey and converges it afterward, so
 random order cannot starve or poison a later item; the wrap-up reports
 the run's depth distribution alongside its verdicts.
+
+`zfscleanup` and `zfsdailybackup` get **both legs** — the override
+test and the full-function test:
+
+- The **override leg** runs in the item itself, exactly as before: a
+  retention dry-run over the aged ladder, and a real send into the
+  scratch receive tree with the site pulls and prune off.
+- The **full-function leg** runs in a closing stage, after the GUI
+  probe (structural, like staging and wrap — not part of the archived
+  order), and only for the commands the draw selected. `zfscleanup`
+  runs with **no overrides** — real retention deletion over the
+  over-retained ladder, with the outcome checked against the world
+  plan and the pinned config's retention rows: real deletions
+  happened, held snapshots and the clone origin survive, every
+  (dataset, bucket) is within its bound. `zfsdailybackup` runs the
+  **site-adapted pair** the lived-in world stages — rendered from the
+  staged tree's own `zfsdailybackup` and `rsync-dailybackup` templates,
+  the documented customization path a real site follows: a local-pull
+  site (in two-node labs the compute host's `/etc` joins the local
+  pull over the P2P link via a `root@` job), the backup leg on the
+  world's `backup-src` → receive tree, prune on. The run must show
+  every leg — snapshot, pulls, send, prune, completion — with the
+  prune confirmations pre-fed the way the product's own profile runner
+  pre-feeds cron prompts; the post-state must carry the new
+  snapshot on source and destination with the snapfile cleaned up.
+
+Both full-function legs consume the world, and the world's lifecycle
+is managed explicitly:
+
+- After staging (+ the GUI env), the journey takes a stopped-guest qm
+  snapshot **`world-staged`** — pools with creation times and holds,
+  config, state dir, and the VM config of the full pre-item state.
+- Each consuming leg **reverts** to that checkpoint afterward: newer
+  stale snapshots are removed (the rerun branch's law), the guest is
+  rolled back, restarted, its address re-resolved, and the world is
+  re-verified against the plan — the same verification the staging
+  ran.
+- When the rollback or the verification fails, the world is **created
+  again**: the deterministic planner rebuilds the identical ladder
+  (same seed, anchor, digest), and a fresh checkpoint is taken (the
+  stale one is dropped first — its disk state is the consumed world).
+- Thin runs have no aged ladder and no site pair; the closing stage
+  records a disclosed skip per drawn command.
 
 Defects found in a past release are recorded in `FINDINGS.md` and fixed
 **forward** in the dev tree — there is no back-porting; the release
@@ -1073,15 +1118,37 @@ The recovery-scenario journeys build on shared lab machinery in
 ## Findings and repair loop
 
 Failures observed through the orchestrator become entries in
-`tests/integrated/FINDINGS.md`. A finding is turned into a numbered
-repair plan (`tests/integrated/repair-plans/NNN-slug.md`) proposing a
-change **in this repository**; repairs are executed only after explicit
-user approval (or under an explicit standing approval for a repair
-campaign, recorded in the finding's status cell), shipped to the ITF guest
-as a dev tarball, and verified by rerunning the affected journeys.
-ZFSutilities bugs are never fixed inside an ITF guest.
+`tests/integrated/FINDINGS.md`. The loop that turns a finding into a
+shipped fix runs one step at a time:
 
-Every finding ends in these terminal states: 
+1. **Observe.** A journey fails through the end-user surface. The run
+   goes red, and the lab is kept for post-mortem reading.
+2. **File.** The agent adds a `FINDINGS.md` row: the next F-number, the
+   date, the journey, the symptom quoting its run directory (the raw
+   evidence), the suspected area, status `open`. Product gaps only —
+   harness bugs are fixed directly in `tests/integrated/` and never
+   become rows.
+3. **Draft.** The agent writes a numbered repair plan
+   (`tests/integrated/repair-plans/NNN-slug.md`, next free number, never
+   reused) proposing a change **in this repository**. A plan records the
+   finding, the root cause reproduced on the dev tree, the proposed
+   change, the blast radius, and the verification — which journeys rerun
+   and what they must show.
+4. **Approve.** The hard gate: repairs are executed only after explicit
+   user approval. A standing approval for a repair campaign is recorded
+   in the finding's status cell.
+5. **Execute.** The change lands in the dev repository through the
+   normal development workflow. ZFSutilities bugs are never fixed inside
+   an ITF guest — guests are disposable.
+6. **Verify.** The fix ships to the ITF guest as a dev tarball (fresh
+   run or `--rerun`), the affected journeys rerun, and a green verdict
+   closes the plan. In-cycle fixes take the same path.
+
+The row's status tracks the loop:
+`open` → `planned` (plan approved) → `fixed` (change landed) →
+`verified` (rerun green).
+
+Every finding ends in exactly one terminal state:
 - `verified` (the fix landed and the rerun was green — in-cycle fixes included)
 - `accepted` (the user waives)
 - `documented` (entries move to repo docs)
@@ -1096,13 +1163,30 @@ plan numbers live.
 
 UX gaps and design directions that the journeys prove — but that are
 not defects to fix now — are added to `tests/integrated/REQUIREMENTS.md`
-as numbered entries (R-nn) with their source scenario and a status. An entry
-moves `open` → `promoted` (repair-plan NNN, owner-approved) →
-`addressed (version)`, or is `declined` (date and reason). The register
-is the durable input for future coding; promotion from an item to a plan
-is the owner's call. Journey coverage by node mode
-is tracked in the [ITF Coverage Map](itf-coverage.md); items there
-are candidates only, built when the user names them.
+as numbered entries (R-nn) with their source scenario and a status. The
+seeding process:
+
+1. **Sources.** A journey outcome that proves a UX gap or design
+   direction live; a FINDINGS triage decision (a finding resolved as
+   "not a defect to fix now"); or direct user direction. New rows come
+   only from these — no speculative requirements.
+2. **Seed.** The agent adds one row: date, source (the journey scenario
+   or FINDINGS row that proved it — raw evidence lives in the run
+   directory that finding records), the requirement, status `open`.
+   Product-truth rows are additionally documented in the user-facing
+   pages the row names.
+3. **Maintain.** A row never silently disappears: promotion,
+   addressing, or declining is recorded in the status cell with a date.
+   An entry moves `open` → `promoted` (repair-plan NNN, owner-approved)
+   → `addressed (version)`, or is `declined` (date and reason).
+4. **Campaign wraps feed it.** The wrap-time triage closes every
+   finding in exactly one terminal state; the UX and future-direction
+   outcomes land here.
+
+The register is the durable input for future coding; promotion from an
+item to a plan is the owner's call, never automatic. Journey coverage
+by node mode is tracked in the [ITF Coverage Map](itf-coverage.md);
+items there are candidates only, built when the user names them.
 
 ## Testing the ITF framework itself
 

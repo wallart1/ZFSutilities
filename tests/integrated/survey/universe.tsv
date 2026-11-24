@@ -49,6 +49,11 @@
 # Lived-in runs additionally pin ZFSUTILITIES_STATE_DIR=/root/survey-state
 # (schedule profiles) and enrich /root/survey-config.json with retention,
 # backup, and offsite rows — see survey-lib.sh itf_survey_stage_config_rows.
+# zfscleanup and zfsdailybackup are bespoke rows: the recipe runs the
+# override leg above, and stage F (lived-in worlds only) adds the
+# full-function legs — real retention over the aged ladder and the
+# site-adapted pair with no overrides — reverting the world afterward
+# (see survey-lib.sh itf_survey_run_full_function).
 #
 # ---------------------------------------------------------------------------
 # EXCLUDED from the universe.  Every excluded DOCUMENTED command is listed
@@ -93,8 +98,8 @@ cli-check-prerequisites	check-prerequisites	single	storage	deep	./bin/check-prer
 cli-startdocserver	startdocserver	single	storage	bespoke	-	-	-	-	-
 cli-watchall	watchall	single	storage	bespoke	-	-	-	-	-
 cli-watchit	watchit	single	storage	bespoke	-	-	-	-	-
-cli-zfscleanup	zfscleanup	single	storage	deep	zfscleanup {POOL} '' dailybackup "dryrun='Y';retain_verb='Y'"	accept,decline	accept=0;;decline=0	accept=\n;;decline=\n	Dry run|Would remove|Would:
-cli-zfsdailybackup	zfsdailybackup	single	storage	deep	zfsdailybackup "pull_rocky='N';pull_tweety='N';pull_stewie='N';backup_threeamigos_proxmox='N';backup_NVME1='N';prune='N';sourcefs={DS};destfs={DS2}-recv;send-receive"	accept	accept=0	accept=\n	New snapshot|zfs send|completed
+cli-zfscleanup	zfscleanup	single	storage	bespoke	-	accept,decline	-	-	-
+cli-zfsdailybackup	zfsdailybackup	single	storage	bespoke	-	accept	-	-	-
 cli-zfsdelallsnaps	zfsdelallsnaps	single	storage	bespoke	-	accept,decline	-	-	-
 cli-zfsdelfs	zfsdelfs	single	storage	deep	zfsdelfs {DS2}	accept,decline	accept=0;;decline=1	accept=y\n;;decline=n\n	INFO|FATAL
 cli-zfsdelholds	zfsdelholds	single	storage	deep	zfsdelholds {DS} survey	accept	accept=0	accept=\n	-

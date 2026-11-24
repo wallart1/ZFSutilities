@@ -1,0 +1,4 @@
+rc=0
+calls=delsnap:world-staged;scratch-destroy;
+staged=1 ckpt=1
+steps=fail:world restore:no world-staged snapshot on vmid 8001;pass:world restage:world rebuilt from (seed= anchor=) and re-checkpointed;
