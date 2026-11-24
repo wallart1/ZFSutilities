@@ -19,11 +19,8 @@ below instead, which checks every TreeView site in python/.
 """
 
 import ast
-import atexit
 import os
-import shutil
 import sys
-import tempfile
 import unittest
 from contextlib import contextmanager
 from typing import ClassVar
@@ -33,19 +30,6 @@ REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
-
-# Real page and dialog builds reach the persistent state dir: the schedule
-# page refreshes its profile list at build time and the profile dialogs
-# list existing profiles, both landing in paths.get_profiles_dir()'s
-# makedirs. On a host without the root-owned /var/lib/zfsutilities — the
-# CI runner — that makedirs fails with EACCES. Redirect the state dir to a
-# private temp dir so every build sees an empty profiles list anywhere the
-# suite runs; an explicitly exported value is respected, matching the
-# conftest lock-dir fence.
-if "ZFSUTILITIES_STATE_DIR" not in os.environ:
-    _isolated_state_dir = tempfile.mkdtemp(prefix="zfsutilities-ctrlclick-state-")
-    os.environ["ZFSUTILITIES_STATE_DIR"] = _isolated_state_dir
-    atexit.register(shutil.rmtree, _isolated_state_dir, ignore_errors=True)
 
 from test_support import mock_gtk
 
@@ -125,7 +109,14 @@ class TestMainPages(unittest.TestCase):
         with _mock_gtk_distinct_treeviews() as views:
             import schedule_page
 
-            schedule_page.create_schedule_page(_fake_app())
+            # The page refreshes its profile list at build time, landing
+            # in paths.get_profiles_dir()'s makedirs — root-owned on the
+            # CI runner. Patch the module binding, never the process
+            # environment: a module-level ZFSUTILITIES_STATE_DIR leaks
+            # into every suite imported later in the same pytest-xdist
+            # worker (test_paths pins the default).
+            with patch.object(schedule_page, "list_profiles", return_value=[]):
+                schedule_page.create_schedule_page(_fake_app())
             _assert_wired(self, views, "schedule page")
 
     def test_disks_page(self):
