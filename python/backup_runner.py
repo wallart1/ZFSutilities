@@ -24,7 +24,7 @@ from backup_history import _parse_human_size, add_history_entry, build_entry
 from command_builders import _PV_RATE_RE, _diagnose_rsync_failure, _get_local_hostname
 from file_locking import RSYNC_LOG_LOCK_PATH, file_lock
 from gi.repository import GLib
-from logging_config import log_msg, restore_session_log, set_session_log
+from logging_config import get_log_hostname, log_msg, restore_session_log, set_session_log
 from notifications import notify_run_finished
 
 RSYNC_LOG_DIR = "/var/log/zfsutilities"
@@ -151,6 +151,13 @@ def _close_rsync_log_handle(runner):
             pass
         runner._rsync_log_lock_fd = None
     if runner._rsync_log_fh:
+        if runner._rsync_log_carry:
+            # A final line without its trailing newline still gets its tag.
+            try:
+                runner._rsync_log_fh.write(f"[{get_log_hostname()}] {runner._rsync_log_carry}\n")
+            except OSError:
+                pass
+            runner._rsync_log_carry = ""
         try:
             runner._rsync_log_fh.close()
         except OSError:
@@ -209,6 +216,9 @@ class BackupRunner:
         self._stderr_source = None
         self._on_complete = None
         self._rsync_log_fh = None
+        # Partial rsync line carried until its remainder arrives, so the
+        # host tag lands on every complete line even across chunk splits.
+        self._rsync_log_carry = ""
         # fd holding the shared rsync-log lock while _rsync_log_fh is open.
         self._rsync_log_lock_fd = None
         self._current_pv_text = ""
@@ -718,13 +728,30 @@ class BackupRunner:
         self.log(segment)
         self._write_raw_line(segment)
 
+    def _write_rsync_log_chunk(self, text):
+        """Append rsync output to the persistent log with a host tag per line.
+
+        Every stored rsync-pull.log line starts with ``[hostname]`` so lines
+        read anywhere name the host that produced them. Chunks can split a
+        line mid-way, so a partial trailing line is carried until its
+        remainder arrives; rsync's piped output is newline-delimited.
+        """
+        if not self._rsync_log_fh:
+            return
+        lines = (self._rsync_log_carry + text).split("\n")
+        self._rsync_log_carry = lines.pop()
+        tag = f"[{get_log_hostname()}] "
+        out = "".join(tag + line + "\n" for line in lines)
+        if out:
+            self._rsync_log_fh.write(out)
+            self._rsync_log_fh.flush()
+
     def _on_rsync_stdout(self, fd, condition):
         if condition & GLib.IOCondition.IN:
             try:
                 data = os.read(fd, 8192)
                 if data and self._rsync_log_fh:
-                    self._rsync_log_fh.write(data.decode("utf-8", errors="replace"))
-                    self._rsync_log_fh.flush()
+                    self._write_rsync_log_chunk(data.decode("utf-8", errors="replace"))
                     return True
             except OSError:
                 pass
@@ -857,8 +884,7 @@ class BackupRunner:
                         data = os.read(fd, 8192)
                         if not data:
                             break
-                        if self._rsync_log_fh:
-                            self._rsync_log_fh.write(data.decode("utf-8", errors="replace"))
+                        self._write_rsync_log_chunk(data.decode("utf-8", errors="replace"))
                     continue
                 handler = (
                     self._handle_rsync_stderr_line if is_rsync else self._handle_output_segment

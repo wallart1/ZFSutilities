@@ -5,6 +5,7 @@ Shared GTK helper utilities used by multiple page modules.
 import os
 import re
 import subprocess
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import gi
@@ -289,6 +290,31 @@ def configure_treeview_column(col, width=None, min_width=20, resizable=True):
     col.set_fixed_width(width)
     if resizable:
         col.set_resizable(True)
+
+
+def enable_ctrl_click_deselect(view):
+    """Let one Ctrl-click deselect a row even when *view* lacks focus.
+
+    GTK3 tree views skip the ctrl-click selection toggle unless the view
+    already holds keyboard focus: the toggle helper returns early when
+    ``has_focus()`` is false, and the focus grab happens at the end of
+    GTK's own gesture handler — one click too late. This runs on
+    ``button-press-event``, which fires before the view's bubble-phase
+    gesture, so grabbing focus here lets the toggle pass on the same
+    click. The modifier test mirrors GTK's own: the
+    MODIFIER_INTENT_MODIFY_SELECTION mask must be fully present in the
+    event state. Returning False leaves all normal handling (toggle,
+    plain/shift clicks, context menus, drags) to GTK.
+    """
+
+    def _grab_focus_on_ctrl_press(_view, event):
+        if event.button == 1 and not _view.has_focus():
+            mask = _view.get_modifier_mask(Gdk.ModifierIntent.MODIFY_SELECTION)
+            if (event.state & mask) == mask:
+                _view.grab_focus()
+        return False
+
+    view.connect("button-press-event", _grab_focus_on_ctrl_press)
 
 
 def set_column_header_tooltip(col, title, tooltip, xalign=None):
@@ -1091,7 +1117,7 @@ def show_error(app, msg):
         buttons=Gtk.ButtonsType.OK,
         text=msg,
     )
-    dlg.run()
+    run_dialog(dlg)
     dlg.destroy()
 
 
@@ -1104,7 +1130,7 @@ def show_error_dialog(app, message):
         buttons=Gtk.ButtonsType.OK,
         text=message,
     )
-    dlg.run()
+    run_dialog(dlg)
     dlg.destroy()
 
 
@@ -1117,7 +1143,7 @@ def show_warning_dialog(app, message):
         buttons=Gtk.ButtonsType.OK,
         text=message,
     )
-    dlg.run()
+    run_dialog(dlg)
     dlg.destroy()
 
 
@@ -1252,6 +1278,95 @@ class DirtyTracker:
                 set_button_markup_red(mirror, dirty)
         if self.page_name:
             set_page_tab_attention(self.app, self.page_name, "dirty", dirty)
+
+
+# ---------------------------------------------------------------------------
+# Modal dialog dimming
+# ---------------------------------------------------------------------------
+
+# Opacity applied to every other toplevel window while a modal dialog is open.
+MODAL_DIM_OPACITY = 0.6
+
+# Open modal dialogs, innermost last, and the opacity each dimmed window had
+# before the innermost modal took over (restored when the stack empties).
+_modal_dim_stack = []
+_dim_priors = {}
+
+
+def _modal_dim_toplevels():
+    """Return the process's toplevel windows, or [] when they can't be listed.
+
+    Headless and mock-GTK contexts expose no enumerable toplevel set; dimming
+    degrades to a passthrough there instead of failing the dialog.
+    """
+    try:
+        return list(Gtk.Window.list_toplevels())
+    except Exception:
+        return []
+
+
+def _dim_window(window):
+    if window in _dim_priors:
+        return  # dimmed by an outer modal already; keep the original prior
+    try:
+        _dim_priors[window] = window.get_opacity()
+        window.set_opacity(MODAL_DIM_OPACITY)
+    except Exception:
+        return  # undimmable window (mock or destroyed); leave it untouched
+
+
+def _undim_window(window):
+    try:
+        window.set_opacity(_dim_priors.pop(window, 1.0))
+    except Exception:
+        _dim_priors.pop(window, None)
+
+
+def _push_modal_dim(dialog):
+    """Dim every toplevel window except *dialog* (the incoming modal)."""
+    for window in _modal_dim_toplevels():
+        if window is not dialog:
+            _dim_window(window)
+    _modal_dim_stack.append(dialog)
+
+
+def _pop_modal_dim(dialog):
+    """Restore what *dialog*'s display dimmed; outer modals stay dimmed."""
+    if dialog not in _modal_dim_stack:
+        return
+    _modal_dim_stack.remove(dialog)
+    if _modal_dim_stack:
+        # An outer modal is still open: only its own window returns to full
+        # strength; the windows it dimmed stay dimmed until it closes too.
+        _undim_window(_modal_dim_stack[-1])
+    else:
+        for window in list(_dim_priors):
+            _undim_window(window)
+
+
+@contextmanager
+def dimmed_modal(dialog):
+    """Dim every other toplevel window while *dialog* is on screen.
+
+    For modal windows displayed with show() instead of run(); run_dialog
+    wraps this for the normal blocking display path.
+    """
+    _push_modal_dim(dialog)
+    try:
+        yield dialog
+    finally:
+        _pop_modal_dim(dialog)
+
+
+def run_dialog(dialog):
+    """Run a modal Gtk.Dialog with every other toplevel window dimmed.
+
+    The dim marks those windows as disabled while the modal blocks their
+    input; each window's previous opacity is restored when the dialog
+    closes. Returns the dialog's response unchanged.
+    """
+    with dimmed_modal(dialog):
+        return dialog.run()
 
 
 # ---------------------------------------------------------------------------
@@ -1741,6 +1856,7 @@ class EditableListView:
         self.store = Gtk.ListStore(*types)
         self.view = Gtk.TreeView(model=self.store)
         self.view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+        enable_ctrl_click_deselect(self.view)
 
         toggle = Gtk.CellRendererToggle()
         toggle.connect("toggled", self._on_toggle)
@@ -2391,7 +2507,7 @@ def confirm_and_minimize_width(window):
     if ok_button:
         ok_button.set_label("Minimize Width")
 
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
 
     if response != Gtk.ResponseType.OK:
@@ -2886,7 +3002,7 @@ def create_info_panel(app):
     app._info_panel_short_prefix = True
     app._info_short_prefix_toggle = Gtk.ToggleButton(label="Short prefix")
     app._info_short_prefix_toggle.set_active(True)
-    app._info_short_prefix_toggle.set_tooltip_text("Show only date and time in the log panel")
+    app._info_short_prefix_toggle.set_tooltip_text("Show only the time in the log panel")
     app._info_short_prefix_toggle.connect("toggled", app._on_info_short_prefix_toggled)
     stdin_box.pack_start(app._info_short_prefix_toggle, False, False, 0)
 

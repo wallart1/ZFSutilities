@@ -201,8 +201,9 @@ log. The text size can be changed with **View → GUI Log Font**
   `DEBUG`, `VERB`, `INFO`, `WARN`, or `FATAL`. The default is `INFO`. This only
   filters the on-screen view; everything is still written to the session log
   files.
-- **Short prefix** toggle — when on, each log line shows only the date and time;
-  when off, it shows the full source-location prefix.
+- **Short prefix** toggle — when on, each log line shows only the time; when
+  off, it shows the date, the host that wrote the line, and the full
+  source-location prefix.
 - **Clear** button — empties the visible log text. Held input requests are not
   part of the log, so **Clear** never dismisses a question that still needs an
   answer.
@@ -343,6 +344,16 @@ Sortable column headings note that clicking them sorts the table. Table
 cells whose text does not fit the column are clipped with an ellipsis
 (`…`); hovering such a cell shows its full text.
 
+## Modal Dialog Dimming
+
+While a modal dialog is open, the GUI dims every other window it is
+showing. The dimmed windows are disabled: they cannot take input until the
+dialog closes. Each window returns to its normal appearance when the
+dialog finishes, including when a dialog opens on top of another dialog.
+The dimming relies on desktop compositing, which most Linux desktops
+enable by default; without it, the other windows simply stay at full
+appearance.
+
 ## Dashboard Tab
 
 The Dashboard provides an at-a-glance overview of ZFS health and active locks.
@@ -405,7 +416,7 @@ The default is **80 %** (range 50–95 %).
 
 The table lists managed pools only — pools that are both registered and
 online. Unregistered pools appear solely in the Pool Registry on the Pools
-tab.
+tab. Pools are listed alphabetically by name, ignoring case.
 
 ### Tasks
 
@@ -544,7 +555,7 @@ remote host cannot be reached, its version is shown as *unknown*.
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Refresh**               | Re-gather all dashboard data immediately                                                                                                                                                                                                                                                          |
 | **Fix Locks**             | Removes stale locks and refreshes the view                                                                                                                                                                                                                                                        |
-| **Repair Mount Order**    | Enabled only when unreachable mounts were detected. Runs the approval-gated mount-order repair for every finding (see the Datasets tab's **Repair Mount Order** for the subtree-scoped variant): unmount the affected set with covers lifted as needed, remount parents-first, and set `canmount=on` on noauto ancestors so boot preserves the order. Detected mounts also appear in **Warnings**. The confirmation dialog warns that the affected filesystems are unmounted and remounted — briefly inaccessible — and anything using them must be closed; No is the default, so Enter cancels. |
+| **Repair Mount Order**    | Enabled only when unreachable mounts were detected. Runs the approval-gated mount-order repair for every finding: unmount the affected set with covers lifted as needed, remount parents-first, and set `canmount=on` on noauto ancestors so boot preserves the order. Detected mounts also appear in **Warnings**. The confirmation dialog warns that the affected filesystems are unmounted and remounted — briefly inaccessible — and anything using them must be closed; No is the default, so Enter cancels. |
 | **Cancel Selected Tasks** | Cancels the selected waiting or running rows in the **Tasks** list                                                                                                                                                                                                                                 |
 | **Remove Selected**       | Removes the selected completed rows from the **Tasks** list. The rows stay hidden across refreshes; the history entries themselves are kept. Enabled only when at least one completed row is selected                                                                                              |
 | **View Log**              | Switches to the Logs tab and selects the session log for the selected **Tasks** row. The log path is cached when the button becomes sensitive, so the action still opens the intended log even if a background refresh changes the selection before you click.                                    |
@@ -797,6 +808,15 @@ pools in the scrub table along with all settings (simultaneous count,
 refresh interval, and system scrub toggles). The profile runner starts
 the scrubs and polls until they finish.
 
+While polling, the runner may find every remaining scrub **paused** —
+usually because another profile is running: backup steps pause scrubs on
+the pools they copy and resume them when the step finishes. While any
+other profile is running, the scrub profile waits without limit for that
+window to close. If nothing else is running and the paused scrubs stay
+paused for about ten minutes, the profile stops waiting (the run still
+ends successfully), and the paused pools remain paused — resume them from
+the Pools tab when you are ready.
+
 ---
 
 ## Schedule Tab
@@ -819,6 +839,8 @@ The top pane lists every saved profile with columns:
 
 Click any column header to sort by **Profile Name**, **Type**, **Comment**, or **Next Run**.
 Click any row to select it; use **Ctrl**/**Shift**-click to select multiple rows.
+Ctrl-click a selected row to deselect it — one click is enough, even when the
+list did not have keyboard focus.
 The detail pane below populates with the first selected profile's cron settings
 (the first row in tree order when multiple rows are selected).
 
@@ -1072,7 +1094,8 @@ or when a Min Age is set on a bucket whose Retain Count is 0.
 
 ### Prune runner
 
-Below the editor, a multi-select list shows the managed pools — the pools
+Below the editor, a multi-select list shows the managed pools (Ctrl-click a
+selected pool to deselect it) — the pools
 registered in the JSON config (`config.pools`) that are currently imported,
 whatever their health (a **DEGRADED** pool still lists, with its live
 health). Unregistered pools never appear, and an empty registry lists
@@ -1318,7 +1341,7 @@ A sortable table with columns:
 | Column        | Description                                                              |
 | ------------- | ------------------------------------------------------------------------ |
 | **Date/Time** | When the session started. Default sort is **descending** (newest first). |
-| **Type**      | `backup`, `offsite`, `restore`, `prune`, `dataset`, `gui` — the operation type; `cron` rows list the persistent cron log and its rotations (see below) |
+| **Type**      | `backup`, `offsite`, `restore`, `prune`, `retention`, `scrub`, `dataset`, `gui` — the operation type; `cron` rows list the persistent cron log and its rotations (see below) |
 | **Name**      | `gui` for GUI runs, or `profile-<name>` for scheduled/cron runs          |
 | **Status**    | `Done`, `Failed`, `Cancelled`, `Running`, `Warn`, or `Fatal`.            |
 | **Log Size**  | Size of the log file on disk                                             |
@@ -1328,8 +1351,9 @@ A sortable table with columns:
 Click any column heading to change the sort order.
 
 Click any row to load that log into the viewer below. Hold Ctrl or Shift to
-select multiple rows; the **Delete Selected** action and the right-click menu
-operate on the full selection.
+select multiple rows; Ctrl-click a selected row to deselect it. The
+**Delete Selected** action and the right-click menu operate on the full
+selection.
 
 Right-click any row to open a context menu:
 
@@ -1347,7 +1371,8 @@ configured in the `paths` section of the main configuration file (see the
 [developer guide](../developer-guide/data-structures.md)); the defaults
 live in `/var/log/zfsutilities/`.
 
-Every line written to the cron log carries a `YYYY-MM-DD HH:MM:SS` timestamp,
+Every line written to the cron log carries a `YYYY-MM-DD HH:MM:SS` timestamp
+and a `[hostname]` tag naming the host that wrote it,
 so the viewer's level filter and short-prefix display work on these rows the
 same way as on session logs. The cron log holds only messages from before a
 scheduled run created its session log (launch-time and early failures), plus
@@ -1380,7 +1405,8 @@ not runner output:
   and its rotations.
 - `rsync` — the persistent pull-step rsync output log (`rsync-pull.log`),
   which the offsite profile truncates once per day and appends to
-  afterwards.
+  afterwards. Every line begins with the `[host]` that produced it, so
+  pull steps from both nodes name their writer.
 - `rewrite` — the persistent Rewrite Data file-list log
   (`rewrite-data.log`) and its rotations. Every Rewrite Data step appends a
   block: a header naming the dataset, its mountpoint, the time, and the
@@ -1638,7 +1664,11 @@ The **Refresh every (s)** spinner sets the auto-refresh interval
 auto-refresh timer and the toolbar Refresh button trigger it. The
 indicator reflects every in-flight refresh at once, so with the
 Alignment view visible it stays up for the whole (slower) alignment
-gather even though the quick charts sample has already finished.
+gather even though the quick charts sample has already finished. While
+that gather is in flight the indicator reads **Refreshing — Please be
+patient.** — the alignment probes pools, devices, datasets, and guest
+filesystems, so it can take a while; charts-only refreshes show the
+plain **Refreshing**.
 The value is persisted to the config file
 (`memory.refresh_seconds`) and takes effect immediately — the timer is
 restarted with the new interval. Unlike the other data tabs, the
@@ -1777,7 +1807,9 @@ The PVE configs are read from `/etc/pve/qemu-server` when the GUI host
 runs PVE, and otherwise fetched from the compute node over ssh (the
 same read-only channel the dashboard's version probes use), so
 VM-layer options work on two-node installs too; the note appears only
-when both reads fail. Guest filesystem probing needs the QEMU guest
+when both reads fail — and never on single-node sites without PVE,
+where no VM layer exists at all and the absence is by design, not a
+failure. Guest filesystem probing needs the QEMU guest
 agent inside each VM (installed, enabled with `agent: 1`, and the VM
 running). Each volume's guest disk is identified by a deterministic
 chain: a pinned `serial=` on the PVE disk line first; otherwise the
@@ -2658,7 +2690,8 @@ starting, pausing, resuming, and stopping pool scrubs.
 Columns: **Pool**, **Offsite**, **Health**, **Errors**, **Size**, **Alloc**, **Free**, **Freeing**,
 **Ckpoint**, **Frag**, **Cap**.
 
-Multiple pools can be selected at once (Ctrl+click or Shift+click). Most
+Multiple pools can be selected at once (Ctrl+click or Shift+click;
+Ctrl-click a selected pool to deselect it). Most
 actions operate on every selected row.
 
 **Pool name column:**
@@ -2855,6 +2888,13 @@ scrolls rather than squeezing the tree. The top level lists managed pools
 only — pools that are both registered and online; unregistered pools appear
 solely in the Pool Registry on the Pools tab.
 
+When mounted datasets cannot be reached through their mountpoint paths (bad
+mount order), a warning appears above the tree instead of any repair action
+here: it states how many datasets are affected and points at the
+[Dashboard](#dashboard-tab), whose **Warnings** list names each one and whose
+**Repair Mount Order** action fixes them. The warning re-checks on every
+refresh of this tab and disappears once the repair succeeds.
+
 ### Tree conventions
 
 The dataset tree uses typography to indicate row kind:
@@ -2895,8 +2935,8 @@ parent row.
 
 ### Snapshot and hold actions
 
-The list supports multi-select; action buttons are enabled or disabled
-based on what is selected.
+The list supports multi-select; Ctrl-click a selected row to deselect it.
+Action buttons are enabled or disabled based on what is selected.
 
 | Button                         | Enabled when                                                                                                                          | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -2904,10 +2944,9 @@ based on what is selected.
 | **Delete**                     | Only datasets, snapshots, and/or holds selected                                                                                       | Destroys the selected datasets (`zfs destroy`, with their snapshots and holds listed in the confirmation dialog). Releases the selected hold tags, then destroys the selected snapshots. If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well. If a destroy is refused with "dataset is busy", the job log shows what holds it (an exported VM disk, a hold tag, a leftover transfer, a mounted snapshot folder), and the job panel's answer box offers one plain-language remedy at a time — for an exported VM disk, for example: unplug it now while the VM keeps running, shut the VM down for me first, or do nothing. Scheduled (unattended) jobs print the findings only and keep today's skip-or-fail behavior.                                                                                                                                                           |
 | **Add Hold**                   | At least one snapshot selected                                                                                                        | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                                                                                                                                                                                                                                                      |
 | **Rollback**                   | Exactly one snapshot selected                                                                                                         | Rolls the dataset back to that snapshot (destroys newer snapshots and data updates)                                                                                                                                                                                                                                                                                                                                                              |
-| **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory. Nothing launches silently: a filesystem that is not mounted — or a snapshot whose parent dataset is not mounted — is refused with a logged warning, and so is a dataset whose mountpoint path does not exist even though it reports mounted (an orphaned or shadowed mount); that warning points at Repair Mount Order.                                                                                                                                                                                                                   |
+| **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory. Nothing launches silently: a filesystem that is not mounted — or a snapshot whose parent dataset is not mounted — is refused with a logged warning, and so is a dataset whose mountpoint path does not exist even though it reports mounted (an orphaned or shadowed mount); that warning points at the Dashboard's **Repair Mount Order**.                                                                                                                                                                                                                   |
 | **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. Filesystems with `canmount=off` (including pool roots) can never be mounted either: Mount is disabled for them with an explanatory tooltip, and when a mixed selection is mounted they are skipped with the same gated-skip message as ancestors. Mount is also disabled while a running operation (backup, offsite transfer, or send/receive) holds a conflicting dataset lock on every mountable selected filesystem — the tooltip says so — and any selected item that still cannot be mounted (a lock conflict with a running operation, a failed mount command, or a `canmount=off` filesystem in a mixed selection) is reported in one warning dialog naming the blocking lock holder, never silently dropped. If a selected snapshot's parent dataset is unmounted, a dialog first lists the unmounted parent datasets and the snapshots they block and offers to mount them all: confirming mounts the parents root-first and then the snapshots; cancelling skips the mounts, and the snapshots report the parent-not-mounted warning. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Snapshots of volumes cannot be mounted; Mount is disabled for them with an explanatory tooltip. Disabled for holds.                                         |
 | **Unmount**                    | One or more mounted filesystems, snapshots, volume partitions, or loop-attached volumes selected                                      | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). Unmounting a volume detaches its loop device after unmounting its mounted partitions. If processes are still using an item, a warning dialog lists them and asks you to close them before retrying. Unreachable (orphaned or shadowed) mounts are recovered automatically (see the note below). |
-| **Repair Mount Order**         | Exactly one filesystem or pool-root row selected                                                                                      | Repairs bad mount ordering inside the selected subtree. A warning dialog (Yes/No, No the default so Enter cancels) first states that the repair unmounts and remounts filesystems — their files are briefly inaccessible, and anything using them must be closed — then lists exactly what will happen: which filesystems are unmounted (shadowed covers lifted as needed), the parents-first remount order, and any `canmount=on` corrections on noauto ancestors so the correct order also comes up at boot. Nothing runs without approval; datasets in use abort the repair before any unmount, and a mid-repair failure remounts everything parents-first. The repair then checks every dataset in the set the same way the Dashboard does: it reports success when all are mounted and reachable, otherwise it lists the ones still unreachable or unmounted and names the next step. The Dashboard offers the same repair automatically for every unreachable mount it detects. |
 | **Apply Profile…**             | Exactly one pool/dataset row (filesystem or volume) selected; snapshots, holds, volume partitions, and multi-selections disable it | Shows the workload-profile picker for the selected dataset; the list contains only the profiles whose *applies to* includes the dataset's type (filesystem or volume). A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).          |
 | **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone. The completion summary states what was actually rewritten — the per-dataset file counts captured from `zfs rewrite -v` — and says "rewrote nothing" when the command finished rc=0 without rewriting any file, never a bare "complete". The list of rewritten files goes to the Rewrite Data log (`/var/log/zfsutilities/rewrite-data.log`, in the Logs tab's Miscellaneous list), not to the Messages panel or the session log; the session log names that log for each dataset. Error lines from `zfs rewrite` stay in the session log and are not counted as rewritten files.                   |
 | **Sever Clone**                | At least one selected row is a clone dataset — a volume whose Origin column names a snapshot                                            | Runs `sever-vm-clone` on the selected clone dataset(s) only — never on the unselected disks of the same VM. A typed-confirmation dialog names the selected dataset(s), their origin snapshot(s), and the owning VM(s) (derived from the `vm-<id>-disk-<n>` name), and states that severance is a full copy and that the VM(s) must be stopped for the cutover phase. The script's remaining questions (transfer mode, tight-space holding pool, origin-snapshot destruction) appear as prompts in the log panel, and the tree refreshes when the step finishes. See [Severing a Clone](../user-guide/concepts.md#severing-a-clone) for what severance does and why `zfs promote` is not it.                                  |
@@ -2967,8 +3006,9 @@ Right-click any cell for a context menu:
     Dashboard lists them in **Warnings** and enables **Repair Mount Order**,
     which unmounts the affected set, remounts it parents-first, and sets
     `canmount=on` on noauto ancestors so every later boot mounts parents
-    before children (see the Datasets page's **Repair Mount Order** action
-    for the subtree-scoped variant).
+    before children. The Datasets page points at the same fix: its warning
+    banner names the count and sends you to the Dashboard, where each
+    affected dataset is listed.
 
 ### Mounting ZFS volumes (zvols)
 
@@ -3203,7 +3243,9 @@ for details on the priority tokens.
     automatically creates a session log file in
     `/var/log/zfsutilities/sessions/`. These files capture both
     `file:line`-prefixed `log_msg` output and raw subprocess stdout/stderr
-    (dataset lists, `zfs receive` progress, separator lines, etc.). Use the
+    (dataset lists, `zfs receive` progress, separator lines, etc.). Every
+    stored line carries a `[hostname]` tag right after its timestamp, so a
+    line read anywhere names the host that wrote it. Use the
     [Logs tab](#logs-tab) to browse and search them.
 
     When multiple GUI runners are active at the same time (for example, a Backup

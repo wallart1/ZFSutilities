@@ -13,6 +13,7 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     dataset_name_cell_func,
+    enable_ctrl_click_deselect,
     get_expanded_rows,
     on_row_expanded,
     restore_expanded_rows,
@@ -65,6 +66,7 @@ class PoolWatchWindow(Gtk.Window):
         self.view._zfs_repo = parent_window.ctx.zfs_repository
         self.view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
         self.view.set_enable_tree_lines(True)
+        enable_ctrl_click_deselect(self.view)
 
         ds_columns = [
             ("Name", 0, 300),

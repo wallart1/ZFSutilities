@@ -188,26 +188,155 @@ def _channel_fires(channel, result, run_type):
     return channel.get("types", {}).get(normalize_run_type(run_type), True)
 
 
+def _loginctl_graphical_user():
+    """Return (username, uid) for the active graphical session, or None.
+
+    Asks systemd-logind (``loginctl list-sessions`` / ``show-session``) for
+    a logged-in user session that is active right now and graphical (X11 or
+    Wayland). Unlike the X11 socket owner, this identifies the desktop user
+    on hosts whose display manager runs Xorg as root, works for Wayland
+    sessions, and works from scheduled root runs that carry no launch
+    environment at all. Every failure (missing binary, timeout, odd output)
+    degrades to None.
+    """
+    try:
+        listing = subprocess.run(
+            [
+                "loginctl",
+                "list-sessions",
+                "--no-legend",
+                "--no-ask-password",
+            ],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in listing.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        session_id, uid_text, user = parts[0], parts[1], parts[2]
+        try:
+            uid = int(uid_text)
+        except ValueError:
+            continue
+        if uid == 0:
+            continue
+        try:
+            show = subprocess.run(
+                [
+                    "loginctl",
+                    "show-session",
+                    session_id,
+                    "--no-ask-password",
+                    "-p",
+                    "Class",
+                    "-p",
+                    "State",
+                    "-p",
+                    "Type",
+                ],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        props = {}
+        for prop_line in show.stdout.splitlines():
+            key, sep, value = prop_line.partition("=")
+            if sep:
+                props[key.strip()] = value.strip()
+        if (
+            props.get("Class") == "user"
+            and props.get("State") == "active"
+            and props.get("Type") in ("x11", "wayland")
+        ):
+            return user, uid
+    return None
+
+
+def _user_session(name=None, uid=None):
+    """Return (username, bus_path, display) when the user has a live session bus.
+
+    Resolves *name* (or *uid*) through /etc/passwd and requires the user's
+    session bus (/run/user/<uid>/bus) to exist — the proof the desktop
+    session is live. Returns None otherwise.
+    """
+    pwentry = None
+    if name is not None:
+        try:
+            pwentry = pwd.getpwnam(name)
+        except KeyError:
+            pass
+    elif uid is not None:
+        try:
+            pwentry = pwd.getpwuid(uid)
+        except KeyError:
+            pass
+    if pwentry is None:
+        return None
+    display = (os.environ.get("DISPLAY") or ":0").split(".")[0]
+    bus = f"/run/user/{pwentry.pw_uid}/bus"
+    if not os.path.exists(bus):
+        return None
+    return pwentry.pw_name, bus, display
+
+
 def _resolve_desktop_user():
     """Return (username, bus_path, display) for the desktop session, or None.
 
-    Prefers an explicit override (ZFSUTILITIES_NOTIFICATION_DESKTOP_USER),
-    then SUDO_USER (the GUI runs as root via sudo), then the owner of the
-    X11 display socket — mirroring lib/desktop-launcher-lib.sh. Requires a
-    live session bus (/run/user/<uid>/bus); a host with no logged-in
-    desktop session returns None and desktop notifications are skipped.
+    Candidates are tried in order, each requiring a live session bus
+    (/run/user/<uid>/bus):
+
+    1. An explicit override (ZFSUTILITIES_NOTIFICATION_DESKTOP_USER).
+    2. PKEXEC_UID — set by pkexec, which elevates the GUI on its normal
+       launch path (main.py re-exec); sudo never sets it and pkexec never
+       sets SUDO_USER, so the two cover disjoint launches. Root (0) is not
+       a desktop user and is ignored.
+    3. SUDO_USER — the GUI or a run started from a sudo terminal.
+    4. The active graphical session reported by loginctl — the socket
+       owner below cannot identify the user on hosts whose display manager
+       runs Xorg as root, and scheduled root runs carry no launch
+       environment at all.
+    5. The owner of the X11 display socket — mirroring
+       lib/desktop-launcher-lib.sh; correct only where X runs as the
+       logged-in user.
+
+    A host with no resolvable logged-in desktop session returns None and
+    desktop notifications are skipped.
     """
-    user = os.environ.get("ZFSUTILITIES_NOTIFICATION_DESKTOP_USER") or os.environ.get("SUDO_USER")
-    if user:
+    override = os.environ.get("ZFSUTILITIES_NOTIFICATION_DESKTOP_USER")
+    if override:
+        found = _user_session(name=override)
+        if found is not None:
+            return found
+    pkexec_uid = os.environ.get("PKEXEC_UID")
+    if pkexec_uid:
         try:
-            pwentry = pwd.getpwnam(user)
-        except KeyError:
-            pwentry = None
-        if pwentry is not None:
-            display = (os.environ.get("DISPLAY") or ":0").split(".")[0]
-            bus = f"/run/user/{pwentry.pw_uid}/bus"
-            if os.path.exists(bus):
-                return pwentry.pw_name, bus, display
+            uid = int(pkexec_uid)
+        except ValueError:
+            uid = 0
+        if uid:
+            found = _user_session(uid=uid)
+            if found is not None:
+                return found
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        found = _user_session(name=sudo_user)
+        if found is not None:
+            return found
+    graphical = _loginctl_graphical_user()
+    if graphical is not None:
+        found = _user_session(name=graphical[0])
+        if found is not None:
+            return found
     display = (os.environ.get("DISPLAY") or ":0").split(".")[0]
     display_num = display.lstrip(":")
     try:
@@ -216,14 +345,7 @@ def _resolve_desktop_user():
         return None
     if uid == 0:
         return None
-    try:
-        pwentry = pwd.getpwuid(uid)
-    except KeyError:
-        return None
-    bus = f"/run/user/{pwentry.pw_uid}/bus"
-    if not os.path.exists(bus):
-        return None
-    return pwentry.pw_name, bus, display
+    return _user_session(uid=uid)
 
 
 def _desktop_command(user, bus, display, summary, body, icon, urgency):

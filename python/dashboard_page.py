@@ -27,6 +27,7 @@ from gui_helpers import (
     attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     set_column_header_tooltip,
     set_monospace_font,
 )
@@ -327,6 +328,7 @@ def _get_pool_health(repo=None, config=None):
     Each dict contains: name, health, cap, cap_int, scrub_date, status_errors,
     ckpoint. With *config*, only managed pools (registered AND online) are
     returned; unregistered pools are shown solely in the Pool Registry.
+    Pools are returned sorted by name, ignoring case.
     Returns None if the command fails or times out.
     """
     repo = repo or get_default_repository()
@@ -338,6 +340,7 @@ def _get_pool_health(repo=None, config=None):
     if config is not None:
         managed = set(get_managed_pool_names(config, [row.name for row in rows]))
         rows = [row for row in rows if row.name in managed]
+    rows.sort(key=lambda row: (row.name.casefold(), row.name))
     for row in rows:
         cap_int = _parse_cap(row.cap)
         scrub_date = _get_scrub_date(row.name, repo=repo)
@@ -1608,6 +1611,7 @@ def create_dashboard_page(app):
     app.dashboard_tasks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.dashboard_tasks_view.set_headers_visible(True)
     app.dashboard_tasks_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(app.dashboard_tasks_view)
 
     for col_idx, title_text, width, header_tip in [
         (
@@ -1668,6 +1672,7 @@ def create_dashboard_page(app):
     app.dashboard_locks_view = Gtk.TreeView(model=app.dashboard_locks_store)
     app.dashboard_locks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.dashboard_locks_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(app.dashboard_locks_view)
 
     for col_idx, title_text, width, header_tip in [
         (0, "Dataset", 180, "The dataset the lock protects."),

@@ -37,7 +37,9 @@ from gui_helpers import (
     attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     handle_editing_key_press,
+    run_dialog,
     set_button_markup,
     set_column_header_tooltip,
     set_page_tab_attention,
@@ -178,6 +180,7 @@ def create_checkagainst_page(app):
     tv = Gtk.TreeView(model=app._ca_store)
     tv.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     tv.set_reorderable(True)
+    enable_ctrl_click_deselect(tv)
     app._ca_view = tv
 
     for col_idx in (COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT):
@@ -247,6 +250,7 @@ def _build_readonly_treeview(store, state_key):
     tv = Gtk.TreeView(model=store)
     tv.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     tv.set_reorderable(False)
+    enable_ctrl_click_deselect(tv)
 
     for col_idx in (COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT):
         renderer = Gtk.CellRendererText()
@@ -731,13 +735,13 @@ def _show_add_pair_assistant(app):
             buttons=Gtk.ButtonsType.OK,
             text=msg,
         )
-        err_dlg.run()
+        run_dialog(err_dlg)
         err_dlg.destroy()
 
     dlg.show_all()
 
     while True:
-        response = dlg.run()
+        response = run_dialog(dlg)
         if response != Gtk.ResponseType.OK:
             break
 

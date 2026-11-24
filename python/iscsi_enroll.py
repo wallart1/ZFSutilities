@@ -22,6 +22,7 @@ from backup_config import log_msg
 from command_builders import BashStep
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
+from gui_helpers import run_dialog
 from path_utils import resolve_local_bin
 from pools_page import on_pools_refresh
 from runner_factory import new_dataset_action_runner
@@ -126,7 +127,7 @@ def _show_enroll_dialog(app, pool_name: str, default_short: str) -> str | None:
     content.add(entry)
     dialog.show_all()
     try:
-        response = dialog.run()
+        response = run_dialog(dialog)
         if response != Gtk.ResponseType.YES:
             return None
         text = entry.get_text()

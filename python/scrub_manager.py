@@ -362,7 +362,7 @@ def start_scrub(pool_name: str, repo=None) -> bool:
         repo=repo,
     ):
         return False
-    log_msg(f"INFO: Starting scrub on pool '{pool_name}'")
+    log_msg(f"INFO: Starting scrub on '{pool_name}'")
     try:
         if repo.start_scrub(pool_name, timeout=30):
             log_msg(f"INFO: Scrub started on '{pool_name}'")
@@ -383,7 +383,7 @@ def pause_scrub(pool_name: str, repo=None) -> bool:
         repo=repo,
     ):
         return False
-    log_msg(f"INFO: Pausing scrub on pool '{pool_name}'")
+    log_msg(f"INFO: Pausing scrub on '{pool_name}'")
     if _transition_scrub_verified(pool_name, "pause", repo, log_msg):
         log_msg(f"INFO: Scrub paused on '{pool_name}'")
         return True
@@ -399,7 +399,7 @@ def resume_scrub(pool_name: str, repo=None) -> bool:
         repo=repo,
     ):
         return False
-    log_msg(f"INFO: Resuming scrub on pool '{pool_name}'")
+    log_msg(f"INFO: Resuming scrub on '{pool_name}'")
     if _transition_scrub_verified(pool_name, "resume", repo, log_msg):
         log_msg(f"INFO: Scrub resumed on '{pool_name}'")
         return True
@@ -415,7 +415,7 @@ def stop_scrub(pool_name: str, repo=None) -> bool:
         repo=repo,
     ):
         return False
-    log_msg(f"INFO: Stopping scrub on pool '{pool_name}'")
+    log_msg(f"INFO: Stopping scrub on '{pool_name}'")
     try:
         if repo.stop_scrub(pool_name, timeout=30):
             log_msg(f"INFO: Scrub stopped on '{pool_name}'")
@@ -592,9 +592,9 @@ def pause_scrubs_for_pools(
             _emit(_log, f"INFO: Dry-run: would pause scrub on '{name}'")
             paused.append(name)
             continue
-        _emit(_log, f"VERB: Pausing scrub on '{name}'")
+        _emit(_log, f"INFO: Pausing scrub on '{name}'")
         if _transition_scrub_verified(name, "pause", repo, lambda msg: _emit(_log, msg)):
-            _emit(_log, f"VERB: Scrub paused on '{name}'")
+            _emit(_log, f"INFO: Scrub paused on '{name}'")
             paused.append(name)
 
     if not dry_run and paused:
@@ -652,9 +652,9 @@ def resume_scrubs_for_pools(
                 )
             continue
         if info.state == ScrubState.PAUSED:
-            _emit(_log, f"VERB: Resuming scrub on '{name}'")
+            _emit(_log, f"INFO: Resuming scrub on '{name}'")
             if _transition_scrub_verified(name, "resume", repo, lambda msg: _emit(_log, msg)):
-                _emit(_log, f"VERB: Scrub resumed on '{name}'")
+                _emit(_log, f"INFO: Scrub resumed on '{name}'")
                 resumed.append(name)
         elif info.state == ScrubState.SCANNING:
             _emit(_log, f"VERB: Scrub on '{name}' is already running; no resume needed")
@@ -1013,7 +1013,7 @@ class ScrubQueue:
         return False
 
     def _report_external_scrub(self, pool_name: str):
-        """Log an externally-started scrub once per episode, at VERB level.
+        """Log an externally-started scrub once per episode, at INFO level.
 
         The flag is in-memory only: it must survive ``reload()`` and disk-state
         clobbering by other ScrubQueue instances within this process's lifetime,
@@ -1022,7 +1022,7 @@ class ScrubQueue:
         if pool_name in self._external_reported:
             return
         self._external_reported.add(pool_name)
-        log_msg(f"VERB: External scrub detected on '{pool_name}'")
+        log_msg(f"INFO: Scrub started on '{pool_name}' (external)")
 
     def tick(self, states: dict[str, ScrubInfo]):
         """Reconcile queue against live zpool status and target.
@@ -1052,7 +1052,7 @@ class ScrubQueue:
                 # External pause detected (e.g., user ran zpool scrub -p).
                 # Treat it like a user-initiated pause so the queue does not
                 # auto-resume it.
-                log_msg(f"VERB: External pause detected on '{pool_name}'")
+                log_msg(f"INFO: Scrub paused on '{pool_name}' (external)")
                 self.active.discard(pool_name)
                 self.paused.add(pool_name)
                 self.paused_by_user.add(pool_name)
@@ -1061,7 +1061,7 @@ class ScrubQueue:
                 started_at = self._start_times.get(pool_name)
                 if started_at and time.time() - started_at < 30:
                     continue  # Grace period — don't transition yet
-                log_msg(f"INFO: Scrub completed on '{pool_name}'")
+                log_msg(f"INFO: Scrub finished on '{pool_name}'")
                 self.active.discard(pool_name)
                 self.finished.add(pool_name)
 
@@ -1076,22 +1076,27 @@ class ScrubQueue:
                 continue
             self._missing_counts.pop(pool_name, None)
             if info.state == ScrubState.FINISHED:
-                log_msg(f"INFO: Paused scrub finished on '{pool_name}'")
+                log_msg(f"INFO: Scrub finished on '{pool_name}' (was paused)")
                 self.paused.discard(pool_name)
                 self.paused_by_user.discard(pool_name)
                 self.finished.add(pool_name)
             elif info.state == ScrubState.CANCELED:
-                log_msg(f"INFO: Paused scrub canceled on '{pool_name}'")
+                log_msg(f"INFO: Scrub canceled on '{pool_name}' (was paused)")
                 self.paused.discard(pool_name)
                 self.paused_by_user.discard(pool_name)
                 self.finished.add(pool_name)
             elif info.state == ScrubState.NONE:
+                # The scrub went away without a completion record (stopped
+                # while paused, or the pool's scan line was reset).  Same
+                # bucket move as the finished/canceled cases, and it must be
+                # logged like them — a silent transition reads as a hang.
+                log_msg(f"INFO: Scrub ended on '{pool_name}' (was paused)")
                 self.paused.discard(pool_name)
                 self.paused_by_user.discard(pool_name)
                 self.finished.add(pool_name)
             elif info.state == ScrubState.SCANNING:
                 # Externally resumed
-                log_msg(f"VERB: External resume detected on '{pool_name}'")
+                log_msg(f"INFO: Scrub resumed on '{pool_name}' (external)")
                 self.paused.discard(pool_name)
                 self.paused_by_user.discard(pool_name)
                 self.active.add(pool_name)
@@ -1127,7 +1132,7 @@ class ScrubQueue:
             elif info.state == ScrubState.PAUSED:
                 # Externally paused pool that the queue was not tracking.
                 # Treat it as user-paused so it stays paused.
-                log_msg(f"VERB: External pause detected on '{pool_name}'")
+                log_msg(f"INFO: Scrub paused on '{pool_name}' (external)")
                 self.paused.add(pool_name)
                 self.paused_by_user.add(pool_name)
             elif info.state in (ScrubState.FINISHED, ScrubState.CANCELED):
@@ -1239,7 +1244,7 @@ class ScrubQueue:
                 # A new scrub was started on this pool
                 self.finished.discard(pool_name)
                 self.active.add(pool_name)
-                log_msg(f"INFO: New scrub detected on '{pool_name}'")
+                log_msg(f"INFO: Scrub started on '{pool_name}' (external)")
 
         # Heal stale paused_by_user entries (e.g., left behind when a pool was
         # re-queued or finished without clearing the user-pause flag).

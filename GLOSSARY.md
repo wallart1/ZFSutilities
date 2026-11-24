@@ -109,6 +109,15 @@ from the dev host (the guests' time authority). A forward-only fence
 (the `itf_guest_time_*` helpers in `guest-lib.sh`) refuses any backward
 or lateral jump after that first deliberate rewind, so a walk can only
 age forward. Related: world variant.
+## compositing
+
+A desktop feature that lets the window manager draw windows with
+transparency. The GUI's modal-dialog dimming fades every other window
+while a dialog is open, and that fade is an opacity effect, so it needs
+a compositing manager — enabled by default on Cinnamon and most Linux
+desktops. Without compositing the dimming silently does nothing: the
+other windows stay at full appearance and the dialog still blocks input
+normally.
 
 ## config version
 
@@ -156,6 +165,15 @@ the 2026-10-27 incident class — the node silently coming up with 3 of 33
 LUNs mapped while every gate passed — is dead: nothing silent, nothing
 destroyed, one clean recovery.
 
+## conveyance self-test
+
+A SMART self-test mode (`smartctl -t conveyance`) that checks for damage
+incurred while a drive was being transported — meant for newly received
+or recently moved drives, and typically minutes long. A drive supports
+it only when its firmware implements the test: `smartctl -c` prints the
+conveyance recommended polling time only for supporting drives, so the
+Disk Inventory's Surface Test dialog offers the option only then.
+
 ## counterpart dataset
 
 The "other side" of a backup relationship. For every snapshot slated for
@@ -168,14 +186,17 @@ store exists only on the destination, and an archived VM's live datasets
 are gone while their backups remain. An absent counterpart protects
 nothing, so it never blocks deletion on its own.
 
-## conveyance self-test
+## D-state
 
-A SMART self-test mode (`smartctl -t conveyance`) that checks for damage
-incurred while a drive was being transported — meant for newly received
-or recently moved drives, and typically minutes long. A drive supports
-it only when its firmware implements the test: `smartctl -c` prints the
-conveyance recommended polling time only for supporting drives, so the
-Disk Inventory's Surface Test dialog offers the option only then.
+A process sleeping so deeply that nothing can interrupt it — the state
+letter `D` in `ps` output (`uninterruptible sleep`). It happens when a
+process waits on the kernel itself, most famously on a ZFS ioctl that
+cannot complete: `zpool export` on a pool whose zvol backs a live iSCSI
+LUN session sits in D-state until the holder goes away, and no kill —
+not even SIGKILL, not even a subprocess timeout — can reclaim it. This
+is why the GUI's export fence is a bounded *wait* (stop waiting, keep
+the window alive) rather than a kill, and why the recovery removes the
+holder instead of disciplining the command.
 
 ## dataset action
 
@@ -234,18 +255,6 @@ must be a file inside a deployed tree — deploy-version copies `bin/
 lib/ python/ docs/ share/ VERSION` only, so a repo-root file
 (README.md) can never be the deleted file, while a docs/ file can. The
 upgrade ITF journeys exercise the classification live.
-
-## D-state
-
-A process sleeping so deeply that nothing can interrupt it — the state
-letter `D` in `ps` output (`uninterruptible sleep`). It happens when a
-process waits on the kernel itself, most famously on a ZFS ioctl that
-cannot complete: `zpool export` on a pool whose zvol backs a live iSCSI
-LUN session sits in D-state until the holder goes away, and no kill —
-not even SIGKILL, not even a subprocess timeout — can reclaim it. This
-is why the GUI's export fence is a bounded *wait* (stop waiting, keep
-the window alive) rather than a kill, and why the recovery removes the
-holder instead of disciplining the command.
 
 ## dp module identity
 
@@ -490,6 +499,16 @@ with guest records is a lab that may still exist is exactly what
 teardown deletes records only together with their guests), "the
 distinction is load-bearing" (ACL entry: mapped-LUN grants vs TPG
 mappings). Spotting one is a wrap-up finding in itself.
+
+## loginctl
+
+The `loginctl` command queries systemd-logind, the part of the system
+that tracks who is logged in where. The desktop-notification resolver
+uses it as a fallback: when the process carrying a notification has no
+launch hints about the desktop user (a scheduled root run, or a GUI
+elevated through pkexec), `loginctl list-sessions` / `show-session`
+report the active graphical session (X11 or Wayland) and thereby the
+user whose notification daemon should receive the bubble.
 
 ## loop device
 

@@ -41,7 +41,6 @@ from dataset_actions import (
     on_datasets_delete,
     on_datasets_hold,
     on_datasets_mount,
-    on_datasets_repair_mount_order,
     on_datasets_rollback,
     on_datasets_show_big_stuff,
     on_datasets_snapshot,
@@ -515,16 +514,6 @@ PAGE_SPECS = {
             ("Mount", "media-mount", "_ds_mount_btn", "Mount the selected dataset."),
             ("Unmount", "media-eject", "_ds_unmount_btn", "Unmount the selected dataset."),
             (
-                "Repair Mount Order",
-                "system-run",
-                "_ds_repair_mount_order_btn",
-                (
-                    "Reorder legacy mounts of the selected dataset's family so children "
-                    "mount after parents. The repair unmounts and remounts the affected "
-                    "datasets and asks for confirmation first."
-                ),
-            ),
-            (
                 "Apply Profile…",
                 "dialog-apply",
                 "_ds_apply_profile_btn",
@@ -916,7 +905,6 @@ ACTION_HANDLERS = {
         "Browse": on_datasets_browse,
         "Mount": on_datasets_mount,
         "Unmount": on_datasets_unmount,
-        "Repair Mount Order": on_datasets_repair_mount_order,
         "Apply Profile…": on_datasets_apply_profile,
         "Rewrite Data": on_datasets_rewrite_data,
         "Sever Clone": on_datasets_sever_clone,

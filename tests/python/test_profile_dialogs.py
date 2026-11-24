@@ -224,6 +224,9 @@ class FakePickerTreeView:
         self.model = model
         self._selection = FakeSingleSelection(model)
         self.columns = []
+        # Signal connections the product wires on every view, recorded
+        # (signal, handler) so tests can assert on them.
+        self.connections = []
 
     def set_grid_lines(self, *_args):
         pass
@@ -233,8 +236,9 @@ class FakePickerTreeView:
     def set_has_tooltip(self, *_args):
         pass
 
-    def connect(self, *_args, **_kwargs):
-        pass
+    def connect(self, signal, handler, *extra):
+        self.connections.append((signal, handler, *extra))
+        return len(self.connections)
 
     def get_selection(self):
         return self._selection

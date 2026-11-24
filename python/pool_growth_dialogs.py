@@ -42,6 +42,8 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_scrolled_dialog,
+    enable_ctrl_click_deselect,
+    run_dialog,
     set_action_tooltip,
     set_column_header_tooltip,
 )
@@ -870,7 +872,7 @@ def _show_info_dialog(parent, text: str, secondary: str = "") -> None:
     )
     if secondary:
         dialog.format_secondary_text(secondary)
-    dialog.run()
+    run_dialog(dialog)
     dialog.destroy()
 
 
@@ -885,7 +887,7 @@ def _show_yes_no_dialog(parent, text: str, secondary: str = "") -> bool:
     )
     if secondary:
         dialog.format_secondary_text(secondary)
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     return response == Gtk.ResponseType.YES
 
@@ -1003,7 +1005,7 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
     try:
         while True:
             _refresh()
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,
@@ -1145,6 +1147,7 @@ def _build_target_tree(
     _populate_target_store(store, state, caps, gate_raidz=gate_raidz, detach_targets=detach_targets)
     view = Gtk.TreeView(model=store)
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    enable_ctrl_click_deselect(view)
     view.get_selection().connect("changed", _on_target_changed, store, state, on_change)
 
     for title, column_index, width, tooltip in (
@@ -1268,7 +1271,7 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
     try:
         while True:
             _refresh()
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,
@@ -1291,7 +1294,7 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
                         text=primary,
                     )
                     warn.format_secondary_text(secondary)
-                    answer = warn.run()
+                    answer = run_dialog(warn)
                     warn.destroy()
                     if answer != Gtk.ResponseType.YES:
                         continue
@@ -1400,7 +1403,7 @@ def show_replace_dialog(app, pools, topologies, eligibility, disks, preselected_
     try:
         while True:
             _refresh()
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,
@@ -1513,7 +1516,7 @@ def show_detach_dialog(app, pools, topologies, disks, preselected_pool):
     try:
         while True:
             _refresh()
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,
@@ -1638,7 +1641,7 @@ def show_add_infra_vdev_dialog(app, pools, eligibility, preselected_pool):
     try:
         while True:
             _refresh()
-            response = dialog.run()
+            response = run_dialog(dialog)
             if response in (
                 Gtk.ResponseType.CANCEL,
                 Gtk.ResponseType.DELETE_EVENT,

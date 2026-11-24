@@ -211,6 +211,22 @@ class TestGetPoolHealth(unittest.TestCase):
         # health grid never lists it.
         self.assertEqual([p["name"] for p in pools], ["tank"])
 
+    def test_pools_sorted_case_insensitive_by_name(self):
+        with mock_subprocess() as m:
+            # zpool list emits case-sensitive ASCII order (uppercase first);
+            # the health grid must sort by name ignoring case.
+            m.set_command_handler(
+                r"zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid",
+                lambda *_a, **_k: m._completed(
+                    "Boot\tONLINE\t10T\t5T\t5T\t50%\t-\t9988776655\n"
+                    "archive\tONLINE\t10T\t5T\t5T\t50%\t-\t1234567890\n"
+                    "vm\tONLINE\t10T\t5T\t5T\t50%\t-\t1111111111\n"
+                ),
+            )
+            m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(""))
+            pools = dp._get_pool_health()
+        self.assertEqual([p["name"] for p in pools], ["archive", "Boot", "vm"])
+
 
 class TestGetRecentEntries(unittest.TestCase):
     @patch("dashboard_page.load_history")

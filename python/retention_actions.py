@@ -18,7 +18,7 @@ from backup_config import (
 from command_builders import BashStep, _dryrun_assignments
 from feature_config import get_managed_pool_names, non_managed_pool_names
 from gi.repository import Gtk
-from gui_helpers import show_error
+from gui_helpers import run_dialog, show_error
 from retention_page import (
     BUCKET_LABELS,
     _imported_pool_rows,
@@ -97,7 +97,7 @@ def on_retention_add_policy(app, ctx):
     content.add(note)
 
     dlg.show_all()
-    response = dlg.run()
+    response = run_dialog(dlg)
     pool = entry.get_text().strip()
     dlg.destroy()
 
@@ -145,7 +145,7 @@ def on_retention_remove_policy(app, ctx):
         "The pool will be removed from the Prune list and will fall back to "
         "the default retention policy."
     )
-    response = dlg.run()
+    response = run_dialog(dlg)
     dlg.destroy()
     if response != Gtk.ResponseType.YES:
         return
@@ -353,7 +353,7 @@ def on_retention_add_bucket(app, ctx):
     content.add(entry)
 
     dlg.show_all()
-    response = dlg.run()
+    response = run_dialog(dlg)
     bucket_name = entry.get_text().strip().lower()
     dlg.destroy()
 

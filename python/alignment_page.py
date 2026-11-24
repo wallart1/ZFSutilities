@@ -73,6 +73,7 @@ from gui_helpers import (  # noqa: F401
     attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     note_label,
     section_header,
     set_column_header_tooltip,
@@ -354,7 +355,9 @@ def _availability_note(sample):
             "per-dataset I/O counters (OpenZFS 2.2+ objset kstats — observed-size "
             "advice stays per-pool)"
         )
-    if not sample.pve_available:
+    # pve_applicable gates the PVE entry: a single-node site without PVE
+    # has no VM layer by design — nothing to report as missing.
+    if not sample.pve_available and sample.pve_applicable:
         missing.append("PVE VM configs (the local /etc/pve and the compute-node fetch both failed)")
     notes = []
     if missing:
@@ -439,6 +442,7 @@ def _table(
     store = Gtk.ListStore(*([str] * (len(columns) + 1 if hidden_key else len(columns))))
     view = Gtk.TreeView(model=store)
     view.set_headers_visible(True)
+    enable_ctrl_click_deselect(view)
     offset = 1 if hidden_key else 0
     for index, (title, width) in enumerate(columns):
         renderer = Gtk.CellRendererText()
@@ -546,10 +550,7 @@ def create_alignment_view(app):
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
     box.pack_start(
-        section_header(
-            "Alignment — Block Size Chain",
-            "device → pool → dataset → VM · advisory only",
-        ),
+        section_header("Alignment — Block Size Chain"),
         False,
         False,
         0,
@@ -993,6 +994,8 @@ def _vm_detail(sample, ds):
     option = sample.vm_disks.get(short)
     if option is None:
         if not sample.pve_available:
+            if not sample.pve_applicable:
+                return "no PVE at this site"
             return "PVE configs unreadable (local directory and compute-node fetch both failed)"
         return "not referenced in PVE configs"
     opts = " ".join(

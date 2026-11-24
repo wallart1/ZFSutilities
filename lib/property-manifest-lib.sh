@@ -40,8 +40,12 @@
 # share.
 #
 # The manifest dataset itself is snapshotted once per generation under
-# the same generation snapname as the data, so the existing cleanup /
-# zfsoffsiteretain retention prunes it in lockstep — no new pruning code.
+# the same generation snapname as the data, so ordinary snapshot
+# retention prunes it in lockstep: pool-mode cleanup and zfsoffsiteretain
+# enumerate it like any dataset, and the GUI backup prune step names the
+# store explicitly. The manifest FILES are pruned by
+# propmanifest_prune_files, invoked from retain(): a file lives exactly as
+# long as its generation snapshot on the store.
 #
 # Contract: every failure is a WARN and rc 0. A manifest problem never
 # fails a backup. Writes and the generation snapshot run under a write
@@ -203,6 +207,69 @@ function propmanifest_snapshot {
         return 0
     fi
     log_msg "VERB: Snapshot $mds$snap holds this generation's property manifests."
+}
+
+# Prune manifest files whose generation snapshot no longer exists on the
+# manifest dataset. Snapshot retention prunes the store's snapshots like
+# any dataset's; this sweep keeps the files in lockstep — a file
+# outliving its snapshot is dead weight (replay's fallback only ever
+# wants the newest file). Runs under the CALLER's write lock on the
+# manifest dataset (retain holds it); mounts via propmanifest_mount and
+# unmounts at the end (propmanifest_finish) when this library did the
+# mounting. Dry-run aware; WARN-only, rc 0 always (the lib's contract).
+# Usage: propmanifest_prune_files <manifest-ds>
+function propmanifest_prune_files {
+    local mds="$1"
+    local mnt listing rc line fname snap removed=0
+    local -A live=()
+
+    propmanifest_mount "$mds"
+    mnt="$_propmanifest_mnt"
+    if [[ -z "$mnt" ]]; then
+        return 0
+    fi
+    rc=0
+    listing=$(zfs list -H -t snapshot -o name -d 1 "$mds" 2>/dev/null) || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        log_msg "WARN: Cannot list snapshots of $mds — property-manifest" \
+            "file prune skipped."
+        propmanifest_finish
+        return 0
+    fi
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && live["$line"]=1
+    done <<< "$listing"
+
+    for fname in "$mnt"/*@*; do
+        [[ -f "$fname" ]] || continue
+        fname="${fname##*/}"
+        # Capture's in-flight temp files are not generation manifests.
+        [[ "$fname" == .tmp.* ]] && continue
+        snap="${fname##*@}"
+        [[ -n "${live["$mds@$snap"]+x}" ]] && continue
+        if [[ ${dryrun:-N} != 'N' ]]; then
+            log_msg "INFO: Would: remove stale property manifest $fname from $mds."
+            removed=$((removed + 1))
+            continue
+        fi
+        if rm -f "$mnt/$fname"; then
+            log_msg "VERB: Removed stale property manifest $fname from $mds."
+            removed=$((removed + 1))
+        else
+            # The lib's contract: every failure WARNs (a read-only store
+            # refuses the delete); the file stays for the next sweep.
+            log_msg "WARN: Could not remove stale property manifest $fname from $mds."
+        fi
+    done
+    if [[ $removed -gt 0 ]]; then
+        if [[ ${dryrun:-N} != 'N' ]]; then
+            log_msg "INFO: Would: prune $removed stale property manifests from $mds."
+        else
+            log_msg "INFO: Pruned $removed stale property manifests from $mds."
+        fi
+    fi
+    propmanifest_finish
+    return 0
 }
 
 # Capture one dataset's local properties into the manifest store under

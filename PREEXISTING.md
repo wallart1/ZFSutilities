@@ -1,39 +1,6 @@
 # This file is maintained by AI coding agents. It contains open pre-existing (out-of-scope) items that it discovers in the course of other development activies.
 
 ---
-## Stale `sudo switch-version` transcript markers in the upgrade journeys
-
-Commit 4b232a4 changed the product's printed activation hints to
-absolute paths (`bin/upgrade-zfsutilities:636-643`), but the upgrade
-journeys' transcript markers still grep the old text: j10:182,
-j12:315, j19:136/261, j23:348-349/523-524, and j25:785-786 expect
-"this host:  sudo switch-version ..." / "ssh root@... switch-version
-..." — forms the current product never prints. Fresh runs of these
-journeys would fail those assertions (the activation commands
-themselves, e.g. j23:419-423 and j25:907-911, already use the
-absolute-path form). Fix: update the markers to the absolute-path
-prints.
-
-## Stale "FAILED+DRIFT" verdict wording in journeys/README.md and the j18 header
-
-`tests/integrated/journeys/README.md:187` and the j18 journey header
-(lines 25-26) still describe the keys-absent boot oracle as
-"FAILED+DRIFT". Since repair-plan 027 the asserted verdict is PENDING
-(`post-restore verification PENDING` + per-LUN DRIFT —
-`journeys/common.sh:2516`, j15:178, two-node-config.md:344-360), and
-j15/j18/j25 all assert PENDING. Fix: reword both to the PENDING
-verdict.
-
-## tests/integrated/README.md staleness: profiles and run-lock entry points
-
-Two stale spots in `tests/integrated/README.md`: the Layout-table row
-for `lib/template-lib.sh` names two template profiles ("storage
-profile ... and compute profile") although three are committed (the
-ubuntu probe profile builds on the storage base); and the run-lock
-paragraph says "`journey run` and `template build` take a machine-wide
-flock" although `itf vmimage build` also takes the lock and the orphan
-fence (driver itf:475-494). Fix: say all three profiles; include
-vmimage build.
 
 ## Full-suite load failure: snapshot-dialog tooltip test (repeat offender)
 
@@ -98,5 +65,30 @@ two entries above. Fix: patch the holds-file call site
 (`python/pool_migrate_dialogs.py:2104`) instead of the `tempfile` module
 attribute, or scope the redirect to calls whose prefix matches
 `migrate-holds-`, so zlm's `.lock-` staging is never redirected.
+
+---
+
+## stewie: desktop menu entry points at a nonexistent launcher
+
+`/usr/share/applications/zfsutilities.desktop` on stewie has
+`Exec=/usr/local/bin/zfsutilities-gui`, which does not exist there
+(verified 2026-11-17; the dev host's entry points at
+`/usr/local/lib/zfsutilities/bin/zfsutilities-gui`, which does exist).
+The GUI is still reachable on stewie via the home-directory
+`ZFSutilities GUI` link. The repo does not install or manage
+`.desktop` files, so this is site state, not a repo bug. Discovered
+during the desktop-notification resolution fix (2026-11-17).
+
+---
+
+## tests/test-logging: `source ~/bashinit` loads whatever lane `~` points at
+
+Several older tests in `tests/test-logging` re-source `~/bashinit` inside
+their subshells. `/home/dan/bashinit` is a symlink into the **pub** lane
+tree (`zfsutilities-pub`), so those tests exercise pub's `bashinit`, not
+this repo's copy — they pass today only because both lanes' logging
+behavior matches for the asserted features. New tests must source
+`"$mydir/bin/bashinit"` instead (as `test_log_msg_log_file_carries_host_tag`
+does). Discovered during the log hostname-tag work (2026-11-18).
 
 ---

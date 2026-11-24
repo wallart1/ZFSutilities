@@ -320,7 +320,7 @@ sequenceDiagram
 
 #### Single-writer session log
 
-`ZFSUTILITIES_LOG_INHERIT=Y` is the critical switch. When present in a subprocess's environment, `bashinit` does **not** create its own session log; instead, bash `log_msg` writes only to stderr. The Python runner reads stderr (and stdout) from the subprocess pipe and appends every line to the session log file with a timestamp prefix. This guarantees:
+`ZFSUTILITIES_LOG_INHERIT=Y` is the critical switch. When present in a subprocess's environment, `bashinit` does **not** create its own session log; instead, bash `log_msg` writes only to stderr. The Python runner reads stderr (and stdout) from the subprocess pipe and appends every line to the session log file with a timestamp prefix and a `[hostname]` tag naming the host that wrote it. This guarantees:
 
 1. **No duplicate lines** — Both bash and Python log output appear exactly once.
 2. **Raw output preserved** — `zfs receive` progress lines and separator lines are written to the session log even though they are not `log_msg` calls. `pv` rate output is captured for the GUI status bar but is not written to the session log.
@@ -472,9 +472,9 @@ for that log. Bash subprocesses receive `ZFSUTILITIES_LOG_INHERIT=Y` via their
 environment. `bashinit` sees that flag and skips creating its own session log,
 writing only to stderr. The Python runner reads raw stdout/stderr from the
 subprocess pipes and writes every line to the session log file with a timestamp
-prefix. This prevents duplicate lines and ensures that raw output (dataset
-lists, `zfs receive` progress, separator lines, etc.) is preserved alongside
-`log_msg` output.
+prefix and a `[hostname]` tag. This prevents duplicate lines and ensures that
+raw output (dataset lists, `zfs receive` progress, separator lines, etc.) is
+preserved alongside `log_msg` output.
 
 Cron launches fence the runner's own output streams onto `/dev/null` once the
 session log exists, so the weekly cron log receives only the failures that

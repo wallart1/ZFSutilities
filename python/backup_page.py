@@ -35,6 +35,7 @@ from gui_helpers import (
     add_var_row,
     bold_label,
     refuse_non_managed_pool_endpoints,
+    run_dialog,
     show_warning_dialog,
     style_expander_label,
     style_var_widgets_nondefault,
@@ -648,7 +649,7 @@ def on_backup_run(app, ctx):
         dialog.add_button("Generate", Gtk.ResponseType.APPLY)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("OK", Gtk.ResponseType.OK)
-        response = dialog.run()
+        response = run_dialog(dialog)
         dialog.destroy()
         if response == Gtk.ResponseType.OK:
             break

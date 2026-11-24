@@ -467,6 +467,31 @@ class TestBuildBackupPruneCommand(unittest.TestCase):
         )
         golden.check(self, step.command)
 
+    def test_manifest_store_sourced_and_derived_per_step(self):
+        """Each step derives its manifest store via propmanifest_dataset."""
+        step = command_builders.build_backup_prune_command(
+            "/bin",
+            "dailybackup",
+            [("threeamigos/proxmox", "fivebays"), ("NVME1", "fivebays")],
+            {},
+        )
+        bash_script = step.command[2]
+        self.assertIn('source "$mydir/../lib/property-manifest-lib.sh"', bash_script)
+        self.assertEqual(bash_script.count('_mds=$(propmanifest_dataset "$destfs" "$sourcefs")'), 2)
+
+    def test_manifest_store_added_after_destination_mappings(self):
+        """The store joins prune_datasets after the step's dataset mappings."""
+        step = command_builders.build_backup_prune_command(
+            "/bin", "dailybackup", [("threeamigos/proxmox", "fivebays")], {}
+        )
+        bash_script = step.command[2]
+        dest_pos = bash_script.index('prune_datasets+=("${destfs}${_restorefs}");')
+        store_pos = bash_script.index('prune_datasets+=("$_mds");')
+        self.assertLess(dest_pos, store_pos)
+        # Existence-guarded and deduplicated like every other entry.
+        self.assertIn('if zfs list -H -o name "$_mds" >/dev/null 2>&1; then', bash_script)
+        self.assertIn('if [[ -z ${_prune_seen["$_mds"]+x} ]]; then', bash_script)
+
 
 class TestRsyncFailureDiagnosis(unittest.TestCase):
     """_diagnose_rsync_failure explains common rsync failure modes."""

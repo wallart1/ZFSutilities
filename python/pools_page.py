@@ -27,6 +27,7 @@ from gui_helpers import (
     attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
+    enable_ctrl_click_deselect,
     set_button_markup_red,
     set_column_header_tooltip,
     set_monospace_font,
@@ -166,6 +167,7 @@ def create_pools_page(app):
     app.pool_view = Gtk.TreeView(model=app.pool_store)
     app.pool_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.pool_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(app.pool_view)
 
     # Pool name — colored by registration state
     name_renderer = Gtk.CellRendererText()
@@ -382,6 +384,7 @@ def create_pools_page(app):
     app.scrub_view = Gtk.TreeView(model=app.scrub_store)
     app.scrub_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.scrub_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+    enable_ctrl_click_deselect(app.scrub_view)
 
     for col_idx, title_text, width, header_tip in [
         (0, "Pool", 90, "Pool this row tracks, in scrub priority order (drag rows to reorder)."),

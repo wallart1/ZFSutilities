@@ -63,7 +63,7 @@ from feature_config import (
     pool_name_from_endpoint,
     remove_snapfile,
 )
-from logging_config import log_msg, session_log_context
+from logging_config import get_log_hostname, log_msg, session_log_context
 from notifications import notify_run_finished
 from offsite_runner import build_offsite_step_command, detect_offsite_pool, detect_offsite_pools
 from profile_manager import list_profiles, load_profile
@@ -269,6 +269,44 @@ def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
         pass
 
     return fd, lock_path
+
+
+def _other_profile_locks_held():
+    """Return True when any OTHER process holds a profile lock.
+
+    Probes every ``*.lock`` file in the profile lock directory with the
+    same non-blocking flock idiom ``acquire_profile_lock`` uses: a probe
+    that cannot take the lock means a live holder. Lock files whose
+    metadata names THIS process are skipped (a probe of our own lock
+    fails against our own holder). Anything unreadable counts as not
+    held — the caller only uses this to keep waiting, and a wrong "not
+    held" simply falls back to the ordinary idle timeout.
+    """
+    try:
+        lock_files = [name for name in os.listdir(PROFILE_LOCK_DIR) if name.endswith(".lock")]
+    except OSError:
+        return False
+    for name in lock_files:
+        lock_path = os.path.join(PROFILE_LOCK_DIR, name)
+        try:
+            with open(lock_path) as fh:
+                metadata = json.load(fh)
+            if metadata.get("pid") == os.getpid():
+                continue
+        except (OSError, ValueError):
+            pass
+        try:
+            fd = os.open(lock_path, os.O_RDWR)
+        except OSError:
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            return True
+        finally:
+            os.close(fd)
+    return False
 
 
 def release_profile_lock(fd, lock_path):
@@ -830,9 +868,13 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
         return 1
 
     def _scrub_log(msg):
-        log_msg(msg)
-        if session_log_file:
-            session_log.write_raw_line(session_log_file, msg)
+        # log_msg alone writes the session log exactly once, with the
+        # standard file:line prefix: the explicit session_log_file target
+        # matches the one session_log_context already points the run's
+        # ZFSUTILITIES_LOG_FILE at, and log_msg writes a single target.
+        # A second raw write here used to duplicate every line without
+        # the prefix.
+        log_msg(msg, session_log_file=session_log_file)
 
     managed = _managed_pools(config)
     for pool in pool_names:
@@ -849,6 +891,8 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
     max_idle_ticks = 60  # ~10 minutes at 10s interval before giving up
     idle_ticks = 0
     last_summary = None
+    waiting_logged = False
+    timed_out = False
 
     while True:
         states = get_all_pool_scrub_states()
@@ -868,16 +912,29 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
 
         if summary["active"] == 0 and summary["pending"] == 0:
             if summary["paused"] > 0:
-                # All remaining are paused — wait a bit then bail
-                idle_ticks += 1
-                if idle_ticks >= max_idle_ticks:
-                    _scrub_log("WARN: Scrub profile timed out with paused pools")
-                    break
+                # All remaining are paused. Another running profile (a
+                # backup's scrub-pause window, which pauses and later
+                # resumes scrubs itself) is an expected pause: keep
+                # waiting without spending the idle budget. Only an idle
+                # pause nobody owns trips the timeout.
+                if _other_profile_locks_held():
+                    idle_ticks = 0
+                    if not waiting_logged:
+                        _scrub_log("INFO: Waiting on paused scrubs; another profile running")
+                        waiting_logged = True
+                else:
+                    idle_ticks += 1
+                    if idle_ticks >= max_idle_ticks:
+                        paused_names = ", ".join(sorted(queue.paused))
+                        _scrub_log(f"WARN: Scrub profile timed out; still paused: {paused_names}")
+                        timed_out = True
+                        break
             else:
                 # All done
                 break
         else:
             idle_ticks = 0
+            waiting_logged = False
 
         import time
 
@@ -886,7 +943,11 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
     if queue.given_up:
         _scrub_log("FATAL: Scrub profile gave up on: " + ", ".join(sorted(queue.given_up)))
         return 1
-    _scrub_log("INFO: Scrub profile complete")
+    if not timed_out:
+        # "Complete" only when the queue actually drained; after the timeout
+        # WARN the profile leaves with scrubs still paused, and a closing
+        # "complete" line would contradict it.
+        _scrub_log("INFO: Scrub profile complete")
     return 0
 
 
@@ -958,7 +1019,7 @@ def _write_cron_breadcrumb(cron_log, message):
     stamp = datetime.now(tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with open(cron_log, "a") as fh:
-            fh.write(f"{stamp} INFO: {message}\n")
+            fh.write(f"{stamp} [{get_log_hostname()}] INFO: {message}\n")
     except OSError:
         pass
 

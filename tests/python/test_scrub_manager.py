@@ -695,11 +695,11 @@ class TestScrubQueue(unittest.TestCase):
         return [
             call
             for call in mock_log.call_args_list
-            if call.args and str(call.args[0]).find("External scrub detected on 'tank'") != -1
+            if call.args and str(call.args[0]).find("Scrub started on 'tank' (external)") != -1
         ]
 
     def test_tick_external_scrub_logged_once(self):
-        """An external scrub is reported once at VERB, even if persisted state is lost."""
+        """An external scrub is reported once at INFO, even if persisted state is lost."""
         q = sm.ScrubQueue(target=1)
         states = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
         with patch.object(sm, "log_msg") as mock_log:
@@ -709,7 +709,7 @@ class TestScrubQueue(unittest.TestCase):
             q.tick(states)
         reports = self._external_scrub_reports(mock_log)
         self.assertEqual(len(reports), 1)
-        self.assertTrue(str(reports[0].args[0]).startswith("VERB:"))
+        self.assertTrue(str(reports[0].args[0]).startswith("INFO:"))
         self.assertIn("tank", q.active)
 
     def test_tick_external_scrub_on_unregistered_pool_not_adopted(self):
@@ -751,7 +751,7 @@ class TestScrubQueue(unittest.TestCase):
             q.tick(states)
         reports = self._external_scrub_reports(mock_log)
         self.assertEqual(len(reports), 1)
-        self.assertTrue(str(reports[0].args[0]).startswith("VERB:"))
+        self.assertTrue(str(reports[0].args[0]).startswith("INFO:"))
         self.assertIn("tank", q.active)
 
     def test_remove_pools(self):
@@ -967,7 +967,7 @@ class TestScrubEventLog(unittest.TestCase):
         with patch.object(sm, "get_pool_scrub_info", return_value=info):
             self.assertTrue(sm.start_scrub("tank", repo=repo))
         text = self._log_text()
-        self.assertIn("INFO: Starting scrub on pool 'tank'", text)
+        self.assertIn("INFO: Starting scrub on 'tank'", text)
         self.assertIn("INFO: Scrub started on 'tank'", text)
 
     def test_queue_mutator_lines_persist(self):
@@ -986,6 +986,38 @@ class TestScrubEventLog(unittest.TestCase):
         q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.FINISHED)})
         self.assertIn("INFO: Scrub finished on 'tank'", self._log_text())
 
+    def test_tick_active_none_logs_finished(self):
+        """Active pool whose scrub vanished without a record logs 'finished'."""
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.NONE)})
+        text = self._log_text()
+        self.assertIn("INFO: Scrub finished on 'tank'", text)
+        self.assertNotIn("Scrub completed on", text)
+
+    def test_tick_paused_finished_logs_was_paused(self):
+        """A paused pool completing logs the finished verb with the qualifier."""
+        q = sm.ScrubQueue(target=1)
+        q.paused.add("tank")
+        q.paused_by_user.add("tank")
+        q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.FINISHED)})
+        self.assertIn("INFO: Scrub finished on 'tank' (was paused)", self._log_text())
+
+    def test_tick_paused_none_logs_ended(self):
+        """A paused pool whose scrub vanished without a record still logs a line."""
+        q = sm.ScrubQueue(target=1)
+        q.paused.add("tank")
+        q.paused_by_user.add("tank")
+        q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.NONE)})
+        self.assertIn("INFO: Scrub ended on 'tank' (was paused)", self._log_text())
+
+    def test_tick_finished_rescan_logs_external_start(self):
+        """A finished-bucket pool scanning again logs the external start."""
+        q = sm.ScrubQueue(target=1)
+        q.finished.add("tank")
+        q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)})
+        self.assertIn("INFO: Scrub started on 'tank' (external)", self._log_text())
+
     def test_displacement_line_persists(self):
         q = sm.ScrubQueue(target=2)
         q.active.add("tank")
@@ -1003,14 +1035,14 @@ class TestScrubEventLog(unittest.TestCase):
         q = sm.ScrubQueue(target=1)
         q.active.add("tank")
         q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)})
-        self.assertIn("VERB: External pause detected on 'tank'", self._log_text())
+        self.assertIn("INFO: Scrub paused on 'tank' (external)", self._log_text())
 
     def test_external_resume_line_persists(self):
         q = sm.ScrubQueue(target=1)
         q.paused.add("tank")
         q.paused_by_user.add("tank")
         q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)})
-        self.assertIn("VERB: External resume detected on 'tank'", self._log_text())
+        self.assertIn("INFO: Scrub resumed on 'tank' (external)", self._log_text())
 
     def test_backup_coordinated_lines_persist(self):
         repo = MagicMock()
@@ -1029,7 +1061,8 @@ class TestScrubEventLog(unittest.TestCase):
                     )
         self.assertEqual(paused, ["tank"])
         text = self._log_text()
-        self.assertIn("VERB: Pausing scrub on 'tank'", text)
+        self.assertIn("INFO: Pausing scrub on 'tank'", text)
+        self.assertIn("INFO: Scrub paused on 'tank'", text)
         self.assertIn("INFO: Scrubs paused: tank", text)
 
     def test_unwritable_log_dir_warns_once_and_does_not_raise(self):
@@ -1449,10 +1482,10 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                         )
                 self.assertEqual(paused, ["src"])
                 self.assertTrue(
-                    any("VERB: Pausing scrub" in call[0][0] for call in custom_log.call_args_list)
+                    any("INFO: Pausing scrub" in call[0][0] for call in custom_log.call_args_list)
                 )
                 self.assertTrue(
-                    any("VERB: Scrub paused" in call[0][0] for call in custom_log.call_args_list)
+                    any("INFO: Scrub paused" in call[0][0] for call in custom_log.call_args_list)
                 )
                 # Caller location should be passed through so log_msg can
                 # attribute the message to scrub_manager, not the wrapper.
@@ -1482,10 +1515,10 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                             ["src"], repo=repo, dry_run=False, log_func=custom_log
                         )
                 self.assertTrue(
-                    any("VERB: Resuming scrub" in call[0][0] for call in custom_log.call_args_list)
+                    any("INFO: Resuming scrub" in call[0][0] for call in custom_log.call_args_list)
                 )
                 self.assertTrue(
-                    any("VERB: Scrub resumed" in call[0][0] for call in custom_log.call_args_list)
+                    any("INFO: Scrub resumed" in call[0][0] for call in custom_log.call_args_list)
                 )
                 self.assertTrue(
                     any(
@@ -1517,7 +1550,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                         )
                         step.pre_callback()
         self.assertTrue(
-            any("VERB: Pausing scrub" in call[0][0] for call in custom_log.call_args_list)
+            any("INFO: Pausing scrub" in call[0][0] for call in custom_log.call_args_list)
         )
 
     @patch.object(sm.time, "sleep")

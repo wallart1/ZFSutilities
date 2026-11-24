@@ -853,10 +853,10 @@ offsite, restore, and retention runners.
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `parse_rsync_endpoint(endpoint)`                                   | Split `user@host:path` into host and path                                                                                                                                                                      |
 | `prepare_rsync_destination(source, dest, dryrun)`                  | Fence a local rsync destination: validate its ZFS mount chain (refusing shadowed/unmounted/unverifiable chains) and create a missing destination directory below the deepest dataset mountpoint (never in dry-run) |
-| `build_rsync_command(source, dest, remote_log_path=None)`          | Build an rsync pull/push command                                                                                                                                                                               |
+| `build_rsync_command(source, dest, remote_log_path=None)`          | Build an rsync pull/push command; when a remote log is configured, the pipeline prefixes every appended line with the producing host's `[hostname]` tag                                                                                                                      |
 | `build_send_receive_command(...)`                                  | Build the `bash` command for a ZFS send/receive step                                                                                                                                                           |
 | `build_pre_backup_command(cmd)` / `build_post_backup_command(cmd)` | Wrap user pre/post commands                                                                                                                                                                                    |
-| `build_backup_prune_command(...)`                                  | Build a non-fatal prune `BashStep` that prunes only the datasets the backup's active send/receive steps back up (destination names re-derived at prune time via `zfscleanup`'s explicit `prune_datasets` mode) |
+| `build_backup_prune_command(...)`                                  | Build a non-fatal prune `BashStep` that prunes only the datasets the backup's active send/receive steps back up (destination names re-derived at prune time via `zfscleanup`'s explicit `prune_datasets` mode), plus each step's property-manifest store when it exists |
 
 **Called modules / imported helpers:**
 
@@ -885,7 +885,7 @@ way.
 | Function                                       | Purpose                                               |
 | ---------------------------------------------- | ----------------------------------------------------- |
 | `create_session_log_file(tab_type, name=None)` | Create a timestamped log file under `SESSION_LOG_DIR` |
-| `write_raw_line(session_log_file, line)`       | Append a raw subprocess line with a timestamp         |
+| `write_raw_line(session_log_file, line)`       | Append a raw subprocess line with a timestamp and this host's `[hostname]` tag |
 | `write_session_trailer(...)`                   | Write the `# END` trailer and update the log index    |
 | `maybe_truncate_session_log(...)`              | Enforce the configured session-log size cap           |
 
@@ -1120,7 +1120,10 @@ as the GUI runners but writes its own session logs and history entries.
 Failed rsync steps log the raw exit code and a human-readable diagnosis
 (for example, `rc=24` is reported as "Source files vanished during transfer")
 so cron logs and session logs explain the failure without looking up rsync
-exit codes manually.
+exit codes manually. Output the runner pipes into the persistent rsync log
+goes through `_write_rsync_log_chunk`, which prefixes every line with this
+host's `[hostname]` tag — a partial trailing line is carried until its
+newline arrives so chunk boundaries never split a tag off its line.
 
 SIGTERM/SIGINT cancel a run gracefully: the in-flight step's process group
 is terminated, no further steps start, a lock wait aborts immediately, and
@@ -1141,7 +1144,7 @@ pipeline (bash + rsync/tee/zfs) is cancelled together.
 | `config_core`      | `load_config`, session log directory                       |
 | `feature_config`   | Snapshot naming, pool names, snapfile removal, scrub state |
 | `session_log`      | Create, append, truncate, and finalize session logs        |
-| `logging_config`   | Session log context, `log_msg`                             |
+| `logging_config`   | Session log context, `log_msg`, `get_log_hostname` (host tag on cron breadcrumbs and rsync log lines) |
 | `log_index`        | Update log index entries                                   |
 | `backup_history`   | Append history entries                                     |
 | `zfs_repository`   | `is_dataset_encrypted` for ZFS keys destination checks     |
@@ -1694,7 +1697,8 @@ Rewrite Data, and the workload profile manager — plus Sever Clone, which runs
 | Function                         | Purpose                                                                                                                  |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `create_datasets_page()`         | Build the Datasets tab widget                                                                                            |
-| `refresh_datasets_page()`        | Refresh the tree, preserving expansion state                                                                             |
+| `refresh_datasets_page()`        | Refresh the tree, preserving expansion state; re-evaluates the mount-order warning banner                                |
+| `_update_ds_mount_order_warning()` | Show/hide the banner that reports unreachable mounts and points at the Dashboard repair (runs `find_unreachable_mounts`) |
 | `update_mounted_states()`        | Refresh only the mounted flag/color of visible rows after a mount or unmount                                             |
 | `expand_selected_datasets()`     | Expand selected rows recursively                                                                                         |
 | `update_ds_button_sensitivity()` | Enable/disable action buttons                                                                                            |
@@ -1712,6 +1716,7 @@ Rewrite Data, and the workload profile manager — plus Sever Clone, which runs
 | `workload_profiles` | Profile matching against live properties                             |
 | `feature_config`    | Workload profile store                                               |
 | `logging_config`    | `log_msg`                                                            |
+| `zfs_repository`    | `zvol_device_path` for volume rows; `find_unreachable_mounts` for the mount-order warning banner |
 | `command_builders` | `BashStep` for the sever-vm-clone runner step                        |
 | `path_utils`       | Resolve the sibling `sever-vm-clone` script                          |
 
@@ -2065,7 +2070,7 @@ other pools keep their rows.
 | `lun_backstore_map(path)`                   | The storage host's targetcli saveconfig → `{(target IQN, LUN index): zvol short name}`; `{}` when the file is missing or this host has no LIO (compute node, single-node installs) — malformed entries are skipped, not fatal |
 | `resolve_bypath_disks(vm_disks, lun_map)`   | Re-key by-path `VMOption`s to their zvol short names through the LUN map; returns `(resolved, dropped)` so unresolvable devices surface instead of silently vanishing |
 | `topology_leaf_paths(node)`                | Device paths of every disk leaf under a `TopologyNode` (used to flatten pools into members and by the analysis rules to judge vdev groups) |
-| `collect_alignment_sample(zfs_repo, disk_repo, ...)` | Probe all sources (zfs/zpool, lsblk sectors, kstats, PVE conf, guest filesystems via `alignment_guestfs`) with per-source degrade flags |
+| `collect_alignment_sample(zfs_repo, disk_repo, ...)` | Probe all sources (zfs/zpool, lsblk sectors, kstats, PVE conf, guest filesystems via `alignment_guestfs`) with per-source degrade flags; also sets `pve_applicable` — False on single-node sites without PVE, where the VM layer is absent by design rather than a failed probe |
 
 **Data structures consumed / produced:**
 
@@ -2322,9 +2327,12 @@ actual delivery runs on a daemon thread (log lines hop back via
 headless callers run synchronously.
 
 Desktop bubbles are delivered to the logged-in desktop session's
-notification daemon — target user resolved from `SUDO_USER` (or the
-`ZFSUTILITIES_NOTIFICATION_DESKTOP_USER` override), then the X11 socket
-owner — preferring `notify-send` and falling back to `gdbus` (`dbus-send`
+notification daemon — target user resolved, in order, from the
+`ZFSUTILITIES_NOTIFICATION_DESKTOP_USER` override, `PKEXEC_UID` (set by
+the pkexec elevation on the GUI's normal launch path), `SUDO_USER`, the
+active graphical session reported by `loginctl` (covers scheduled root
+runs and Wayland sessions), and finally the X11 socket owner —
+preferring `notify-send` and falling back to `gdbus` (`dbus-send`
 cannot express the `a{sv}` hints argument). Email goes through
 user-configured SMTP via `smtplib`, so it works from root cron without a
 local mail agent. GLib is loaded dynamically: importing this module never
@@ -2543,12 +2551,11 @@ devices.
 | `on_datasets_delete()`                                       | Delete selected datasets/snapshots/holds  |
 | `on_datasets_hold()`                                         | Place holds on selected snapshots         |
 | `on_datasets_rollback()`                                     | Rollback a dataset to a selected snapshot |
-| `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager; refuses with a warning when the target is not mounted (or the snapshot's parent is not) or the mountpoint path is unreachable despite `mounted=yes` (orphaned/shadowed mount — the warning points at Repair Mount Order) |
+| `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager; refuses with a warning when the target is not mounted (or the snapshot's parent is not) or the mountpoint path is unreachable despite `mounted=yes` (orphaned/shadowed mount — the warning points at the Dashboard's Repair Mount Order) |
 | `on_datasets_show_big_stuff()`                               | Run `zfsshowbigstuff` on the selected pool and log the output |
 | `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors; directly selected `canmount=off` filesystems are skipped the same way; for snapshots whose parent is unmounted, a dialog offers to mount the parent datasets root-first before the snapshots |
 | `on_datasets_unmount()`                                      | Unmount selected filesystems/snapshots/volume loop devices (and volume partitions); mounted children are unmounted first (deepest-first), with automatic recovery of unreachable mounts (remount unmounted parents for orphaned mounts; lift covering ancestors and remount them afterwards for shadowed mounts) |
-| `run_mount_repair(app, scope=None)`                          | Plan a mount-order repair, confirm it with the operator, and execute it with verification; tri-state return (`None` clean, `False` cancelled/failed, `True` success) |
-| `on_datasets_repair_mount_order()`                           | Repair the mount order of the selected subtree (single filesystem/pool, approval-gated) |
+| `run_mount_repair(app, scope=None)`                          | Plan a mount-order repair, confirm it with the operator, and execute it with verification; tri-state return (`None` clean, `False` cancelled/failed, `True` success). Called by the Dashboard's **Repair Mount Order** action (whole-system scope) |
 
 **Called modules / imported helpers:**
 
@@ -2882,12 +2889,13 @@ Priority-based logging, session-log management, and GUI sink routing.
 
 | Function                                      | Purpose                                                 |
 | --------------------------------------------- | ------------------------------------------------------- |
-| `log_msg(*args)`                              | Log with `file:line:` prefix, GUI sink, and session log |
+| `log_msg(*args)`                              | Log with `file:line:` prefix, GUI sink, and session log (stored lines carry a `[hostname]` tag after the timestamp) |
 | `set_log_sink()` / `get_log_sink()`           | Route messages to the GUI info panel                    |
 | `set_session_log()` / `restore_session_log()` | Manage `ZFSUTILITIES_LOG_FILE` env                      |
 | `truncate_session_log()`                      | Enforce the 1 GB cap with tail retention                |
 | `session_log_context()`                       | Context manager for session log env                     |
 | `parse_msg_level()` / `viewer_should_show()`  | Message-level parsing and filtering                     |
+| `format_log_line_short()` / `format_log_text_short()` | Short-prefix display: time only, host tag and location stripped |
 
 **Called modules / imported helpers:** none.
 

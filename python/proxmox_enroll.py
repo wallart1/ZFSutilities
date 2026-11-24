@@ -27,6 +27,7 @@ from backup_config import log_msg
 from command_builders import BashStep
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
+from gui_helpers import run_dialog
 from iscsi_enroll import derive_target_short, is_iscsi_managed_pool
 from path_utils import resolve_local_bin
 from pools_page import on_pools_refresh
@@ -222,7 +223,7 @@ def _show_enroll_dialog(app, pool_name: str, default_id: str, config: dict) -> s
     content.add(entry)
     dialog.show_all()
     try:
-        response = dialog.run()
+        response = run_dialog(dialog)
         if response != Gtk.ResponseType.YES:
             return None
         text = entry.get_text()

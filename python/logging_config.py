@@ -3,6 +3,7 @@
 import inspect
 import os
 import re
+import socket
 import sys
 from contextlib import contextmanager
 from datetime import datetime
@@ -37,12 +38,29 @@ NONE_PRIORITY = 5
 # Purpose: Match the leading timestamp written to session log files.
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+")
 
+# Regex: ^\[[^\]\s]+\]\s*
+# Purpose: Match the bracketed hostname tag written between the timestamp
+# and the file:line prefix of session log lines ("... [stewie]  ...").
+# Lines written before the tag existed carry no bracket, so this match is
+# always optional. rsync's own persistent-log lines use the same tag.
+_HOST_TAG_RE = re.compile(r"^\[[^\]\s]+\]\s*")
+
 # Regex: ^(\s*(?:[^:\n]+:\d+):\s*)+
 # Purpose: Match one or more leading file:line prefixes such as those
 # produced by Python's inspect-based log_msg and bash's BASH_SOURCE log_msg.
 _FILE_LINE_PREFIX_RE = re.compile(r"^(\s*(?:[^:\n]+:\d+):\s*)+")
 
 _gui_log_sink = None
+
+
+def get_log_hostname():
+    """Return this host's name as written into session log lines.
+
+    Every stored log line carries the appending host in a ``[hostname]`` tag
+    right after the timestamp, so a line read anywhere (GUI viewer, two-node
+    Logs page, pasted into a report) always names the host that wrote it.
+    """
+    return socket.gethostname()
 
 
 def set_log_sink(sink):
@@ -160,7 +178,8 @@ def truncate_session_log(path, max_bytes=None, tail_bytes=None, start_bytes=None
 
             omitted = size - len(prefix) - len(suffix)
             marker = (
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                f"[{get_log_hostname()}]  "
                 f"zfsutilities: [... {omitted} bytes omitted by log size cap ...]\n"
             ).encode("utf-8", errors="replace")
 
@@ -188,11 +207,14 @@ def get_msg_level(config):
 
 
 def _strip_log_prefixes(text):
-    """Strip the leading timestamp and any leading file:line prefixes.
+    """Strip the leading timestamp, host tag, and any leading file:line prefixes.
 
     Returns a tuple (timestamp_prefix, stripped_body).  If no timestamp is
-    present, *timestamp_prefix* is an empty string.  This helper is shared by
-    the message-level parser and the short-prefix formatter.
+    present, *timestamp_prefix* is an empty string.  The bracketed hostname
+    tag between timestamp and file:line prefixes is stripped with the
+    prefixes; lines written before the tag existed simply lack it.  This
+    helper is shared by the message-level parser and the short-prefix
+    formatter.
     """
     ts_match = _TIMESTAMP_RE.match(text)
     if ts_match:
@@ -201,6 +223,7 @@ def _strip_log_prefixes(text):
     else:
         timestamp_prefix = ""
         rest = text
+    rest = _HOST_TAG_RE.sub("", rest, count=1)
     rest = _FILE_LINE_PREFIX_RE.sub("", rest)
     return timestamp_prefix, rest
 
@@ -224,30 +247,41 @@ def parse_msg_level(text):
 
 
 def format_log_line_short(timestamp, message):
-    """Return a display line containing only timestamp + message body.
+    """Return a display line containing only the time + message body.
 
-    The message body has any leading file:line prefixes removed so the viewer
-    shows date/time and the message content, not the source location.
+    The date part of *timestamp* and any leading file:line or hostname-tag
+    prefixes in the body are removed, so the viewer shows the time and the
+    message content — not the date, the host, or the source location.
     """
     _prefix, body = _strip_log_prefixes(message)
-    return f"{timestamp}  {body}"
+    time_only = timestamp.split(" ", 1)[-1] if " " in timestamp else timestamp
+    return f"{time_only}  {body}"
 
 
 def format_log_text_short(text):
-    """Return *text* with file:line prefixes removed from each line.
+    """Return *text* reduced to time + message body on timestamped lines.
 
-    Leading timestamps are preserved.  Lines without a timestamp or without a
-    file:line prefix are returned unchanged.
+    Each timestamped line keeps only the time part of its timestamp, with the
+    date, the bracketed hostname tag, and any file:line prefixes removed; the
+    time and body are always joined by two spaces regardless of the source
+    line's separators.  Lines without a timestamp (e.g. rsync's own
+    ``[host] rsync …`` output) are returned unchanged so their host stays
+    visible.
     """
     lines = text.splitlines(keepends=True)
     out = []
     for line in lines:
         ts_match = _TIMESTAMP_RE.match(line)
         if ts_match:
-            ts_prefix = ts_match.group(0)
+            time_only = ts_match.group(0)[11:].strip()
             rest = line[ts_match.end() :]
+            rest = _HOST_TAG_RE.sub("", rest, count=1)
             rest = _FILE_LINE_PREFIX_RE.sub("", rest)
-            out.append(ts_prefix + rest)
+            if rest.endswith("\n"):
+                body, eol = rest[:-1], "\n"
+            else:
+                body, eol = rest, ""
+            out.append(f"{time_only}  {body}{eol}" if body else f"{time_only}{eol}")
         else:
             out.append(line)
     return "".join(out)
@@ -310,7 +344,9 @@ def log_msg(
     file:line prefix. Pass ``--long-prefix`` as the first positional argument,
     or ``long_prefix=True`` as a keyword argument, to force the file:line
     prefix. Non-terminal output and session log files always use the long
-    file:line prefix.
+    file:line prefix. Session log lines carry the appending host in a
+    ``[{hostname}]`` tag right after the timestamp, so every stored line
+    names the host that wrote it; the short-prefix display strips the tag.
 
     If *session_log_file* is provided, it is used as the session log target
     instead of the ``ZFSUTILITIES_LOG_FILE`` environment variable. This lets
@@ -376,7 +412,7 @@ def log_msg(
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             long_full = f"{long_prefix_str} {msg}"
             with open(log_file, "a") as fh:
-                fh.write(f"{ts}  {long_full}\n")
+                fh.write(f"{ts} [{get_log_hostname()}]  {long_full}\n")
         except OSError:
             pass
 

@@ -20,6 +20,7 @@ from gi.repository import Gtk
 from gui_helpers import (
     bold_label,
     refuse_non_managed_pool_endpoints,
+    run_dialog,
     set_button_markup_red,
     set_page_tab_attention,
     style_expander_label,
@@ -563,7 +564,7 @@ def on_restore_run(app, ctx):
         text=f"Restore: {source} -> {dest}",
     )
     dialog.format_secondary_text(secondary)
-    response = dialog.run()
+    response = run_dialog(dialog)
     dialog.destroy()
     if response != Gtk.ResponseType.OK:
         log_msg("INFO: Restore cancelled")

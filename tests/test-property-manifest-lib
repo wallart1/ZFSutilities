@@ -85,6 +85,14 @@ zfs() {
             a=("${@:2}")
             target="${a[${#a[@]}-1]}"
             if [[ "$*" == *" -t snapshot"* ]]; then
+                if [[ "$*" == *" -o name"* ]]; then
+                    # Snapshot listing (propmanifest_prune_files): print
+                    # every known snapshot belonging to the target dataset.
+                    [[ "${_pmock_list_snaps_rc:-0}" != "0" ]] \
+                        && return "${_pmock_list_snaps_rc}"
+                    grep "^${target}@" "$_pmock_snaps_file" 2>/dev/null
+                    return 0
+                fi
                 grep -qxF "$target" "$_pmock_snaps_file" 2>/dev/null && return 0
                 return 1
             fi
@@ -160,6 +168,7 @@ reset_state() {
     _pmock_store=$(mktemp -d "${TMPDIR:-/tmp}/propmanifest_store.XXXXXX")
     _pmock_existing=""
     _pmock_create_rc=0
+    _pmock_list_snaps_rc=0
     _pmock_mount_rc=0
     _pmock_snapshot_rc=0
     _pmock_get_rc=0
@@ -170,6 +179,167 @@ reset_state() {
     _propmanifest_skip=""
     _propmanifest_mounted=""
     _propmanifest_mnt=""
+}
+
+# ---------------------------------------------------------------------------
+# propmanifest_prune_files
+# ---------------------------------------------------------------------------
+
+test_prune_files_removes_only_stale() {
+    test_start "prune removes files whose snapshot is gone, keeps the rest"
+
+    reset_state
+    echo "backup/tank/zfsutilities-manifests@daily-20261103T1100Z-d" >> "$_pmock_snaps_file"
+    touch "$_pmock_store/tank%2Fsrc@daily-20261103T1100Z-d"
+    touch "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d"
+    touch "$_pmock_store/.tmp.tank%2Fsrc@whatever"
+
+    local rc=0
+    propmanifest_prune_files backup/tank/zfsutilities-manifests || rc=$?
+    assert_rc 0 "$rc"
+
+    if [[ ! -f "$_pmock_store/tank%2Fsrc@daily-20261103T1100Z-d" ]]; then
+        test_fail "live-snapshot manifest deleted"; return
+    fi
+    if [[ ! -f "$_pmock_store/.tmp.tank%2Fsrc@whatever" ]]; then
+        test_fail "transient temp file deleted"; return
+    fi
+    if [[ -f "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d" ]]; then
+        test_fail "stale manifest kept"; return
+    fi
+    assert_contains "$(get_log)" \
+        "VERB: Removed stale property manifest tank%2Fsrc@daily-20261101T1100Z-d"
+    assert_contains "$(get_log)" \
+        "INFO: Pruned 1 stale property manifest"
+    # The sweep mounted the store itself and must unmount it again.
+    assert_equals "no" "$_pmock_mounted"
+    test_pass
+}
+
+test_prune_files_dry_run_deletes_nothing() {
+    test_start "dry-run logs Would lines and deletes nothing"
+
+    reset_state
+    dryrun="Y"
+    echo "backup/tank/zfsutilities-manifests@daily-20261103T1100Z-d" >> "$_pmock_snaps_file"
+    touch "$_pmock_store/tank%2Fsrc@daily-20261103T1100Z-d"
+    touch "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d"
+
+    local rc=0
+    propmanifest_prune_files backup/tank/zfsutilities-manifests || rc=$?
+    assert_rc 0 "$rc"
+
+    if [[ ! -f "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d" ]]; then
+        test_fail "dry run deleted a file"; return
+    fi
+    assert_contains "$(get_log)" \
+        "INFO: Would: remove stale property manifest tank%2Fsrc@daily-20261101T1100Z-d"
+    assert_contains "$(get_log)" \
+        "INFO: Would: prune 1 stale property manifest"
+    test_pass
+}
+
+test_prune_files_keeps_all_when_all_live() {
+    test_start "every file kept when every snapshot exists"
+
+    reset_state
+    echo "backup/tank/zfsutilities-manifests@daily-20261103T1100Z-d" >> "$_pmock_snaps_file"
+    echo "backup/tank/zfsutilities-manifests@daily-20261102T1100Z-d" >> "$_pmock_snaps_file"
+    touch "$_pmock_store/tank%2Fsrc@daily-20261103T1100Z-d"
+    touch "$_pmock_store/tank%2Fdst@daily-20261102T1100Z-d"
+
+    local rc=0
+    propmanifest_prune_files backup/tank/zfsutilities-manifests || rc=$?
+    assert_rc 0 "$rc"
+
+    if [[ ! -f "$_pmock_store/tank%2Fsrc@daily-20261103T1100Z-d" \
+          || ! -f "$_pmock_store/tank%2Fdst@daily-20261102T1100Z-d" ]]; then
+        test_fail "live manifest deleted"; return
+    fi
+    local log
+    log=$(get_log)
+    if [[ "$log" == *"Pruned"* || "$log" == *"Would: prune"* ]]; then
+        test_fail "prune summary logged with nothing stale"; return
+    fi
+    test_pass
+}
+
+test_prune_files_empty_listing_removes_all() {
+    test_start "a store with no snapshots left prunes every file"
+
+    reset_state
+    touch "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d"
+    touch "$_pmock_store/tank%2Fdst@daily-20261102T1100Z-d"
+
+    local rc=0
+    propmanifest_prune_files backup/tank/zfsutilities-manifests || rc=$?
+    assert_rc 0 "$rc"
+
+    if [[ -f "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d" \
+          || -f "$_pmock_store/tank%2Fdst@daily-20261102T1100Z-d" ]]; then
+        test_fail "stale manifest kept on empty store"; return
+    fi
+    assert_contains "$(get_log)" "INFO: Pruned 2 stale property manifests"
+    test_pass
+}
+
+test_prune_files_listing_failure_skips_sweep() {
+    test_start "a failed snapshot listing WARNs and touches nothing"
+
+    reset_state
+    _pmock_list_snaps_rc=1
+    touch "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d"
+
+    local rc=0
+    propmanifest_prune_files backup/tank/zfsutilities-manifests || rc=$?
+    assert_rc 0 "$rc"
+
+    if [[ ! -f "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d" ]]; then
+        test_fail "file deleted despite listing failure"; return
+    fi
+    assert_contains "$(get_log)" \
+        "WARN: Cannot list snapshots of backup/tank/zfsutilities-manifests"
+    test_pass
+}
+
+test_prune_files_unmountable_store_fails_open() {
+    test_start "an unmountable store WARNs and returns 0"
+
+    reset_state
+    _pmock_mount_rc=1
+
+    local rc=0
+    propmanifest_prune_files backup/tank/zfsutilities-manifests || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" "Could not mount"
+    test_pass
+}
+
+test_prune_files_rm_failure_warns() {
+    test_start "a refused removal WARNs, keeps the file, returns 0"
+
+    reset_state
+    echo "backup/tank/zfsutilities-manifests@daily-20261103T1100Z-d" >> "$_pmock_snaps_file"
+    touch "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d"
+
+    # Shadow rm for the sweep only (a read-only store refusing the delete);
+    # restore the real command before anything else runs.
+    rm() { return 1; }
+    local rc=0
+    propmanifest_prune_files backup/tank/zfsutilities-manifests || rc=$?
+    unset -f rm
+    assert_rc 0 "$rc"
+
+    if [[ ! -f "$_pmock_store/tank%2Fsrc@daily-20261101T1100Z-d" ]]; then
+        test_fail "file vanished despite refused rm"; return
+    fi
+    assert_contains "$(get_log)" \
+        "WARN: Could not remove stale property manifest tank%2Fsrc@daily-20261101T1100Z-d"
+    # A refused removal is not a removal: no summary claims one.
+    if [[ "$(get_log)" == *"Pruned 1"* ]]; then
+        test_fail "refused rm counted as pruned"; return
+    fi
+    test_pass
 }
 
 # ---------------------------------------------------------------------------
@@ -642,6 +812,13 @@ test_capture_legacy_mountpoint_latches_skip
 test_finish_unmounts_what_we_mounted
 test_finish_skips_preexisting_mount
 test_mount_arms_exit_trap
+test_prune_files_removes_only_stale
+test_prune_files_dry_run_deletes_nothing
+test_prune_files_keeps_all_when_all_live
+test_prune_files_empty_listing_removes_all
+test_prune_files_listing_failure_skips_sweep
+test_prune_files_unmountable_store_fails_open
+test_prune_files_rm_failure_warns
 
 rm -rf "$_pmock_store"
 test_summary
