@@ -111,6 +111,22 @@ unset dryrun
 `zfsdailybackup` calls retention via `zfscleanup`, which defaults to live mode.
 The dry-run default only applies when calling `zfsretain` directly.
 
+A dry run evaluates the same read-only gates a real run applies before it
+deletes anything:
+
+- the counterpart check;
+- snapshot holds;
+- clone dependents;
+- the minimum age.
+
+Three things stay outside the preview:
+
+- lock contention at deletion time;
+- destroy failures;
+- the confirmation a real run asks for when no fss entry matches a snapshot.
+
+A real run can therefore keep a snapshot that the preview listed for removal.
+
 When `zfscleanup` is invoked without a specific pool, it processes the pools
 registered in the JSON config. If the config pool list is empty, it falls back
 to all online pools so retention is not silently skipped.

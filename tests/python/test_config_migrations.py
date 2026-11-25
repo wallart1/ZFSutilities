@@ -235,6 +235,28 @@ class TestIndividualMigrations(unittest.TestCase):
         result2 = config_migrations._migrate_32_to_33(result1)
         self.assertEqual(result1, result2)
 
+    def test_migrate_32_to_33_tolerates_malformed_config(self):
+        """A hand-edited config must still migrate: the load path has no try/except.
+
+        Every consumer loads the config through this migration (GUI, profile
+        runner, logging), so a raise here would keep all of them from starting.
+        """
+        malformed = (
+            None,
+            [],
+            {"variables": None, "send_receive_steps": ["a/b"]},
+            {"variables": {}, "send_receive_steps": None},
+            {"variables": {}, "send_receive_steps": [{"source": None, "dest": "x"}]},
+        )
+        for bad in malformed:
+            with self.subTest(backup=bad):
+                result = config_migrations._migrate_32_to_33(
+                    {"config_version": 32, "backup": bad, "offsite": bad}
+                )
+                self.assertEqual(result["config_version"], 33)
+                self.assertEqual(result["checkagainst"]["backup_derived"], [])
+                self.assertEqual(result["checkagainst"]["offsite_derived"], [])
+
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
             "config_version": 19,

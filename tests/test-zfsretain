@@ -545,7 +545,8 @@ test_phase2_dryrun_gate_downgrades_to_keep() {
     msg_level="FATAL"
     dryrun="N"
     test_start "Gate-kept snapshot reports Would: Keep with its Bucket context"
-    local _keep_line="Would: Keep ${_young_snap} --- Bucket; counterpart unavailable (offline or locked)."
+    local _keep_line="Would: Keep ${_young_snap} --- Bucket;"
+    _keep_line+=" counterpart unavailable (offline or locked)."
     if grep -q -- "$_keep_line" "$_logfile" \
         && ! grep -q -- "Would: Remove ${_young_snap}" "$_logfile"; then
         test_pass
@@ -716,6 +717,82 @@ test_dryrun_caveat_names_unmodeled_residuals() {
         echo "bktname[1]='w'; bktretain[1]=2; minage[1]=7"
         echo "bktname[2]='m'; bktretain[2]=2; minage[2]=30"
     }
+}
+
+# ------------------------------------------------------------------
+# Test: retain's dry-run exit trap removes the print-once markers
+# ------------------------------------------------------------------
+test_dryrun_exit_trap_sweeps_print_once_markers() {
+    test_start "Dry-run exit trap removes every checkagainst print-once marker"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # The dry-run preview calls checkagainst in this shell, with no delsnap
+    # process to sweep after it, so retain registers the sweep itself.
+    # zfsdelsnap is stubbed WITHOUT its own sweep trap: the markers may only
+    # disappear through the trap retain registers.
+    cat > "$tmpdir/zfsconfig" << 'EOF'
+zfsconfig_get_retention() {
+    echo "bktname[0]='d'; bktretain[0]=1; minage[0]=0"
+}
+EOF
+    cat > "$tmpdir/zfsdelsnap" << 'EOF'
+delsnap() { return 0; }
+_delsnap_preview_gate() { return 0; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/property-manifest-lib.sh" << 'EOF'
+propmanifest_prune_files() { return 0; }
+EOF
+    ln -s "$old_mydir/lib/paths.sh" "$tmpdir/paths.sh"
+
+    local output rc=0
+    output=$(
+        env mydir="$tmpdir" mydir_test="$tmpdir" old_mydir="$old_mydir" bash -c '
+            # Pretend an earlier dry run keyed on these PIDs armed every
+            # per-run marker: all of them, under both keyings, must be
+            # swept when this shell exits.
+            echo "$$"   > "$mydir_test/inner_pid"
+            echo "$PPID" > "$mydir_test/inner_ppid"
+            for _marker in fssalreadyprinted caabsentprinted canoentryprinted \
+                caallabsentprinted; do
+                touch "/tmp/${_marker}.$PPID" "/tmp/${_marker}.$$"
+            done
+            zfs() { return 0; }
+            dryrun="Y"
+            msg_level="FATAL"
+            source "$old_mydir/bin/zfsretain"
+            retain "pool/fs" "dailybackup"
+        ' </dev/null 2>&1
+    ) || rc=$?
+
+    local _ipid _ippid _marker _pid _left=""
+    _ipid=$(cat "$tmpdir/inner_pid")
+    _ippid=$(cat "$tmpdir/inner_ppid")
+    for _marker in fssalreadyprinted caabsentprinted canoentryprinted \
+        caallabsentprinted; do
+        for _pid in "$_ipid" "$_ippid"; do
+            if [[ -f "/tmp/${_marker}.${_pid}" ]]; then
+                _left+=" /tmp/${_marker}.${_pid}"
+            fi
+        done
+    done
+    # A regression must not leave the planted markers behind in /tmp.
+    if [[ -n "$_left" ]]; then
+        # shellcheck disable=SC2086
+        rm -f $_left
+    fi
+    if [[ $rc -eq 0 && -z "$_left" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc; markers not swept by the exit trap:$_left. output: $output"
+    fi
+
+    rm -rf "$tmpdir"
 }
 
 test_phase2_real_run_forwards_minage() {
@@ -1054,6 +1131,7 @@ main() {
     test_phase0_dryrun_gate_downgrades_to_keep
     test_phase1_dryrun_gate_downgrades_to_keep
     test_dryrun_caveat_names_unmodeled_residuals
+    test_dryrun_exit_trap_sweeps_print_once_markers
     test_phase2_real_run_forwards_minage
     test_skip_clone_and_c_bucket
     test_phase0_offsite_monthly

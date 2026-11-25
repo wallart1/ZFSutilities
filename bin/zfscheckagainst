@@ -379,7 +379,7 @@ function checkagainst {
                         if [[ -z "$_entry_absent_counterparts" ]]; then
                             _entry_absent_counterparts="$_candidate_dstocheck"
                         elif [[ "$_entry_absent_counterparts" != *"$_candidate_dstocheck"* ]]; then
-                            _entry_absent_counterparts="$_entry_absent_counterparts, $_candidate_dstocheck"
+                            _entry_absent_counterparts+=", $_candidate_dstocheck"
                         fi
                         continue
                     fi

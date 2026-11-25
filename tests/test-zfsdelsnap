@@ -303,10 +303,10 @@ test_checkagainst_sources_cleanly() {
 test_checkagainst_sources_cleanly
 
 # ------------------------------------------------------------------
-# Test: delsnap's exit trap removes the no-eligible-entry marker
+# Test: delsnap's exit trap removes the print-once markers
 # ------------------------------------------------------------------
-test_exit_trap_removes_noentry_marker() {
-    test_start "Exit trap removes the no-eligible-entry print-once marker"
+test_exit_trap_removes_print_once_markers() {
+    test_start "Exit trap removes every checkagainst print-once marker"
     local tmpdir
     tmpdir=$(mktemp -d)
 
@@ -327,12 +327,15 @@ EOF
     local output rc=0
     output=$(
         env mydir="$tmpdir" mydir_test="$tmpdir" old_mydir="$old_mydir" bash -c '
-            # Pretend a previous snapshot on this dataset already armed the
-            # per-dataset marker: both $PPID and $$ keyings must be swept
-            # when this shell exits through the delsnap exit trap.
+            # Pretend earlier snapshots already armed every per-run marker:
+            # all of them, under both the $PPID and the $$ keying, must be
+            # swept when this shell exits through the delsnap exit trap.
             echo "$$"   > "$mydir_test/inner_pid"
             echo "$PPID" > "$mydir_test/inner_ppid"
-            touch "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$"
+            for _marker in fssalreadyprinted caabsentprinted canoentryprinted \
+                caallabsentprinted; do
+                touch "/tmp/${_marker}.$PPID" "/tmp/${_marker}.$$"
+            done
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
                     return 0
@@ -344,21 +347,32 @@ EOF
         ' </dev/null 2>&1
     ) || rc=$?
 
-    local _ipid _ippid
+    local _ipid _ippid _marker _pid _left=""
     _ipid=$(cat "$tmpdir/inner_pid")
     _ippid=$(cat "$tmpdir/inner_ppid")
-    if [[ $rc -eq 5 \
-        && ! -f "/tmp/canoentryprinted.$_ipid" \
-        && ! -f "/tmp/canoentryprinted.$_ippid" ]]; then
+    for _marker in fssalreadyprinted caabsentprinted canoentryprinted \
+        caallabsentprinted; do
+        for _pid in "$_ipid" "$_ippid"; do
+            if [[ -f "/tmp/${_marker}.${_pid}" ]]; then
+                _left+=" /tmp/${_marker}.${_pid}"
+            fi
+        done
+    done
+    # A regression must not leave the planted markers behind in /tmp.
+    if [[ -n "$_left" ]]; then
+        # shellcheck disable=SC2086
+        rm -f $_left
+    fi
+    if [[ $rc -eq 5 && -z "$_left" ]]; then
         test_pass
     else
-        test_fail "rc=$rc; markers not swept by the exit trap. output: $output"
+        test_fail "rc=$rc; markers not swept by the exit trap:$_left. output: $output"
     fi
 
     rm -rf "$tmpdir"
 }
 
-test_exit_trap_removes_noentry_marker
+test_exit_trap_removes_print_once_markers
 
 # ------------------------------------------------------------------
 # Test: User holds block deletion when releaseholds is enabled

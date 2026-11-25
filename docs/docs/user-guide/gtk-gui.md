@@ -1296,6 +1296,16 @@ For each active step `source → dest` with label `dailybackup` (Backup) or
 - **Forward**: `source <actual_destination> <label>`
 - **Reverse**: `<actual_destination> source <label>`
 
+A Backup step can also produce a third row, for the step's
+property-manifest store. This happens when the Destination column holds a
+pool name or another prefix, because the reverse row then does not reach
+the store. The store keeps a record of each dataset's properties for every
+backup generation. It exists only at the destination, so its snapshots have
+no counterpart to compare against. The store row lets a scheduled or GUI
+prune delete the store's old snapshots instead of keeping them.
+[Deriving entries from Backup/Offsite steps](../commands-and-modules/modules.md#deriving-entries-from-backupoffsite-steps)
+explains the rule.
+
 The actual destination root is the destination path that `zfs-send-receive`
 will use. When the Offsite Destination column contains `<offsite>`, the
 derived row keeps the placeholder as-is. `zfscheckagainst` expands it to

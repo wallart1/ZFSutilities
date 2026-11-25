@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.144.0
+
+*Released 2026-11-24*
+
+### Fixed
+
+- **Manifest stores no longer stall pruning.** A Backup step that sends
+  part of a pool to another pool keeps its property-manifest store beside
+  the mapped datasets, where no Checkagainst row reached it. Its
+  snapshots then met the interactive confirmation, which scheduled and
+  GUI prunes answer by keeping them, so the store's snapshots were never
+  pruned. Such a step now derives a Checkagainst row for its store. The
+  store's counterpart never exists on the source side, which settles the
+  check as "not common", and the snapshots are pruned by policy like any
+  other dataset's. Pool-level steps, and steps whose destination names
+  the full mapped path, need no extra row.
+
+- **Checkagainst logging repeats once per dataset, not once per
+  snapshot.** The no-entry warning, its "enteries" spelling corrected,
+  and the "all matched counterparts absent" verdict now log once per
+  dataset per run. The repeats appear only with verbose logging. A
+  cleanup of several hundred store snapshots used to print the absent
+  verdict for each one.
+
+- **The bottom log panel's search survives a re-render.** Toggling Short
+  Prefix or changing the level filter rebuilds every line. The active
+  search now re-marks its matches at their new positions, so the
+  highlights, the counter, and Previous/Next agree with the text. The
+  Logs-tab search likewise resynchronizes when a long-running log forces
+  the viewer to trim its oldest text.
+
+- **Disks tab tints land on the member's own row.** A partition member
+  of a pool or vdev tints its partition row, and a whole-disk member
+  tints its disk row — the row that carries the pool name in the Pools
+  column. A partition used to tint its parent disk. The enclosure tint
+  still lands on whole disks.
+
+### Changed
+
+- **Config schema version 33.** The config migrates from 32 to 33 on its
+  first load, which adds the manifest-store rows to the stored
+  Checkagainst table. The pre-migration copy is archived under
+  `config-archive/`. Older releases warn on a version-33 config and load
+  it anyway. A Backup or Offsite section of the wrong type in a
+  hand-edited file — `null` where a list belongs, a row that is not an
+  object — derives no rows instead of stopping the load.
+
+- **The Disks tab reads Enclosures, Disk Inventory, Pool Topology.**
+  The Enclosures section moved to the top. It still shows when no
+  enclosure is present.
+
+- **`zfsretain` dry runs no longer print a banner.** The line `INFO: Dry
+  run: shows what a real run would delete.` is gone; it printed once per
+  dataset. The Retention guide states what a dry run evaluates and what
+  it cannot model.
+
+### Tests
+
+- The Checkagainst row derivation tolerates a section, a list, or a row
+  of the wrong type. The tolerance is pinned at three levels — the
+  derivation, the 32→33 migration, and a real config load of a
+  hand-damaged file — and each level fails against the previous code.
+
+- The Python manifest-store row is checked against the bash
+  `propmanifest_dataset` it mirrors, so the two cannot drift apart.
+
+- The print-once marker sweep is pinned for both callers: a `zfsretain`
+  dry run in a child process, and `zfsdelsnap` with every marker.
+
+- The checkagainst suite gains the all-absent verdict with two
+  counterparts and the once-per-dataset behavior of the no-entry warning
+  and the all-absent verdict.
+
+### Documentation
+
+- The messages catalog drops the row for the removed dry-run banner and
+  notes the once-per-run logging of the rc 5 warning and the rc 4
+  verdict.
+
+- The bash modules guide documents the manifest-store row and when it is
+  derived. The GUI guide's Checkagainst section describes the third row,
+  and its Disks tab sections follow the new order and tint rule.
+
+- The developer guide's data-structures page shows schema version 33,
+  names the real migration function, and states that a migration must
+  never raise. coding-policies.md carries the same rule.
+
+- GLOSSARY gains *print-once marker* and extends *property manifest*.
+
 ## 0.143.0
 
 *Released 2026-11-23*

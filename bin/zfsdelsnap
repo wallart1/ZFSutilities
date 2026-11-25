@@ -27,7 +27,10 @@ unset _local_bashinit
 # once-per-run without littering /tmp. The absent-counterpart,
 # no-eligible-entry, and all-counterparts-absent markers follow the same
 # keying.
-append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$" "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$" "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$" "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"'
+append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
+append_exit_trap 'rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"'
+append_exit_trap 'rm -f "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$"'
+append_exit_trap 'rm -f "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"'
 
 
 # Print a snapshot's age in whole days (floor division), or -1 when its

@@ -453,6 +453,12 @@ log_msg("DEBUG: variable =", value)
   calling sites. Small readability helpers or functions created for direct unit
   testing may have a single call site; avoid splitting out a helper when it
   only wraps a single expression used once.
+- **Config migrations never raise**: `config_core.load_config()` calls
+  `run_migrations()` with no exception handling, and the GUI, the profile
+  runner, and logging all load the config through it. A migration that meets
+  a section of the wrong type treats that section as empty; a raise would
+  keep every consumer from starting. The 32 → 33 migration is the pattern,
+  pinned in `test_config_migrations.py` and `test_config_core.py`.
 - **GTK TreeView Ctrl-click toggling is focus-gated**: GTK 3 skips the
   ctrl-click selection toggle when the tree view does not already hold
   keyboard focus (the toggle helper returns early on `!has_focus`, and GTK

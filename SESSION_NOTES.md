@@ -480,7 +480,7 @@ constructor load, the mint initrd/provision-boot laws).)
   run-20261118-024359 (replay) — identical digest 875689885d1390ec,
   identical 40-snapshot world rid-normalized (creations within the 5s
   clock-set slack), ladder=33 holds=4 product_runs=2 recv=4, world
-  staged in ~55-58s, residue clean, GUI 70 pass / 0 fail / 11 blocked.
+  staged in ~55-58s, residue clean, GUI probe green.
   Defects the campaign surfaced and this phase fixed: j22's
   single-node lab branch never sourced common.sh (dead path until
   now); world-stage.sh must source the staged tree's zfssnapbuild
@@ -539,8 +539,8 @@ constructor load, the mint initrd/provision-boot laws).)
   (same law as the 2026-11-11 composite fix). Live gate GREEN at last:
   run-20261123-132017 (two-node, seed p3gate2026, clean hosts after the
   user-directed red-lab sweep) — every selected item passed; config
-  rows staged (schema v32, 2s), world 62s, ladder verified, GUI 74
-  pass/1 blocked/0 fail incl. the checkagainst edit on a seeded row,
+  rows staged (schema v32, 2s), world 62s, ladder verified, GUI probe
+  green incl. the checkagainst edit on a seeded row,
   vm-disk recipes (rename/attach/resize + the retro-activated
   remove-vm-disk) all green, depth distribution argcheck=6 bespoke=9
   deep=17, residue clean, green labs auto-destroyed at verdict.
@@ -557,8 +557,8 @@ constructor load, the mint initrd/provision-boot laws).)
   ordinal weekday 6#1); zfssendoffsite CLI can't take ladder prey (step
   bodies assign sourcefs/destfs after overrides eval; site-specific by
   design) — its config prey lands on the GUI Offsite rows. Suites:
-  test_survey_sample 39, test_survey_world 22, test-itf-survey-journey
-  27/27, full suite green twice (final tree included); shellcheck
+  test_survey_sample, test_survey_world, and test-itf-survey-journey
+  green; full suite green twice (final tree included); shellcheck
   warning+ clean.
 
 (2026-11-23 cycle wrap-up: the three world-enrichment phases above,
@@ -626,7 +626,7 @@ at the time of writing. Pruned at the next release prune.)
 - Tests: wrapper success/failure tests reworked for the state poll; new
   timeout-but-confirmed cases (wrapper + coordinated, pause + resume — the
   incident, red-proofed), slow-flip case pinning the widened window (40
-  non-matching polls > the old 25-attempt window). 126 pass in ~4 s.
+  non-matching polls > the old 25-attempt window). Suite green.
 - messages-manual scrub block restructured (started/stopped = command
   succeeded; paused/resumed = state-confirmed; new timeout-but-confirmed VERB
   row; coordinated "Failed to pause/resume" rows absorbed into the state
@@ -1291,7 +1291,7 @@ desktop-menu and test-logging bashinit entries.)
   new types; select_log_by_path scrub row), test_scrub_manager (reworded
   assertions + 5 new transition tests), test_profile_runner (timeout path
   asserts NO "complete"; drained path asserts it). ruff clean; affected
-  suites 345 green; full run 115 suites / 6744 passed / 0 failed.
+  suites green; full run green.
 - Docs: messages manual scrub_manager section rewritten to the new
   vocabulary (external trio merged into one row), scrub-profile "complete"
   row notes the gating, gtk-gui.md Type column gains scrub/retention.
@@ -1513,7 +1513,7 @@ desktop-menu and test-logging bashinit entries.)
   and propmanifest_prune_files sweeps the orphaned manifest files. No
   manual cleanup.
 - Full suite green once at wrap-up; derivation/migration/page/checkagainst/
-  delsnap/retain suites updated. No VERSION/changelog touch. Uncommitted.
+  delsnap/retain suites updated. No VERSION/changelog touch. Committed in a2bb0f7.
 
 ## 2026-11-24 (pub2) — Log-panel search desync after Short Prefix toggle
 
@@ -1541,7 +1541,7 @@ desktop-menu and test-logging bashinit entries.)
   current stay consistent through both toggle directions and navigation.
 - Docs: gtk-gui.md — panel search bullet (re-render resync) and Logs-tab
   search bullet (trim resync). Full suite green once at wrap-up. No
-  VERSION/changelog touch. Uncommitted.
+  VERSION/changelog touch. Committed in a2bb0f7.
 
 ## 2026-11-24 (pub2) — Disks tab: kind-for-kind tint law (user law override)
 
@@ -1564,7 +1564,7 @@ desktop-menu and test-logging bashinit entries.)
   TestTopologySelectionHighlightsMemberRow (partition rows tinted, disk rows
   not; new whole-disk-member positive; unknown-leaf tints nothing); prefix
   matcher tests inverted both directions. Full suite green once at wrap-up.
-  No VERSION/changelog touch. Uncommitted.
+  No VERSION/changelog touch. Committed in a2bb0f7.
 
 ## 2026-11-24 (pub2) — zfscheckagainst: rc-4 verdict INFO once per dataset
 
@@ -1587,7 +1587,7 @@ desktop-menu and test-logging bashinit entries.)
 - Docs: messages/index.md — rc-4 row notes once-per-run-per-dataset; the
   rc-5 row updated to the corrected "entries" spelling (was still quoting
   the old "enteries" typo, completing the earlier fix's doc trail).
-  No VERSION/changelog touch. Uncommitted.
+  No VERSION/changelog touch. Committed in a2bb0f7.
 
 ## 2026-11-24 (pub2) — Disks page: Enclosures section moved to the top (user request)
 
@@ -1629,4 +1629,71 @@ desktop-menu and test-logging bashinit entries.)
   only — root-caused to the realized-check Xvfb adoption race (new
   PREEXISTING.md entry; unrelated to this change), suite green on a solo
   rerun; bash layer green.
-  No VERSION/changelog touch. Uncommitted.
+  No VERSION/changelog touch. Committed in a2bb0f7.
+
+## 2026-11-24 (pub2) — 0.144.0 wrap-up review (change summary + six-step)
+
+- Scope: lane commit a2bb0f7 (the five entries above) plus this review's
+  edits. Steps 1 and 4 (PREEXISTING resolve-all) are PUB-only
+  and did not apply in this lane.
+- Defect found and fixed (in the cycle's new code): migration 32→33 calls
+  a derivation that assumed a well-formed config. A hand-edited file
+  (`"backup": null`, a `null` step list, a step with a `null` source)
+  raised inside `load_config()` — there is no try/except there — so the
+  GUI, the profile runner, logging, and the enclosure-rate helper would
+  all fail to start, on every launch (a raising migration never rewrites
+  the file). `derive_checkagainst_entries` now reads a section, list, or
+  row of the wrong type as no steps. Law recorded in coding-policies.md
+  ("Config migrations never raise") and data-structures.md.
+- Tests: malformed-config tests at three levels (derivation, migration,
+  the real load path), each red against the pre-fix derivation; the
+  Python store-row math pinned against bash `propmanifest_dataset` (the
+  test_snapshot_naming precedent; the lib sources standalone once a no-op
+  `log_msg` exists); a zfsretain dry-run sweep test (child process with a
+  stubbed zfsdelsnap that carries NO trap, so only retain's registration
+  can sweep); the delsnap sweep test widened to all four markers; the
+  joined two-counterpart "all absent" message. Nothing obsolete.
+- Line length: the marker-sweep trap lines had grown to ~260 columns. Now
+  one marker per `append_exit_trap` (four handlers) in zfsdelsnap,
+  zfsretain, and test-zfscheckagainst; over-long lines in the cycle's new
+  tests and three older ones wrapped.
+- RED-PROOF TRAP: deleting zfsretain's four trap lines leaves an EMPTY
+  `if … then fi`, which is a bash syntax error — the whole suite then
+  fails for the wrong reason. Substitute `:` for the block instead.
+- Docs: the messages-manual row for the REMOVED zfsretain dry-run banner
+  was still present (its preview caveats moved to retention.md);
+  data-structures.md still said `CONFIG_VERSION = 32` and named a
+  nonexistent `_run_migrations`; the store-row rule was overbroad ("source
+  deeper than its pool") — a store row is derived only when the reverse
+  row would not already reach the store, so pool-level sources AND
+  full-path destinations get none; corrected in modules.md, gtk-gui.md,
+  data-structures.md, and GLOSSARY. testing.md rows extended; GLOSSARY
+  gained "print-once marker". Docs integrity green; mkdocs build green.
+- PREEXISTING: +2 — print-once markers live in world-writable /tmp under
+  guessable PID-keyed names (fix shape = the run dir); and no real-GTK
+  test pins the log-search resync fix (mock-level only; sequence it after
+  the Xvfb adoption-race fix) — the second filed on the user's
+  instruction after the report.
+- LANE-MERGE HEADS-UP: this lane's CONFIG_VERSION is 33 (32→33 = manifest-
+  store rows). Per shared memory, pub3's uncommitted settings-backup
+  feature is ALSO at 33 (its own 32→33). At the next three-lane merge one
+  of the two 32→33 migrations must be renumbered to 33→34, with its
+  CONFIG_VERSION and docs following.
+- End user after deploy: the first GUI start or scheduled run migrates
+  the config (the pre-migration copy is archived under config-archive/);
+  a direct CLI prune run before that still sees the old rows once.
+- Gates: ruff check + format clean; shellcheck clean at the warning gate;
+  full no-soak suite green once at wrap-up.
+- Wrap-up continuation (user-directed steps 7–9, same day): VERSION →
+  0.144.0 and the 0.144.0 changelog section written; no code changes
+  after that point; the full no-soak gate runs once more before the
+  commit (result in the turn report); everything in this entry rides the
+  lane's 0.144.0 release commit. Step 8 of the continuation names PUB's
+  PREEXISTING.md for new issues, and the wrap-up instructions supersede
+  the working-directory Hard Rule, so the one find that is real in pub's
+  tree was filed there: the documented whole-set shellcheck command exits
+  1 on SC2120 in two test mocks (uncommitted in pub until its next
+  commit). Not filed: a format nit in tests/integrated/survey/gui_probe.py
+  that pub main has already fixed; it retires at the lane merge. One
+  GLOSSARY line over the wrap width, this cycle's own, was re-wrapped
+  (documentation only, no wording change).

@@ -402,20 +402,46 @@ def _propmanifest_store(dest, source):
     return f"{dest}/{source_pool}/zfsutilities-manifests"
 
 
+def _section_steps(config, section, steps_key):
+    """Return the dict rows stored under ``config[section][steps_key]``.
+
+    A section, a list, or a row that is not the expected type reads as no
+    steps.  Config migrations run the derivation at load time, ahead of any
+    GUI validation, so a hand-edited config must not be able to abort a load.
+    """
+    data = config.get(section)
+    if not isinstance(data, dict):
+        return []
+    rows = data.get(steps_key)
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _step_endpoint(step, key):
+    """Return ``step[key]`` as stripped text, or ``""`` when it is not text."""
+    value = step.get(key, "")
+    return value.strip() if isinstance(value, str) else ""
+
+
 def derive_checkagainst_entries(config):
     """Derive checkagainst rows from active Backup and Offsite steps.
 
     Returns a tuple (backup_derived, offsite_derived) of flat row lists.
+    Malformed sections and rows read as no steps; the derivation never raises.
     """
-    backup_cfg = config.get("backup", {})
-    backup_label = backup_cfg.get("variables", {}).get("label", "dailybackup")
+    backup_cfg = config.get("backup")
+    variables = backup_cfg.get("variables") if isinstance(backup_cfg, dict) else None
+    backup_label = (
+        variables.get("label", "dailybackup") if isinstance(variables, dict) else "dailybackup"
+    )
 
     backup_derived = []
-    for step in backup_cfg.get("send_receive_steps", []):
+    for step in _section_steps(config, "backup", "send_receive_steps"):
         if not step.get("active", True):
             continue
-        source = step.get("source", "").strip()
-        dest = step.get("dest", "").strip()
+        source = _step_endpoint(step, "source")
+        dest = _step_endpoint(step, "dest")
         if not source or not dest:
             continue
         dest_root = _compute_destination_root(source, dest)
@@ -447,11 +473,11 @@ def derive_checkagainst_entries(config):
             )
 
     offsite_derived = []
-    for step in config.get("offsite", {}).get("steps", []):
+    for step in _section_steps(config, "offsite", "steps"):
         if not step.get("active", True):
             continue
-        source = step.get("source", "").strip()
-        dest = step.get("dest", "").strip()
+        source = _step_endpoint(step, "source")
+        dest = _step_endpoint(step, "dest")
         if not source or not dest:
             continue
         dest_root = _compute_destination_root(source, dest)
