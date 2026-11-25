@@ -7,37 +7,36 @@ executed in the dev repository only after explicit user approval.
 
 Published rows are pruned at each release (recoverable via
 `git log`); rows remain here only while their outcome is not yet
-shipped.  Pruned at the 0.143.0 release (2026-11-23): F-052 — the
-zfsresume silent-verdict defect (`zfs send -nP -t` for a valid token
-exits 0 with the decoded contents on zfs 2.2.2, but both report
-branches sat inside the failure path, and an unrecognized probe
-failure printed "seems valid").  Fixed under the approved 2026-11-23
-survey plan: decoded contents are the validity signal, and unexpected
-failures WARN with wording reused from zfs-migrate-send; verified by
-the green replay run-20261123-202938-j22-function-survey (the
-real-path item passed with the live "seems valid" verdict) and shipped
-in 0.143.0.  Pruned at the 0.141.0 release (2026-11-12): F-047 and
-F-050 — both fixed in the dev tree (2026-11-11, approved session
-plan for the pub-tree j22 run), verified by the green archive
-replay of the same 107-item draw on the fixed tree
-(run-20261111-203336-j22-function-survey — every selected item
-passed), and shipped in 0.141.0.  Pruned at the 0.142.0 release (2026-11-17): F-051 — the
-  Pools-page Export D-state freeze (live iSCSI LUN session held the
-  pool's zvol; `zpool export` blocked uninterruptibly on the UI thread
-  with no bound).  Fixed by the release-gate wrap-up: the export runs
-  in a worker thread with a hard UI-side deadline (`EXPORT_STALL_WARN_S`,
-  default 120 s), and on stall the holder-naming WARN plus the
-  blocker-recovery flow takes over; verified by the archive replay
-  run-20261117-162554 (export completed at the bound, window alive,
-  survey green) and shipped in 0.142.0.  Earlier closures stay
-recoverable via `git log` (F-048 and F-049 in 0.140.0; F-034 in
-0.137.0; F-045 and F-046 in 0.138.0, along with plan 026's F-037
-verification — the user-cued j15/j16 reruns of 2026-11-04).
+shipped.  Pruned at the 0.144.0 release (2026-11-25): F-053 and F-054 —
+F-053, the two-node `compute_host` resolution gap (`zfsdailybackup` and
+the `rsync-dailybackup` template defined the storage/compute host pair
+only in single-node mode, so a stock run degraded to a failed-pull WARN
+and a strict-mode site copy died "unbound variable"), and F-054, the
+prune chain's strict-caller fragility (the shipped rsync template turns
+strict mode on when sourced, and the prune leg's unguarded reads
+aborted "unbound variable" before deleting anything).  Both were found
+by the j22 full-function legs, fixed in-session under the approved
+2026-11-24 plan, and verified by the green runs
+run-20261124-010402-j22-function-survey and
+run-20261124-052832-j22-function-survey (the site pair ran snapshot,
+pulls, send, and prune end to end); the 0.144.0 wrap-up closed the
+reads the first fix had missed.  Shipped in 0.144.0.  Pruned at the
+0.143.0 release (2026-11-23): F-052 — the zfsresume silent-verdict
+defect (`zfs send -nP -t` for a valid token exits 0 with the decoded
+contents on zfs 2.2.2, but both report branches sat inside the failure
+path, and an unrecognized probe failure printed "seems valid").  Fixed
+under the approved 2026-11-23 survey plan: decoded contents are the
+validity signal, and unexpected failures WARN with wording reused from
+zfs-migrate-send; verified by the green replay
+run-20261123-202938-j22-function-survey (the real-path item passed with
+the live "seems valid" verdict) and shipped in 0.143.0.  Earlier
+closures stay recoverable via `git log` (F-051 in 0.142.0; F-047 and
+F-050 in 0.141.0; F-048 and F-049 in 0.140.0; F-034 in 0.137.0; F-045
+and F-046 in 0.138.0, along with plan 026's F-037 verification — the
+user-cued j15/j16 reruns of 2026-11-04).
 
 | ID | Date | Journey | Symptom | Suspected area | Status | Repair plan |
 |----|------|---------|---------|----------------|--------|-------------|
-| F-053 | 2026-11-24 | j22-function-survey full-function leg (`results/run-20261124-004523-j22-function-survey/`) | `zfsdailybackup`/`rsync-dailybackup` left `compute_host` unset on two-node sites: both templates hand-rolled the node.conf resolution and defined the lowercase host pair only in single-node mode, while node.conf carries the uppercase `COMPUTE_HOST` — stock non-strict runs degraded to a failed-pull WARN at the compute pull banner; any strict-mode site copy died "unbound variable" | `bin/zfsdailybackup` + `bin/rsync-dailybackup` node resolution | verified (run-20261124-010402: the full-function leg's site pair ran both pulls and the backup send past the compute banner) | in-session fix under the approved 2026-11-24 full-function plan |
-| F-054 | 2026-11-24 | j22-function-survey full-function leg (`results/run-20261124-010402-j22-function-survey/`) | `zfsdailybackup`'s prune leg dies under the strict mode its own shipped `rsync-dailybackup` template imposes (the template carries `set -euo pipefail`, which sourcing turns on for the rest of the orchestrator): the sourced `cleanup()` reads `${#releaseholds_tags[@]}` and bare `$1`–`$4` positionals before any default, so the prune call (`cleanup '' '' dailybackup`) FATALs "unbound variable" — any stock-template user with `prune='Y'` (the default) hits this after the first successful backup | `bin/zfscleanup`/`bin/zfsretain`/`bin/zfsdelsnap` + the orchestrator templates' strict-mode robustness | verified (run-20261124-052832 green: the full-function leg runs the site pair end to end — snapshot, pulls, send, prune — rc 0) | in-session fix under the approved 2026-11-24 full-function plan: `:-` defaults on caller scalars/positionals and `declare -p` guards for tag arrays (zfscleanup, zfsretain, zfsdelsnap); the orchestrator re-asserts its documented non-strict mode at the rsync source point AND at the prune leg (sourced standalones — `zfs-send-receive` sources strict `zfsdelfs` — re-arm mid-run; live-traced via bash -x in the kept lab); regressions: test-zfscleanup strict-mode caller test, test-zfsdailybackup/test-rsync-dailybackup two-node resolution tests; 0.144.0 lane wrap-up (2026-11-24) closed what the fix had missed — three more unguarded reads in `delsnap` (the tag-array length, the remaining-holds result, `skipbusy`) and the tag-array length in `zfsmassdelsnaps` — the same way, each with a strict-caller regression test in test-zfsdelsnap, test-zfsretain, or test-zfsmassdelsnaps |
 
 Status values: `open` → `planned` (repair plan approved) → `fixed`
 (dev change landed) → `verified` (rerun green) → `accepted` (user waives).
