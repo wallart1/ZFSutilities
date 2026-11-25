@@ -1159,7 +1159,8 @@ itf_ubuntu_boot_setup() {
         rm -rf "$bootdir"
         mkdir -p "$bootdir" || return 1
         [[ -n "${ITF_RUN_DIR:-}" ]] \
-            && itf_step_start "casper kernel extract" "vmlinuz + initrd from the Ubuntu ISO" > /dev/null
+            && itf_step_start "casper kernel extract" \
+                "vmlinuz + initrd from the Ubuntu ISO" > /dev/null
         if ! 7z e -y -o"$bootdir" "$ITF_CACHE_DIR/$ITF_UBUNTU_ISO_NAME" \
                 casper/vmlinuz casper/initrd > /dev/null 2>&1; then
             rm -rf "$bootdir"
@@ -1468,7 +1469,9 @@ autoinstall:
     - echo "$sshkey" > /target/root/.ssh/authorized_keys
     - chmod 700 /target/root/.ssh
     - chmod 600 /target/root/.ssh/authorized_keys
-    - sed -i 's/^#\?GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"/' /target/etc/default/grub
+    - >-
+      sed -i 's/^#\?GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX="console=tty0
+      console=ttyS0,115200n8"/' /target/etc/default/grub
     - curtin in-target -- update-grub || true
 AUTOINSTALL
 

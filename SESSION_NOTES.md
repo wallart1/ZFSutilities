@@ -200,6 +200,49 @@ and pub3 fast-forwarded to 54cd0c0. 0.143.0 was deployed and activated
 on both nodes by the owner (current → versions/0.143.0 verified on
 stewie and tweety 2026-11-24; owner reports no problems so far).)
 
+## 2026-11-24 (pub) — 0.144.0 three-lane merge + wrap-up continuation (steps 10-13)
+
+- Pre-merge: pub's PREEXISTING SC2120 entry committed (d428b91) per the
+  recorded plan. Merge 1 pub2 (78dc4e3): changelog same-version fold,
+  SESSION_NOTES lane-history seam, PREEXISTING union-minus-retired with
+  in-tree verification (Export bare-first, zlm pool-root, migrate-holds
+  mkstemp, test-logging bashinit all retired — pub's b01909d fences).
+- Merge 2 pub3 (9f4885f): CONFIG_VERSION collision resolved exactly as
+  the lanes' heads-up planned — pub2 keeps 32→33, pub3's settings
+  seeding renumbered to 33→34 (tests + data-structures example follow);
+  duplicate checkagainst seeding in the stage-config heredoc unified on
+  pub3's survey-compare row (pub's survey-user was its own port of the
+  same fix); survey-lib recipe call sites took pub3's log-third
+  _survey_guest_run convention; the busy -busy destroy folded into
+  _survey_scratch_destroy; the zfsdailybackup bespoke recipe gained the
+  busy-refusal acceptance (the delallsnaps pattern); universe.tsv =
+  pub's 11-column rows + pub3's cli-backup-settings row; j22 README row
+  re-worded (default lived-in + busy shipped); full-function legs
+  self-gate to lived-in (busy runs skip them by design). FINDINGS:
+  F-053/F-054 join, F-052 stays pruned, the stale no-rows sentence
+  removed in-merge (pub3's PREEXISTING entry for it retired).
+- The pub3-merge root-litter guard fired on FIRST contact: sq2/ (an
+  empty January-era installer-test fake root, zero files) removed.
+- j22 busy world GREEN first try on the merged tree
+  (run-20261124-205830: 169/156/0/2; busy op joined; invariant sweep
+  PASS; lab auto-destroyed; schema v34 config live-proven; the new
+  cli-backup-settings row sampled and passed). Tracked
+  survey-archive.json now carries that run's busy draw (newest-green
+  reference practice).
+- Wrap-up steps 1-5 rerun: SC2120 resolved (per-line disables at both
+  hostname mocks; the documented whole-set shellcheck exits 0; entry
+  removed); ruff check/format clean (config_migrations blank-line fix);
+  three over-100 lines wrapped byte-identically (guest-lib step-start
+  args, the autoinstall sed line via a PyYAML-proven folded scalar,
+  test-zfscleanup's expected string via in-quote col-0 folds — the
+  adjacent-quoted-fragments form splits into separate ARGUMENTS, caught
+  red by the suite); testing.md gained the missing test_survey_gui_probe
+  row; docs integrity + mkdocs green.
+- Full with-soak suite green on the final tree (log
+  /tmp/zfs-run-0144-merged-soak.log). PREEXISTING = 5 entries (all
+  carried, each with its recorded reason). pub2/pub3 fast-forwarded to
+  the final commit at the user-instructed step.
+
 ## Persistent gotchas (not documented in docs/)
 
 - Guest-agent probe: invalid ping argv was the root cause (2026-11-02):

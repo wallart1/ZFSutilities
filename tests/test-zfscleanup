@@ -284,7 +284,10 @@ test_manifests_dataset_pruned_in_lockstep() {
     )
     cleanup "" "" "offsite"
     assert_equals \
-        "fivebays/threeamigos/proxmox/vm-100-disk-0 @offsite fivebays/threeamigos/zfsutilities-manifests @offsite fivebays/NVME1/proxmox/vm-205-disk-0 @offsite fivebays/NVME1/zfsutilities-manifests @offsite" \
+        "fivebays/threeamigos/proxmox/vm-100-disk-0 @offsite \
+fivebays/threeamigos/zfsutilities-manifests @offsite \
+fivebays/NVME1/proxmox/vm-205-disk-0 @offsite \
+fivebays/NVME1/zfsutilities-manifests @offsite" \
         "${zfscleanup_processed[*]}"
     assert_equals "|||" "${zfscleanup_selection[0]}"
 }

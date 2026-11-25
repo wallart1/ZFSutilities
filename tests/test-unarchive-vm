@@ -382,6 +382,7 @@ ${arc_dataset}"
                 "$_two_node_stub_dir/rescan-storage"
             export ZFSUTILITIES_BIN_DIR="$_two_node_stub_dir"
 
+            # shellcheck disable=SC2120  # the mock answers -s; every other argv falls through to the real command
             hostname() {
                 if [[ "$1" == "-s" ]]; then
                     echo "zteststor"

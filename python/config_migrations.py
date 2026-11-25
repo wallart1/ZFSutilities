@@ -474,6 +474,7 @@ def _migrate_33_to_34(config):
     config["config_version"] = 34
     return config
 
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
