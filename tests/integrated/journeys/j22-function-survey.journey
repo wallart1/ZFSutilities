@@ -42,7 +42,9 @@
 # items) additionally needs the compute template + two-node site keys.
 # ITF_SW_SOURCE must be dev-tarball — the surveyed tree is pushed from
 # dev either way.
-# Snapshots produced: as-cloned, pools-created (per lab shape).
+# Snapshots produced: as-cloned, pools-created (per lab shape), and —
+# lived-in worlds — world-staged (the checkpoint full-function legs
+# revert to; see survey-lib.sh _survey_world_checkpoint).
 
 # shellcheck source=survey-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/survey-lib.sh"
@@ -132,6 +134,17 @@ journey_main() {
     itf_survey_stage_world "$guest_ip" || return 1
     itf_survey_stage_gui_env "$guest_ip" || return 1
 
+    # The world checkpoint (lived-in only): full-function legs consume
+    # the world and revert here.  The restart may re-lease the guest's
+    # address — re-resolve before the items run.
+    if [[ "$SURVEY_WORLD" == "lived-in" ]]; then
+        _survey_world_checkpoint || return 1
+        guest_ip="$(_survey_storage_ip)"
+        [[ -n "$guest_ip" ]] || {
+            itf_step fail "storage guest address" "record carries no IP after checkpoint"
+            return 1
+        }
+    fi
     # Busy worlds: the bounded background operation starts LAST — the
     # whole world (ladder, config rows, GUI env) is staged and verified
     # first, then the load lands and the items run against it.
@@ -180,9 +193,23 @@ journey_main() {
     fi
 
     # ------------------------------------------------------------------
-    # Stage W: results artifact, residue check, distributions
+    # Stage F: full-function legs for the drawn world-consuming commands
+    # (after the GUI probe — every regular item keeps its populated-
+    # world premise; each leg restores the world afterward)
     # ------------------------------------------------------------------
 
+    itf_survey_run_full_function "$guest_ip" || failed=1
+
+    # ------------------------------------------------------------------
+    # Stage W: results artifact, residue check, distributions
+    # (the address is re-resolved: stage F's restores may re-lease it)
+    # ------------------------------------------------------------------
+
+    guest_ip="$(_survey_storage_ip)"
+    [[ -n "$guest_ip" ]] || {
+        itf_step fail "storage guest address" "record carries no IP after stage F"
+        return 1
+    }
     itf_survey_wrap "$guest_ip" || failed=1
 
     if (( failed )); then

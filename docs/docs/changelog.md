@@ -44,8 +44,50 @@
   count across the run and reports the trajectory; growth is
   report-only and becomes a findings row, never a verdict.
 
-### Fixed
+- **Pool-resident settings backups.** The settings live on the OS disk:
+  the main config, the backup profiles, and the administrator files
+  under `/etc/zfsutilities`. An OS-disk loss takes them all while the
+  pools survive. The new `backup-settings` command writes a dated copy
+  of the whole set into `<pool>/zfsutilities/settings-backups/` on every
+  online pool. That dataset family also holds the iSCSI state map.
+  Two-node hosts write to the configured pools; single-node hosts to
+  every online pool. An offline pool is skipped with a note, and a host
+  with no online pool reports `FATAL` — backups are pool-resident.
 
+- **Settings backups keep themselves current.** Each backup carries a
+  `manifest.json`, and file modes survive the round trip, so the mail
+  credentials file stays root-only. A short `flock` keeps backup and
+  restore runs from interleaving. Entries older than the configured
+  retention are pruned on every run (35 days by default).
+
+- **Settings restore.** `backup-settings --list` prints the available
+  backups as `timestamp|pool|file-count`, newest first.
+  `backup-settings --restore <timestamp>` first stages the current
+  settings aside under `settings-pre-restore/`, then copies the chosen
+  backup back to its live locations. Profiles merge: a same-name file
+  is replaced, the others stay. The iSCSI state map is deliberately
+  not part of the set.
+
+- **A nightly settings backup.** The scheduler's cron drop-in carries a
+  daily `backup-settings` line (00:17 by default, off the top of the
+  hour), written at GUI startup and at the start of every scheduled
+  run. The new `settings_backup` config section holds the retention
+  and the nightly time; the GUI has no page for it.
+
+- **GUI Settings menu: Backup Settings... and Restore Settings...** The
+  same backup on demand, and a restore with a picker and a confirmation.
+  After a successful restore the GUI reloads its configuration; restart
+  it to refresh every page.
+
+- **Function-survey full-function legs (test framework).** The survey's
+  default world is `lived-in`. `zfscleanup` and `zfsdailybackup` also
+  run a leg with no overrides. `zfscleanup` really deletes under
+  retention over the aged ladder. `zfsdailybackup` runs the
+  site-adapted daily-backup pair end to end: snapshot, pulls, send,
+  prune. A `world-staged` checkpoint reverts the world after each leg;
+  a failed revert builds the identical world again.
+
+### Fixed
 - **The Pools page's Export action now prepares a pool before touching
   it.** Export used to run `zpool export` bare and engage the blocker
   machinery only after the attempt failed. Every export now goes
@@ -58,6 +100,7 @@
   and recovery remain as the backstop for holders that appear or hide
   between the gate and the export itself.
 
+
 - **The Ctrl-click wiring suite runs hermetically on CI.** The suite
   added in 0.143.0 failed on builders without the production state
   directory (a `PermissionError` at import) and passed on dev hosts
@@ -66,6 +109,7 @@
   with the profile list seeded per test — order-independent under
   parallel workers. (Shipped first as the `v0.143.1` CI-repair point
   tag; recorded here because that tag carried no changelog entry.)
+
 
 - **Test-load flake fences.** The zlm suite's fabricated lock holders
   now wait for the holder process's exec on every site that stages
@@ -78,6 +122,7 @@
   suite's older tests source the repository's own `bashinit` instead
   of whichever lane the home-directory link points at.
 
+
 - **Manifest stores no longer stall pruning.** A Backup step that sends
   part of a pool to another pool keeps its property-manifest store beside
   the mapped datasets, where no Checkagainst row reached it. Its
@@ -89,12 +134,14 @@
   other dataset's. Pool-level steps, and steps whose destination names
   the full mapped path, need no extra row.
 
+
 - **Checkagainst logging repeats once per dataset, not once per
   snapshot.** The no-entry warning, its "enteries" spelling corrected,
   and the "all matched counterparts absent" verdict now log once per
   dataset per run. The repeats appear only with verbose logging. A
   cleanup of several hundred store snapshots used to print the absent
   verdict for each one.
+
 
 - **The bottom log panel's search survives a re-render.** Toggling Short
   Prefix or changing the level filter rebuilds every line. The active
@@ -103,14 +150,41 @@
   Logs-tab search likewise resynchronizes when a long-running log forces
   the viewer to trim its oldest text.
 
+
 - **Disks tab tints land on the member's own row.** A partition member
   of a pool or vdev tints its partition row, and a whole-disk member
   tints its disk row — the row that carries the pool name in the Pools
   column. A partition used to tint its parent disk. The enclosure tint
   still lands on whole disks.
 
-### Changed
 
+- **Daily backups on two-node sites: the compute host was never
+  resolved.** `zfsdailybackup` and the `rsync-dailybackup` template
+  defined the storage and compute host names only in single-node mode.
+  A two-node run left `compute_host` unset: a stock run degraded to a
+  failed-pull warning, and a strict-mode site copy died "unbound
+  variable". Both resolve the host pair in either node mode now.
+  `zfsdailybackup` loads its node configuration through `node-lib.sh`,
+  so a missing or incomplete configuration stops the run (exit 1) with
+  the install hint.
+
+
+- **The daily backup's prune step aborted under strict mode.** The
+  shipped `rsync-dailybackup` template turns strict mode on when
+  `zfsdailybackup` sources it. The prune chain then stopped with
+  "unbound variable" before deleting anything. The orchestrator now
+  restores its documented non-strict mode after that source and again
+  before the prune leg. `zfscleanup`, `zfsretain`, `zfsdelsnap`, and
+  `zfsmassdelsnaps` also tolerate a strict caller on their own.
+
+
+- **Guest address discovery in two-node labs (test framework).** A
+  rediscovery after a guest restart could return the lab's static
+  point-to-point address, which the development host cannot route.
+  Discovery skips that pair and returns the management address.
+
+
+### Changed
 - **Config schema version 33.** The config migrates from 32 to 33 on its
   first load, which adds the manifest-store rows to the stored
   Checkagainst table. The pre-migration copy is archived under
@@ -119,47 +193,148 @@
   hand-edited file — `null` where a list belongs, a row that is not an
   object — derives no rows instead of stopping the load.
 
+
 - **The Disks tab reads Enclosures, Disk Inventory, Pool Topology.**
   The Enclosures section moved to the top. It still shows when no
   enclosure is present.
+
 
 - **`zfsretain` dry runs no longer print a banner.** The line `INFO: Dry
   run: shows what a real run would delete.` is gone; it printed once per
   dataset. The Retention guide states what a dry run evaluates and what
   it cannot model.
 
-### Tests
 
+- **The cron drop-in exists on hosts without schedules.** The scheduler
+  creates `/etc/cron.d/zfsutilities` when an active profile exists or
+  the nightly settings backup is on (the default). The file used to
+  appear only with an active profile.
+
+
+- **Config version 34.** The config migrates from 33 to 34 on its
+  first load, which seeds the `settings_backup` section — retention and
+  the nightly schedule, with user-set values preserved. An earlier
+  build that reads the newer config warns, keeps an archived copy, and
+  loads it.
+
+- **`state_dataset_mountpoint` lives in `iscsi-lib.sh`.** The helper
+  moved out of `export-iscsi-state`, so the state map export and the
+  settings backup share one resolver.
+
+
+- **Survey replay conflicts (test framework).** Only a world requested
+  explicitly (`--world` or `ITF_SURVEY_WORLD`) can conflict with an
+  archive. An unset setting takes the archive's world.
+
+
+### Tests
 - The Checkagainst row derivation tolerates a section, a list, or a row
+
   of the wrong type. The tolerance is pinned at three levels — the
   derivation, the 32→33 migration, and a real config load of a
   hand-damaged file — and each level fails against the previous code.
 
+
 - The Python manifest-store row is checked against the bash
+
   `propmanifest_dataset` it mirrors, so the two cannot drift apart.
 
+
 - The print-once marker sweep is pinned for both callers: a `zfsretain`
+
   dry run in a child process, and `zfsdelsnap` with every marker.
 
+
 - The checkagainst suite gains the all-absent verdict with two
+
   counterparts and the once-per-dataset behavior of the no-entry warning
   and the all-absent verdict.
 
-### Documentation
 
+- New suites for `backup-settings` (shell) and the GUI's settings
+
+  backup and restore handlers (Python). They cover the retention, the
+  argument checks, the housekeeping step, the nightly cron line, and
+  the config section's seeding and migration.
+
+
+- Strict-caller regressions across the prune chain (`zfscleanup`,
+
+  `zfsretain`, `zfsdelsnap`, `zfsmassdelsnaps`), and two-node host-pair
+  resolution tests for `zfsdailybackup` and `rsync-dailybackup`.
+
+
+- Survey journey suite: the world checkpoint, revert, and rebuild
+
+  paths, and both full-function legs. The tracked sample archive is
+  regenerated for the default world.
+
+
+- The docs-integrity suite fails on an untracked, non-ignored entry
+
+  directly under the repository root.
+
+
+- The cron output-silencing tests opt their seeded config out of the
+
+  nightly backup. The `zfsdailybackup` suite points its snapshot-name
+  reservations at the suite's run directory.
+
+
+### Documentation
 - The messages catalog drops the row for the removed dry-run banner and
+
   notes the once-per-run logging of the rc 5 warning and the rc 4
   verdict.
 
+
 - The bash modules guide documents the manifest-store row and when it is
+
   derived. The GUI guide's Checkagainst section describes the third row,
   and its Disks tab sections follow the new order and tint rule.
 
+
 - The developer guide's data-structures page shows schema version 33,
+
   names the real migration function, and states that a migration must
   never raise. coding-policies.md carries the same rule.
 
+
 - GLOSSARY gains *print-once marker* and extends *property manifest*.
+
+- Commands guide: the `backup-settings` page, and `zfsdailybackup`'s
+
+  flow, return codes, and node-configuration handling.
+
+
+- GTK GUI guide: the Settings-menu pair, a "Settings backup and
+
+  restore" section, and the nightly line in the schedule notes.
+
+
+- Developer guide: the `settings_backup` config object and the settings
+
+  backups layout; the scheduler's settings line; `node-lib.sh` in the
+  bash modules guide and `state_dataset_mountpoint` under
+  `iscsi-lib.sh`; the host-pair resolution on the two-node config page.
+
+
+- Messages catalog: the `backup-settings`, Settings-menu, and scheduler
+
+  rows, and `node-lib.sh`'s fatal lines under `zfsdailybackup`.
+
+
+- Integrated-testing docs: campaign plans, the finding-to-repair loop
+
+  as six steps, and the requirements-register seeding process; the
+  survey's full-function legs and world lifecycle.
+
+
+- Testing guide: the suite catalog lists every suite on disk.
+
+- GLOSSARY gains *campaign*, *finding*, *journey*, *marker*, *repair
+
+  plan*, *requirements register*, and *settings backup*.
 
 ## 0.143.0
 

@@ -168,6 +168,10 @@ function _list_and_approve {
     local snap failed=0 release_arg=""
     if [[ "${releaseholds:-N}" == "Y" ]]; then
         release_arg="releaseholds"
+        # The declare -p guard (the zfscleanup/zfsretain/zfsdelsnap
+        # pattern): under a strict caller the bare ${#unset[@]} read
+        # is fatal; declare only when absent so a caller's list survives.
+        declare -p releaseholds_tags >/dev/null 2>&1 || releaseholds_tags=()
         if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
             releaseholds_tags=('offsite-*')
         fi

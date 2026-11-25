@@ -40,6 +40,8 @@ Low-level config I/O and small, cross-cutting configuration helpers.
 | `get_log_retention_days()` / `save_log_retention_days()`         | Session-log retention days                                   |
 | `get_history_retention_days()` / `save_history_retention_days()` | History retention days                                       |
 | `get_session_log_max_bytes()` / `save_session_log_max_bytes()`   | Session-log size cap                                         |
+| `get_paths_config(config, persist=True)`                         | Return the `paths` section, seeding missing keys             |
+| `get_settings_backup_config(config, persist=True)`               | Return the `settings_backup` section, seeding missing keys   |
 | `prune_old_logs(retention_days)`                                 | Delete session logs older than the retention setting         |
 
 **Called modules / imported helpers:**
@@ -2419,15 +2421,24 @@ stripping the backslash before the shell runs the command. The drop-in and
 its logrotate companion are persisted `/etc` state that a version upgrade
 can outrun, so `converge_scheduler_files()` re-derives their expected
 content at GUI startup and at the start of every scheduled run, rewriting
-each only when it differs (missing drop-ins are created only when active
-profiles exist).
+each only when it differs.
+
+The drop-in also carries the nightly `backup-settings` line whenever the
+config's `settings_backup.daily` key is on (the default). The line names the
+script by its absolute path, because the drop-in's `PATH` lacks the
+deployment's `bin` directory, and uses the same stamper and `%` escaping as
+the profile lines. The time comes from `settings_backup.daily_hour` and
+`daily_minute` (00:17 by default). The cron drop-in is created when an
+active profile exists or this line is enabled; the logrotate drop-in only
+when active profiles exist.
 
 **Key functions:**
 
 | Function                                       | Purpose                                                    |
 | ---------------------------------------------- | ---------------------------------------------------------- |
-| `build_cron_content(profiles, runner_path, cron_log)` | Render the full drop-in content for the given profiles |
-| `write_cron_file(profiles, runner_path, cron_log)` | Regenerate the cron drop-in from scratch               |
+| `build_cron_content(profiles, runner_path, cron_log[, settings_line])` | Render the full drop-in content for the given profiles, plus the optional settings-backup line |
+| `write_cron_file(profiles, runner_path, cron_log[, settings_line])` | Regenerate the cron drop-in from scratch               |
+| `build_settings_backup_line(config, cron_log)` | Build the nightly `backup-settings` line, or `None` when the daily backup is off or the script is not found |
 | `converge_scheduler_files(config)`             | Rewrite the cron/logrotate drop-ins only when they differ from the generated content |
 | `generate_cron_line(profile, runner_path, cron_log)` | Build one crontab line                                |
 | `interpret_cron(expression)`                   | Human-readable description of a cron expression            |
@@ -2442,9 +2453,9 @@ profiles exist).
 | Module          | Purpose in this module |
 | --------------- | ---------------------- |
 | `backup_config` | `log_msg`              |
-| `config_core`   | `get_paths_config`     |
+| `config_core`   | `get_paths_config`, `get_settings_backup_config` |
 | `logrotate_manager` | Drop-in content and writer for convergence          |
-| `path_utils`    | `get_profile_runner_path` |
+| `path_utils`    | `get_profile_runner_path`, `find_script` |
 | `profile_manager` | `list_profiles` for convergence |
 
 ---
@@ -2964,6 +2975,7 @@ info panel, dry-run toggle, and startup checks.
 | `update_action_buttons()`              | Show the action buttons for the current page   |
 | `log_message()` / `_update_progress()` | Feed the info panel                            |
 | `_check_peer_version_async()`          | Two-node peer version comparison               |
+| `on_backup_settings()` / `on_restore_settings()` | Settings-menu backup and restore of the pool-resident settings copies; the script's output is relayed to the info panel, and a restore reloads the config and refreshes the pages |
 
 **Internal flow:**
 

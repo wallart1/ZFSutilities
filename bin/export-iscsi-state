@@ -335,36 +335,10 @@ install_state_file() {
     return 0
 }
 
-# Echo the mountpoint of <pool>/zfsutilities, creating the dataset on first
-# use. Prints nothing and returns 1 when the dataset cannot be created or
-# resolved to a usable mountpoint.
-state_dataset_mountpoint() {
-    local pool="$1" ds mnt
-    ds="${pool}/zfsutilities"
-
-    if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
-        if ! zfs create "$ds" >/dev/null 2>&1; then
-            log_msg "WARN: Could not create dataset ${ds} — pool ${pool} skipped"
-            return 1
-        fi
-        log_msg "INFO:   ✓ Created dataset ${ds} (first use)"
-    fi
-
-    mnt=$(zfs list -H -o mountpoint "$ds" 2>/dev/null || true)
-    if [[ -z "$mnt" || "$mnt" == "-" || ! -d "$mnt" ]]; then
-        # Not an alarm: a configured pool whose state dataset is currently
-        # unmounted is a standing condition (backup pools spend most of
-        # their time this way); the map still reaches every pool that can
-        # take it.
-        log_msg "INFO: Dataset ${ds} has no usable mountpoint (${mnt:-none}) —" \
-            "pool ${pool} skipped"
-        return 1
-    fi
-    printf '%s\n' "$mnt"
-}
-
 # Write the state map + node.conf copy onto every online pool. Sets
-# pools_written to the number of pools that received both files.
+# pools_written to the number of pools that received both files. The
+# <pool>/zfsutilities mountpoint (dataset created on first use) comes from
+# state_dataset_mountpoint in the shared iscsi-lib.sh.
 write_state_to_pools() {
     local json_tmp="$1"
     local pool online mnt

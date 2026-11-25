@@ -1795,3 +1795,267 @@ desktop-menu and test-logging bashinit entries.)
   that pub main has already fixed; it retires at the lane merge. One
   GLOSSARY line over the wrap width, this cycle's own, was re-wrapped
   (documentation only, no wording change).
+
+(pub3 lane history block, unioned at the 0.144.0 pub3-lane merge —
+pruned at the next release prune. Merge-2 facts: pub3's 32→33
+settings migration renumbered to 33→34 (CONFIG_VERSION 34, docs
+and tests following); the duplicate checkagainst seeding unified
+on pub3's survey-compare row (pub's survey-user was its port);
+the zfsdailybackup bespoke recipe gained the busy-refusal
+acceptance; _survey_scratch_destroy gained the -busy destroy;
+F-052 stays pruned in FINDINGS.md and the stale no-rows sentence
+was removed in-merge, retiring pub3's PREEXISTING entry for it;
+pub3's gui_probe.py ruff-format entry retires here too — pub
+main reformatted the file in b01909d.)
+
+## 2026-11-23/24 — docs for the campaign/repair/register processes + j22 full-function legs (pub3)
+
+User direction (four numbered items): document (1) what a campaign plan
+is and how it comes into being (itf-coverage.md), (2) the finding →
+repair-plan process, (3) the UX/future-direction → requirements-register
+seeding (both integrated-testing.md), and (4) stop taking shortcuts in
+j22 — keep the override tests, but also create a realistic world, run
+FULL-FUNCTION tests against it, and manage the world lifecycle
+(snapshot → simple revert; re-create when consumed).
+
+- Docs A1–A3 landed: new "Campaign plans" section in itf-coverage.md
+  (S/M ID law, gates, the standard plan workflow, durable residue);
+  Findings-and-repair-loop and Requirements-register sections in
+  integrated-testing.md rewritten as stepwise processes drawn from
+  repair-plans/README.md, FINDINGS.md, REQUIREMENTS.md.
+- j22 (item 4):
+  - Default world flipped thin → lived-in (user-approved): sampler
+    --world default, survey-lib fallbacks. Replay-conflict semantics
+    tightened to "explicit requests only" (unset knob never conflicts;
+    --rerun of a thin archive still works; explicit thin vs lived-in
+    archive now refuses, matching the documented law).
+  - World lifecycle: `world-staged` stopped-guest qm checkpoint after
+    staging + GUI env (_survey_world_checkpoint);
+    _survey_world_restore (stale-newer-snapshot sweep → rollback →
+    restart → IP re-resolve → plan re-verify via factored
+    _survey_world_verify); _survey_world_restage fallback (drop stale
+    checkpoint, scratch destroy, deterministic restage, re-checkpoint).
+  - Site-adapted pair staged by the lived-in world
+    (itf_survey_stage_site_pair): zfsdailybackup + rsync-dailybackup +
+    bashinit rendered from the staged tree's own templates; pulls per
+    lab shape (local; + compute host two-node; absent site off);
+    backup leg on backup-src → recv; prune on.
+  - Recipes: cli-zfscleanup/cli-zfsdailybackup now bespoke — leg 1 =
+    the old table invoke verbatim; stage F (after GUI probe, before
+    wrap) runs the full-function legs for drawn commands: zfscleanup
+    with NO overrides (real retention; verdict vs plan + pinned
+    config: deletions happened, holds/clone survive, bucket bounds),
+    zfsdailybackup via the site pair with NO overrides (leg banners +
+    post-state: snap on src+recv, snapfile clean, pulled files).
+    Thin runs disclose per-command skips.
+  - Journey wiring: checkpoint after staging; stage F; wrap address
+    re-resolved (restores may re-lease DHCP).
+- Tests: test-itf-survey-journey +6 tests (checkpoint order, restore
+  paths + restage fallback, site-pair render shapes both lab shapes,
+  stage-F gating, both full-function verdicts incl. fail paths);
+  updated: override-invoke test → recipe leg shapes, default-world
+  test (lived-in + thin knob + thin replay no-pin), depth fixture.
+  test_survey_sample updated for the flip + explicit-conflict law.
+  Full suite green once; mkdocs build clean.
+- Live proof: run-20261123-235048-j22-function-survey (seed proof-j,
+  world lived-in via the new default, 106 items, two-node lab shape).
+
+### Live-proof post-mortems (runs 20261123-235048, 20261124-000928)
+
+- Run 1 red at the world checkpoint: post-restart IP discovery grabbed
+  the STATIC P2P address (up before DHCP leased; dev cannot route the
+  P2P subnet). Fix (guest-lib): itf_guest_ip now skips the site's
+  ITF_ISCSI_STORAGE_IP/COMPUTE_IP pair — benefits every post-restart
+  rediscovery. Regression test in test-itf-survey-journey. Run 2's
+  checkpoint passed live (guest back at the management address).
+- Run 2 red on four command failures, one root cause:
+  _survey_guest_run's raw-string eval sat behind ssh's remote sh -c,
+  whose parse CONSUMES quote characters — the wrapper's eval then
+  re-parsed unquoted text. Casualties: the overrides argument vanished
+  (zfscleanup ran mislabeled, no dry-run), its semicolons split the
+  line (zfsdailybackup executed the trailing `send-receive` call in
+  the wrapper shell, rc 127), and empty '' args collapsed (the
+  full-function zfscleanup lost its label, FATAL rc 8). Fix: the
+  helper takes command WORDS and %q-escapes them into the eval line;
+  all 17 call sites converted. Existing recipes had survived only
+  because their quoted args held no spaces or semicolons.
+- Second cause: the GUI stage's `rm -rf /root/survey-harness` wiped
+  the site pair staged inside it — stage F found no orchestrator. Fix:
+  the pair lives in /root/survey-site (its own directory).
+- Open for run 3: the gui-w-checkagainst-edit-cell failure ("no
+  editable text renderer") — if it repeats on a healthy world it is a
+  finding-class defect (triage then, not now).
+
+### F-053/F-054: two product defects found by the full-function legs (all fixed + verified)
+
+- F-053: zfsdailybackup/rsync-dailybackup left `compute_host` unset on
+  two-node sites (hand-rolled node resolution, lowercase pair defined
+  single-node only). Fix: the orchestrator now source_helpers
+  node-lib.sh (owns precedence + both modes); rsync keeps its soft
+  skip and resolves the pair for both modes. Two-node regression
+  tests in both suites.
+- F-054: the prune leg dies under the strictness the templates leak
+  and re-leak (rsync-dailybackup carries set -euo pipefail; the SEND
+  leg re-arms it mid-run by sourcing strict standalone zfsdelfs via
+  zfs-send-receive). The whole prune chain's unguarded reads were
+  hardened (`:-` scalars/positionals, declare -p tag arrays, guarded
+  element reads in zfsretain) AND the orchestrator now re-asserts its
+  documented non-strict mode at the rsync source point and at the
+  prune leg. Live-traced with bash -x in the kept lab.
+- The full-function dailybackup leg's feed now pre-feeds the prune's
+  checkagainst confirmations (ask_yn rc-5 path) the way profile_runner
+  pre-feeds cron prompts; the site pair is a TREE-SHAPED layout
+  (bin/ + lib symlink) so helper resolution matches a real install;
+  the site is local-pull (the compute /etc rides the P2P link).
+- Checkagainst GUI gap: the lived-in config rows now seed a
+  comparison row (the page's only editable tree was empty).
+- GREEN: run-20261124-052832 (172 steps, 158 pass / 0 fail / 2 skip,
+  lab auto-destroyed) — both full-function legs + checkpoint/restore
+  cycle live-proven.
+
+## 2026-11-24 (pub3) — Pool-resident settings backups (backup-settings + GUI menu pair)
+
+User request: back up ALL the ZFSutilities settings into the
+<pool>/zfsutilities datasets (the iscsi-state.json/node.conf pattern),
+keep copies 35 days, and add Settings-menu Backup/Restore items.
+User decisions taken at plan time: recurrence = a daily automatic line
+in the product's own cron drop-in (plus the manual menu items); the
+root-only smtp-credentials.json IS included (0600 preserved on the
+pools, same stance as iscsi-state.json).
+
+- bin/backup-settings (new): dated copies into
+  <pool>/zfsutilities/settings-backups/<YYYYmmddTHHMMSS>/ with
+  manifest.json (name/mode/bytes); writes to every online pool
+  (two-node = pool_list, single-node = all online); dataset created on
+  first use; prune at settings_backup.retention_days (default 35,
+  env SETTINGS_BACKUP_RETENTION_DAYS override, ≥1 enforced);
+  --list (ts|pool|files, newest first) and --restore <ts> (stages the
+  current settings to <state>/settings-pre-restore/<run-ts>/ first,
+  restores to canonical modern paths, profiles MERGE); flock
+  .settings_backup.lock serializes runs. iscsi-state.json deliberately
+  NOT in the set (its own freshness machinery + degraded-state fence).
+- state_dataset_mountpoint moved bin/export-iscsi-state →
+  lib/iscsi-lib.sh (shared pool-resident-files section) so both
+  writers land datasets the same way; export suite untouched-green.
+- Config: settings_backup {retention_days 35, daily true, daily_hour 0,
+  daily_minute 17} + get_settings_backup_config accessor;
+  CONFIG_VERSION 32→33 migration (config-key migration law).
+- cron_manager: build_settings_backup_line (abs path via find_script,
+  stamper + %-escape law, out-of-range schedule falls back to 00:17);
+  build_cron_content/write_cron_file take settings_line;
+  converge + schedule_page._regenerate_cron pass it. Drop-in creation
+  gate is now has_active OR daily-on (a daily host with no profiles
+  still gets the file) — three TestConvergeSchedulerFiles tests updated
+  to that contract, one new no-drop-ins-when-disabled test.
+- GUI: Settings menu gains separator + "Backup Settings..." /
+  "Restore Settings..." (gui_helpers.create_menu_bar) wired to
+  on_backup_settings / on_restore_settings (zfsutilities_gui.py,
+  _run_settings_script relays output lines verbatim; restore picker =
+  ComboBoxText + destructive confirm; on success self.config =
+  load_config() + page refresh + restart note — the
+  config-resurrection read-merge-write law is why the reload matters).
+- Tests: tests/test-backup-settings (bash, mirrors the export-iscsi
+  harness; subshell laws: create-log to a FILE, fresh pools root per
+  test, main only in $(...)); test_settings_actions.py (new python,
+  real-module eviction fixture copied from test_zfsutilities_gui;
+  patch-restore pitfall → asserts on mocks captured inside the patch
+  scope; TimeoutExpired needs the REAL class bound onto the patched
+  module mock).
+- Docs: commands.md entry, gtk-gui.md menu + "Settings backup and
+  restore" section, data-structures.md "Settings backups" layout
+  section, messages/index.md rows (script under Pool and System
+  Maintenance; GUI rows under zfsutilities_gui), GLOSSARY "settings
+  backup".
+- Full-suite fallout fixed after the first end run: universe.tsv gained
+  the cli-backup-settings row (documented commands must be sampled —
+  test_survey_sample law), requirements.manifest gained the gi entry for
+  test_settings_actions.py, write_cron_file now makedirs the drop-in's
+  parent (isolated/redirected layouts; the daily line means no-profile
+  hosts converge a drop-in too), and TestCronOutputSilencing seeds a
+  daily-off config (hermetic to the new default; the tests pin output
+  silencing, not backup policy). Final full run: all 116 suites green.
+
+## 2026-11-24 (pub3) — campaign-plan / repair-loop / requirements-register docs: re-request verdict + glossary
+
+User re-requested the three documentation items (items 1–3 of the
+2026-11-23/24 direction above), quoting the pre-9b9b3ff sentences.
+Verdict: all three were already documented and committed in 9b9b3ff and
+the working tree matched. The old sentences live on in every DEPLOYED
+tree (dev host, stewie, tweety — 0.143.0) and in pub/main (54cd0c0),
+all of which predate the lane commit — that is what was being read.
+Audit of the committed sections against journeys/README.md,
+FINDINGS.md, REQUIREMENTS.md, repair-plans/README.md: every claim
+holds; sections left word-for-word.
+
+- GLOSSARY.md: five entries added (campaign (campaign plan), finding,
+  journey, repair plan, requirements register) — the terms those
+  sections use, none of which the glossary defined. Prose style,
+  alphabetical positions, in-page anchors.
+- Stray-file cleanup (user-approved): 9b9b3ff had accidentally
+  committed `current` at the repo root (four lines of captured test
+  stdout from the restage-fallback block of test-itf-survey-journey).
+  Deleted from the working tree together with its two empty siblings
+  `world-staged` and `full-leg-product` (2026-11-23 23:37/23:40); the
+  `current` removal was then committed on the user's confirmation as
+  9f4bb5a (single path). PREEXISTING entry removed on fix.
+- PREEXISTING: one new entry filed and left open — FINDINGS.md's
+  stale "No rows remain" sentence over a non-empty table, plus its
+  status chain listing `accepted` as a step after `verified`.
+- Validation: glossary order/width/anchor checks + docs-integrity
+  suite. Full suite skipped at the user's choice (prose-only change;
+  no test reads GLOSSARY.md).
+- Disclosed, not changed: one ~50-word sentence in the campaign-plan
+  bullet of itf-coverage.md exceeds the writing-rules target — left
+  alone under notice 16 (offered a split into a list).
+- Root audit (user item, mid-session): every entry directly under the
+  repository root checked — all referenced and in place (spikes/ is the
+  documented home of the charting.md spike scripts; .dockerignore pairs
+  with .devcontainer/Dockerfile; the published 0.143.0 tree shipped no
+  stray). No further misplaced file and no code change needed.
+- Root-litter guard (user-approved plan): test_docs_integrity.py gains
+  `_untracked_root_entries` + TestRepositoryRoot — the live guard
+  (skips with git's message when git cannot enumerate the tree), a
+  fixture-repo self-test, and the outside-a-work-tree case. Red-proofed:
+  a temporary root file and folder fail the live test by name; green
+  again once removed. testing.md: coverage row + `git` dependency
+  bullet. LAW for every session: a new or private file directly under
+  the root must be staged, moved, or git-ignored, or the gate goes red
+  — and a hand-debug redirect must never write into the repository
+  root (that is how `current` and its two siblings were born).
+
+## 2026-11-24 (pub3) — 0.144.0 lane wrap-up review pass (uncommitted)
+
+Review of everything since v0.143.1 (commits 9b9b3ff, 9f4bb5a, 036b764).
+Steps 1 and 4 skipped by their own precondition (PUB main only).
+
+- Product: `delsnap` still aborted under a strict caller — three reads
+  the F-054 fix missed (the tag-array length, the remaining-holds
+  result, `skipbusy`) — plus the same tag-array read in
+  `zfsmassdelsnaps`. Closed with the `declare -p` / `:-` pattern;
+  strict-caller regression tests in test-zfsdelsnap, test-zfsretain,
+  and test-zfsmassdelsnaps, each red-proven.
+- `zfsdailybackup` sources node-lib.sh in the coding-policy form
+  (`NODE_LIB` override, between bashinit and rootcheck).
+- `backup-settings`: one documented timestamp pattern (it was three
+  undocumented copies); the housekeeping step reuses
+  `_settings_existing_mountpoint`.
+- GUI restore picker: malformed `--list` lines are dropped before the
+  picker is built, so the picker index always addresses the backup the
+  user sees (a skipped line could restore a different timestamp).
+- Tests: the over-length lines wrapped (render-proven
+  byte-identical); test-backup-settings announces and counts every test
+  (the whole suite used to report as one) and covers retention,
+  argument validation, and housekeeping (each red-proven); new coverage
+  for the cron line builder, the settings accessor, and the GUI
+  handlers; the survey journey suite's `itf_step` stand-in joins every
+  detail argument like the real function; test-zfsdailybackup points
+  nextsnap reservations at the suite run dir instead of deleting live
+  `/run` files.
+- Docs: the testing.md catalog lists every suite on disk (23 were
+  missing); `settings_backup` keys documented and the generation
+  example at 33; messages-manual rows for node-lib's fatals under
+  zfsdailybackup and for the cron line's WARNs; module tables name the
+  moved and new functions; the two-node config page matches F-053;
+  GLOSSARY `marker` entry (the user's queue term — the queue is empty).
+- PREEXISTING: two lint findings filed (SC2120 ×2 on the whole-set
+  shellcheck run; ruff format drift in gui_probe.py).

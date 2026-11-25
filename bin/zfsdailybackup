@@ -27,28 +27,20 @@ fi
 bashinit
 unset _local_bashinit
 
+# Node configuration (single-node or two-node): node-lib owns the conf
+# precedence (the FHS conf, then the legacy paths, FATAL with the
+# install hint when absent) and resolves the lowercase storage_host /
+# compute_host pair for BOTH node modes.  The previous hand-rolled copy
+# defined that pair only in single-node mode — two-node runs left
+# compute_host unset (found live by the j22 full-function leg,
+# run-20261124-004523: the strict-mode site-adapted copy died "unbound
+# variable" at the compute pull banner; stock non-strict runs degraded
+# to a failed-pull WARN).
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
 source_helper rootcheck
 rootcheck
-
-# Node configuration (single-node or two-node), resolved with node-lib's
-# precedence: the current FHS conf first, then the legacy conf paths.
-: "${NODE_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/node.conf}"
-if [[ ! -r "$NODE_CONF" ]]; then
-    if [[ -r "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; then
-        NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
-    elif [[ -r "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
-        NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
-    else
-        echo "✗ Missing $NODE_CONF — install via: bin/install-single-node" >&2
-        exit 1
-    fi
-fi
-source "$NODE_CONF"
-node_mode="${NODE_MODE:-two-node}"
-if [[ "$node_mode" == "single-node" ]]; then
-    storage_host="${THIS_HOST:-$(hostname -s)}"
-    compute_host="$storage_host"
-fi
 
 source_helper zfssnapbuild
 source_helper zfs-send-receive
@@ -65,6 +57,17 @@ _write_trailer() {
 append_exit_trap _write_trailer
 source_helper zfscleanup
 source_helper rsync-dailybackup
+
+# rsync-dailybackup is a SITE template (the shipped one carries
+# `set -euo pipefail`), and sourcing it leaks that strictness into the
+# rest of THIS orchestrator — whose header declares it deliberately
+# NON-strict (the coding-policy template exemption).  Restore the
+# orchestrator's documented mode at the source point: under the leaked
+# set -e, every later rc-checking helper call dies silently — the prune
+# leg's checkagainst contract (rc 5/6/7 are designed outcomes
+# zfsdelsnap reads) never got to read its rc (found live by the j22
+# full-function leg, run-20261124-025349).
+set +euo pipefail
 
 autoresume='Y'
 includes=()
@@ -197,6 +200,15 @@ if [[ $prune = 'Y' ]]; then
         log_msg "INFO: Dry-run: Would prune snapshots."
     else
         log_msg "INFO: ***  Pruning snapshots.  ***"
+        # Re-assert the orchestrator's documented non-strict mode AT THE
+        # PRUNE LEG: sourced standalone helpers re-arm strictness in
+        # this shell long after the rsync-source containment above
+        # (live-traced: source_helper zfsdelfs carries set -euo
+        # pipefail), and the prune chain's rc contract predates strict
+        # mode — checkagainst's 5/6/7 and the per-snapshot deletion
+        # verdicts are designed outcomes the callers must read, not
+        # aborts (found live by the j22 full-function leg).
+        set +euo pipefail
         cleanup '' '' 'dailybackup'
     fi
 fi

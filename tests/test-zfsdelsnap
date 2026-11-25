@@ -990,6 +990,108 @@ test_preview_gate_context_folds_into_keep_reason() {
 }
 
 # ------------------------------------------------------------------
+# Test: a strict-mode caller (set -u) gets delsnap's own defaults
+# ------------------------------------------------------------------
+# A site copy that turns strict mode on and sources this helper (the
+# shape the j22 full-function leg hit, F-054) must reach delsnap's
+# documented defaults, never an "unbound variable" death on a variable
+# the caller never set.
+
+# _strict_caller_stubs <tmpdir> — helper stubs for the strict-caller
+# tests. The lock stub sets zfslock_id like the real manager does (the
+# strict child reads it right after the acquisition).
+_strict_caller_stubs() {
+    local tmpdir="$1"
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { zfs_delallholds_remaining_tags=""; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+function busy_resolve_dataset_busy {
+    return 1
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+}
+
+test_strict_mode_caller_gets_defaults_not_unbound() {
+    test_start "Strict-mode caller: unset hold-tag list defaults instead of aborting"
+    local tmpdir output rc=0
+    tmpdir=$(mktemp -d)
+    _strict_caller_stubs "$tmpdir"
+
+    # Strict mode is ON before the helper is sourced, and no caller
+    # variable beyond the arguments was ever set.
+    output=$(
+        env mydir="$tmpdir" _DESTROY_MARK="$tmpdir/destroyed" bash -c '
+            zfs() {
+                case "$1" in
+                    list)
+                        if [[ "${4:-}" == "clones" ]]; then echo "-"; fi
+                        return 0
+                        ;;
+                    destroy) echo "DESTROYED $*" >> "$_DESTROY_MARK"; return 0 ;;
+                esac
+                command zfs "$@"
+            }
+            set -u
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            msg_level="INFO"
+            delsnap "pool@snap" "0" "releaseholds" "nocheckagainst"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 0 && -f "$tmpdir/destroyed" \
+            && "$output" != *"unbound variable"* ]]; then
+        test_pass
+    else
+        test_fail "Expected a clean strict-mode run, got rc=$rc output: $output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_strict_mode_caller_missing_minage_is_clean_fatal() {
+    test_start "Strict-mode caller: a missing minimum age is the documented FATAL"
+    local tmpdir output rc=0
+    tmpdir=$(mktemp -d)
+    _strict_caller_stubs "$tmpdir"
+
+    # With the minimum-age argument omitted the caller must see delsnap's
+    # own message and exit code — not a nounset abort on the bare $2 read.
+    output=$(
+        env mydir="$tmpdir" _DESTROY_MARK="$tmpdir/destroyed" bash -c '
+            zfs() { return 0; }
+            set -u
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            msg_level="INFO"
+            delsnap "pool@snap"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 8 && "$output" == *"A minimum age (in days) must be specified"* \
+            && "$output" != *"unbound variable"* && ! -f "$tmpdir/destroyed" ]]; then
+        test_pass
+    else
+        test_fail "Expected the minimum-age FATAL (rc 8), got rc=$rc output: $output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
 # Test: a busy refusal resolved by the resolver is retried once
 # ------------------------------------------------------------------
 test_busy_resolved_retries_destroy_once() {
@@ -1078,6 +1180,8 @@ test_preview_gate_holds_remaining_tags_block_when_releasing
 test_preview_gate_releasable_holds_proceed
 test_preview_gate_clone_dependents_block
 test_preview_gate_context_folds_into_keep_reason
+test_strict_mode_caller_gets_defaults_not_unbound
+test_strict_mode_caller_missing_minage_is_clean_fatal
 
 test_summary
 teardown_test_env

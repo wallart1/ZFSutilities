@@ -32,13 +32,31 @@
 #       (ZFSCONFIG_PATH) every CLI recipe runs under.
 #   itf_survey_stage_world <guest-ip>
 #       World-variant dispatcher: stages the world the archive names
-#       (ITF_SURVEY_WORLD, default thin — the playground above; lived-in
-#       adds the aged, product-named snapshot ladder via the guest clock
-#       walk; busy stages the same ladder and itf_survey_busy_start adds
-#       the bounded background operation) and reports the variant +
-#       stage elapsed time (cost visibility).
+#       (ITF_SURVEY_WORLD, default lived-in — the full-function survey
+#       world; thin is the explicit cold-start choice; busy stages the
+#       same ladder and itf_survey_busy_start adds the bounded background
+#       operation) and reports the variant + stage elapsed time (cost
+#       visibility).
 #   itf_survey_stage_gui_env <guest-ip>
 #       In-guest Xvfb (the product's GUI deps are already installed).
+#   _survey_world_checkpoint / _survey_world_restore
+#       The lived-in world's lifecycle: a stopped-guest qm snapshot
+#       ($SURVEY_WORLD_SNAP) right after staging + GUI-env install, so
+#       a full-function leg that consumes the world can revert it by
+#       rollback; a failed revert falls back to restaging the world
+#       (the planner is deterministic — the identical ladder).
+#   itf_survey_stage_site_pair <guest-ip>
+#       Lived-in only: renders the realistic site's daily-backup pair
+#       (zfsdailybackup + rsync-dailybackup) from the staged tree's own
+#       templates — the documented customization path — with pulls
+#       limited to hosts this lab actually has and the backup leg on
+#       the world's backup-src/receive-tree pair.
+#   itf_survey_run_full_function <guest-ip>
+#       Stage F: full-function legs for the drawn world-consuming
+#       commands (zfscleanup: real retention over the aged ladder, no
+#       overrides; zfsdailybackup: the site pair with no overrides).
+#       Each leg reverts the world afterward.  Thin worlds disclose
+#       the skip per command.
 #   itf_survey_run_cli_item <guest-ip> <id> <command> <depth> <invoke>
 #                           <profiles> <rcs> <feeds> <assert> <profile>
 #                           [node] [busy-mark]
@@ -64,6 +82,10 @@ declare -g SURVEY_SW=""
 declare -g SURVEY_WORLD=""
 declare -g SURVEY_WORLD_SEED=""
 declare -g SURVEY_WORLD_ANCHOR=""
+# The lived-in world's guest-level checkpoint (see
+# _survey_world_checkpoint): full-function legs consume the world and
+# revert to this snapshot.
+SURVEY_WORLD_SNAP=world-staged
 
 # ---------------------------------------------------------------------------
 # Selection
@@ -105,9 +127,13 @@ itf_survey_select() {
     local repo_root="${SURVEY_REPO_ROOT:-$ITF_ROOT/../..}"
     local -a sampler_args=(--repo-root "$repo_root" "$mode"
         --sw "${ITF_SURVEY_SW:-tree}"
-        --world "${ITF_SURVEY_WORLD:-thin}"
         --github-repo "${ITF_GITHUB_REPO:-}"
         --extract-dir "$ITF_RUN_DIR/survey-tree")
+    # An unset world knob stays UNSET on the sampler command line: the
+    # sampler applies its own default (lived-in) and, on replay, refuses
+    # only explicitly requested conflicts — an always-passed value would
+    # make every --rerun of a thin archive look like a conflict.
+    [[ -n "${ITF_SURVEY_WORLD:-}" ]] && sampler_args+=(--world "$ITF_SURVEY_WORLD")
     [[ -n "${ITF_SURVEY_SEED:-}" ]] && sampler_args+=(--seed "$ITF_SURVEY_SEED")
     [[ -n "${ITF_SURVEY_FRACTION:-}" ]] \
         && sampler_args+=(--fraction "$ITF_SURVEY_FRACTION")
@@ -135,9 +161,9 @@ itf_survey_select() {
         "$ITF_RUN_DIR/survey-select.out" | head -1)"
     SURVEY_WORLD_ANCHOR="$(sed -n 's/^# world-anchor //p' \
         "$ITF_RUN_DIR/survey-select.out" | head -1)"
-    # The sampler always prints the world line; a missing one is the same
-    # missing-world-is-thin rule the archive loader applies.
-    [[ -n "$SURVEY_WORLD" ]] || SURVEY_WORLD=thin
+    # The sampler always prints the world line; a missing one falls back
+    # to the sampler's own default (lived-in).
+    [[ -n "$SURVEY_WORLD" ]] || SURVEY_WORLD=lived-in
 
     # Early fence: the closed variant list, refused before any lab is
     # cloned (the sampler validates the name too — this catches a typo
@@ -556,68 +582,9 @@ PYEOF
     # Verification against the plan (real clock again): every planned
     # snapshot exists with its planned creation, holds are in place, and
     # the two real zfsdailybackup runs added their product snapshots.
-    local verify_log="$ITF_RUN_DIR/survey-world-verify.log"
-    # shellcheck disable=SC2016  # the $ expansions run in the guest
-    itf_guest_exec "$guest_ip" '
-        source /root/survey-env.sh 2>/dev/null || true
-        zfs list -Hp -t snapshot -o name,creation -s creation -r "$SURVEY_DS"
-        echo "== holds =="
-        zfs list -H -t snapshot -o name -r "$SURVEY_DS" | while read -r s; do
-            zfs holds -H "$s" 2>/dev/null || true
-        done
-        echo "== recv =="
-        zfs list -Hp -t snapshot -o name,creation -s creation -r "'"$recv_ds"'" 2>/dev/null || true
-    ' > "$verify_log" 2>&1
-    itf_artifact "survey-world-verify" "$verify_log"
+    # (_survey_world_verify owns the check; the restore path reuses it.)
     local verify_out
-    if ! verify_out="$(python3 - "$plan_json" "$verify_log" "$SURVEY_DS" "$recv_ds" <<'PYEOF'
-import json, sys
-
-plan = json.load(open(sys.argv[1]))
-base, recv = sys.argv[3], sys.argv[4]
-names = {}
-holds = set()
-section = None
-recv_snaps = 0
-for line in open(sys.argv[2]):
-    fields = line.split()
-    if line.startswith("=="):
-        section = line.strip()
-        continue
-    if section == "== holds ==" and len(fields) >= 2:
-        holds.add((fields[0], fields[1]))
-    elif section == "== recv ==" and len(fields) >= 2 and "@" in fields[0]:
-        recv_snaps += 1
-    elif not section and len(fields) >= 2 and "@" in fields[0]:
-        names[fields[0]] = int(fields[1])
-problems = []
-# The count expectation: every planned ladder row, the snapshots the two
-# product runs created on backup-src, and the playground's own snapshot
-# on the base dataset (the -r listing includes the base itself).
-for r in plan["ladder"]:
-    full = f"{base}/{r['dataset']}@{r['name']}"
-    if full not in names:
-        problems.append(f"missing {full}")
-    elif abs(names[full] - r["epoch"]) > 30:
-        # The clock walk's landing jitter (clock set over ssh + zfssnapbuild
-        # startup) can run past the original ±5s — live-observed +6s on a
-        # replayed world (run-20261123-202102). Bucket/day semantics are
-        # minute-scale, so the tolerance absorbs jitter, not exactness.
-        problems.append(f"{full} creation {names[full]} != planned {r['epoch']}")
-    if r["hold"] and (full, r["hold"]) not in holds:
-        problems.append(f"hold {r['hold']} missing on {full}")
-want = len(plan["ladder"]) + len(plan["dailybackup"]) + 1
-if len(names) != want:
-    problems.append(f"{len(names)} snapshots under base, planned {want}")
-if recv_snaps < len(plan["dailybackup"]):
-    problems.append(f"receive tree carries {recv_snaps} snapshots")
-if problems:
-    print("; ".join(problems))
-    sys.exit(1)
-print(f"ladder={len(plan['ladder'])} holds={sum(1 for r in plan['ladder'] if r['hold'])} "
-      f"product_runs={len(plan['dailybackup'])} recv={recv_snaps}")
-PYEOF
-    )"; then
+    if ! verify_out="$(_survey_world_verify "$guest_ip" "$plan_json" "$recv_ds")"; then
         itf_step fail "survey world verified" "${verify_out:-see survey-world-verify.log}"
         return 1
     fi
@@ -638,6 +605,10 @@ EOF
     # zfsdailybackup directive runs happen under the minimal config, so
     # the seeded steps and the directive sends never interact.
     itf_survey_stage_config_rows "$guest_ip" || return 1
+
+    # The realistic site's daily-backup pair — the full-function leg's
+    # substrate (see itf_survey_stage_site_pair).
+    itf_survey_stage_site_pair "$guest_ip" || return 1
     return 0
 }
 
@@ -707,6 +678,23 @@ cfg = {
             {"active": False, "source": ds, "dest": ds2 + "-pull", "excludes": []},
         ],
     },
+    # A comparison row (the Check Against page's user-entries tree is
+    # the page's only EDITABLE surface — empty, the probe's edit-cell
+    # role has nothing to commit to; live-observed run-20261124-002726).
+    "checkagainst": {
+        "backup_derived_active": True,
+        "offsite_derived_active": True,
+        "backup_derived": [],
+        "offsite_derived": [],
+        "user_entries": [
+            {
+                "label": "survey-compare",
+                "source_root": ds,
+                "dest_root": ds2 + "-recv",
+                "comment": "seeded by the j22 lived-in world",
+            },
+        ],
+    },
     # Offsite includes/excludes are STRINGS here (offsite_page's own
     # storage shape; the profile runner shlex-splits them).
     "offsite": {
@@ -717,24 +705,6 @@ cfg = {
                 "dest": "<offsite>/survey",
                 "includes": "backup-src",
                 "excludes": "clone-work",
-            },
-        ],
-    },
-    # Check Against: the page's user tree is its only editable surface,
-    # so one seeded user row keeps edit-cell live under any draw (an
-    # empty user tree left the role nothing to commit to — live-failed
-    # run-20261124-121057; port of the pub3 lane fix).
-    "checkagainst": {
-        "backup_derived_active": True,
-        "offsite_derived_active": True,
-        "backup_derived": [],
-        "offsite_derived": [],
-        "user_entries": [
-            {
-                "label": "survey-user",
-                "source_root": ds + "/home",
-                "dest_root": ds2,
-                "comment": "survey seeded row",
             },
         ],
     },
@@ -834,6 +804,456 @@ PYEOF
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# World verification (shared by staging and restore)
+# ---------------------------------------------------------------------------
+
+# _survey_world_verify <guest-ip> <plan-json> <recv-ds> — the staged
+# world against its plan: every planned snapshot exists with its planned
+# creation (±30s landing jitter), holds are in place, and the two real
+# zfsdailybackup runs added their product snapshots.  The restore path
+# reuses it: a rollback must land exactly the world the plan names.
+# Prints the summary line on success; returns nonzero with the problem
+# text on mismatch (the caller owns the PASS/FAIL steps).
+_survey_world_verify() {
+    local guest_ip="$1" plan_json="$2" recv_ds="$3"
+    local verify_log="$ITF_RUN_DIR/survey-world-verify.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$guest_ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        zfs list -Hp -t snapshot -o name,creation -s creation -r "$SURVEY_DS"
+        echo "== holds =="
+        zfs list -H -t snapshot -o name -r "$SURVEY_DS" | while read -r s; do
+            zfs holds -H "$s" 2>/dev/null || true
+        done
+        echo "== recv =="
+        zfs list -Hp -t snapshot -o name,creation -s creation -r "'"$recv_ds"'" 2>/dev/null || true
+    ' > "$verify_log" 2>&1
+    itf_artifact "survey-world-verify" "$verify_log"
+    python3 - "$plan_json" "$verify_log" "$SURVEY_DS" "$recv_ds" <<'PYEOF'
+import json, sys
+
+plan = json.load(open(sys.argv[1]))
+base, recv = sys.argv[3], sys.argv[4]
+names = {}
+holds = set()
+section = None
+recv_snaps = 0
+for line in open(sys.argv[2]):
+    fields = line.split()
+    if line.startswith("=="):
+        section = line.strip()
+        continue
+    if section == "== holds ==" and len(fields) >= 2:
+        holds.add((fields[0], fields[1]))
+    elif section == "== recv ==" and len(fields) >= 2 and "@" in fields[0]:
+        recv_snaps += 1
+    elif not section and len(fields) >= 2 and "@" in fields[0]:
+        names[fields[0]] = int(fields[1])
+problems = []
+# The count expectation: every planned ladder row, the snapshots the two
+# product runs created on backup-src, and the playground's own snapshot
+# on the base dataset (the -r listing includes the base itself).
+for r in plan["ladder"]:
+    full = f"{base}/{r['dataset']}@{r['name']}"
+    if full not in names:
+        problems.append(f"missing {full}")
+    elif abs(names[full] - r["epoch"]) > 30:
+        # The clock walk's landing jitter (clock set over ssh + zfssnapbuild
+        # startup) can run past the original ±5s — live-observed +6s on a
+        # replayed world (run-20261123-202102). Bucket/day semantics are
+        # minute-scale, so the tolerance absorbs jitter, not exactness.
+        problems.append(f"{full} creation {names[full]} != planned {r['epoch']}")
+    if r["hold"] and (full, r["hold"]) not in holds:
+        problems.append(f"hold {r['hold']} missing on {full}")
+want = len(plan["ladder"]) + len(plan["dailybackup"]) + 1
+if len(names) != want:
+    problems.append(f"{len(names)} snapshots under base, planned {want}")
+if recv_snaps < len(plan["dailybackup"]):
+    problems.append(f"receive tree carries {recv_snaps} snapshots")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"ladder={len(plan['ladder'])} holds={sum(1 for r in plan['ladder'] if r['hold'])} "
+      f"product_runs={len(plan['dailybackup'])} recv={recv_snaps}")
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# World checkpoint / restore (the lived-in world's lifecycle)
+# ---------------------------------------------------------------------------
+
+# _survey_world_record — echo the run's storage-guest record path
+# (guest-storage.txt in two-node labs, guest.txt otherwise).
+_survey_world_record() {
+    local rec="$ITF_RUN_DIR/guest-storage.txt"
+    [[ -f "$rec" ]] || rec="$ITF_RUN_DIR/guest.txt"
+    [[ -f "$rec" ]] || { echo "no guest record under $ITF_RUN_DIR" >&2; return 1; }
+    printf '%s' "$rec"
+}
+
+# _survey_world_guest — echo "base vmid ip name" from the record above
+# (the same record the orphan fence owns).  Errors go to stderr; the
+# caller owns the failure steps (the $() subshell eats steps).
+_survey_world_guest() {
+    local rec
+    rec="$(_survey_world_record)" || return 1
+    cat "$rec"
+}
+
+# _survey_storage_ip — the storage guest's CURRENT address.  Callers
+# re-resolve instead of caching: the checkpoint/restore cycle reboots
+# the guest and rewrites the record.
+_survey_storage_ip() {
+    _survey_world_guest | awk '{print $3}'
+}
+
+# _survey_world_checkpoint — snapshot the staged world so full-function
+# legs can consume it and revert cheaply.  The qm snapshot is taken
+# STOPPED, after world staging + GUI-env install: it carries pools
+# (creation times and holds included), config, state dir, AND the VM
+# config of the full pre-item state (P2P NIC, pool disks), so a
+# rollback needs no re-attach.
+_survey_world_checkpoint() {
+    local grec gbase gvmid gname rec
+    grec="$(_survey_world_guest)" \
+        || { itf_step fail "world checkpoint" "no storage guest record"; return 1; }
+    read -r gbase gvmid _gip gname <<< "$grec"
+    rec="$(_survey_world_record)"
+    itf_step_start "world checkpoint" \
+        "guest snapshot $SURVEY_WORLD_SNAP on vmid $gvmid (stopped — the full pre-item state)"
+    itf_guest_stop "$gbase" "$gvmid" \
+        > "$ITF_RUN_DIR/world-checkpoint-stop.log" 2>&1 || true
+    if ! itf_guest_snapshot "$gbase" "$gvmid" "$SURVEY_WORLD_SNAP" \
+            > "$ITF_RUN_DIR/world-checkpoint.log" 2>&1; then
+        itf_step fail "world checkpoint" "see world-checkpoint.log"
+        return 1
+    fi
+    local new_ip=""
+    if itf_guest_start "$gbase" "$gvmid" \
+            > "$ITF_RUN_DIR/world-checkpoint-start.log" 2>&1; then
+        new_ip="$(itf_guest_ip "$gbase" "$gvmid" 600 || true)"
+    fi
+    if [[ -z "$new_ip" ]] || ! itf_wait_ssh "$new_ip" 300; then
+        itf_step fail "world checkpoint" \
+            "guest unreachable after the checkpoint restart (${new_ip:-no address})"
+        return 1
+    fi
+    echo "$gbase $gvmid $new_ip ${gname:--}" > "$rec"
+    itf_step pass "world checkpoint" \
+        "$SURVEY_WORLD_SNAP on vmid $gvmid; guest back at $new_ip"
+    return 0
+}
+
+# _survey_scratch_destroy <ip> — destroy every survey-owned scratch
+# object (the wrap's teardown core).  The restage path runs it first so
+# the deterministic staging can rebuild the world from clean pools.
+_survey_scratch_destroy() {
+    local guest_ip="$1"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$guest_ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        # Lived-in extras first: offsite holds and the clone block
+        # zfs destroy (and the receive tree is its own scratch root).
+        if [[ -n "${SURVEY_RECV_DS:-}" ]]; then
+            zfs list -H -t snapshot -o name -r "$SURVEY_DS" 2>/dev/null \
+                | while read -r s; do
+                    zfs holds -H "$s" 2>/dev/null || true
+                  done | while read -r snap tag _rest; do
+                    case "$tag" in
+                        offsite-*) zfs release "$tag" "$snap" 2>/dev/null || true ;;
+                    esac
+                  done
+            zfs destroy -r "$SURVEY_CLONE_DS" 2>/dev/null || true
+            zfs destroy -r "$SURVEY_RECV_DS" 2>/dev/null || true
+        fi
+        # The scratch datasets are pool-root children (zfstest1/survey-<rid>),
+        # not members of a zfstest1/survey subtree — destroy each by name.
+        # The -recv/-res siblings carry the same rid and are absent in runs
+        # that never created them (harmless destroys).
+        zfs destroy -r "$SURVEY_DS" 2>/dev/null || true
+        zfs destroy "$SURVEY_VOL" 2>/dev/null || true
+        zfs destroy -r "$SURVEY_DS2" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS2}-recv" 2>/dev/null || true
+        zfs destroy -r "${SURVEY_DS2}-res" 2>/dev/null || true
+        # Busy-world receive tree (absent in other variants; harmless).
+        zfs destroy -r "${SURVEY_DS2}-busy" 2>/dev/null || true
+        rm -f "$SURVEY_STREAM" /root/survey-tree.tgz
+        # The survey-owned state dir (schedule profiles and any other
+        # runtime state written under the pinned ZFSUTILITIES_STATE_DIR).
+        rm -rf /root/survey-state
+    ' > "$ITF_RUN_DIR/survey-teardown.log" 2>&1 || true
+}
+
+# _survey_world_restage — create the world again: destroy the survey
+# scratch state, restage the world (deterministic — same seed, anchor,
+# and digest, so the rebuild IS the identical ladder), and re-checkpoint
+# (the old $SURVEY_WORLD_SNAP holds the consumed disk state and must
+# not survive as a later revert target).
+_survey_world_restage() {
+    local grec gbase gvmid gname rec
+    grec="$(_survey_world_guest)" \
+        || { itf_step fail "world restage" "no storage guest record"; return 1; }
+    read -r gbase gvmid _gip gname <<< "$grec"
+    rec="$(_survey_world_record)"
+    itf_step_start "world restage" \
+        "deterministic rebuild of the lived-in world" \
+        "(variant=$SURVEY_WORLD seed=$SURVEY_WORLD_SEED)"
+    # The guest is STOPPED on every restage path (a failed rollback or a
+    # failed post-rollback verify both leave it stopped) — bring it back
+    # first; staging talks to it over ssh.
+    local new_ip=""
+    if itf_guest_start "$gbase" "$gvmid" \
+            > "$ITF_RUN_DIR/world-restage-start.log" 2>&1; then
+        new_ip="$(itf_guest_ip "$gbase" "$gvmid" 600 || true)"
+    fi
+    if [[ -z "$new_ip" ]] || ! itf_wait_ssh "$new_ip" 300; then
+        itf_step fail "world restage" \
+            "guest unreachable after restart (${new_ip:-no address})"
+        return 1
+    fi
+    echo "$gbase $gvmid $new_ip ${gname:--}" > "$rec"
+    # The stale checkpoint's disk state is the consumed world — drop it
+    # before anything could roll back onto it.
+    itf_guest_stop "$gbase" "$gvmid" > /dev/null 2>&1 || true
+    itf_qm "$gbase" delsnapshot "$gvmid" "$SURVEY_WORLD_SNAP" \
+        > "$ITF_RUN_DIR/world-restage-delsnap.log" 2>&1 \
+        || itf_step info "world restage" \
+            "stale $SURVEY_WORLD_SNAP already gone (see world-restage-delsnap.log)"
+    itf_guest_start "$gbase" "$gvmid" \
+        > "$ITF_RUN_DIR/world-restage-start2.log" 2>&1 || true
+    new_ip="$(itf_guest_ip "$gbase" "$gvmid" 600 || true)"
+    if [[ -z "$new_ip" ]] || ! itf_wait_ssh "$new_ip" 300; then
+        itf_step fail "world restage" \
+            "guest unreachable before staging (${new_ip:-no address})"
+        return 1
+    fi
+    echo "$gbase $gvmid $new_ip ${gname:--}" > "$rec"
+    # Dev-side env names survive the guest-side destroy (they are run
+    # constants); restaging re-creates everything they name.
+    _survey_scratch_destroy "$new_ip"
+    # shellcheck disable=SC1090
+    source "$ITF_RUN_DIR/survey-env.sh"
+    if ! itf_survey_stage_world "$new_ip"; then
+        itf_step fail "world restage" "the deterministic staging itself failed"
+        return 1
+    fi
+    _survey_world_checkpoint \
+        || { itf_step fail "world restage" "re-checkpoint after restage failed"; return 1; }
+    itf_step pass "world restage" \
+        "world rebuilt from (seed=$SURVEY_WORLD_SEED anchor=$SURVEY_WORLD_ANCHOR)" \
+        "and re-checkpointed"
+    return 0
+}
+
+# _survey_world_restore — revert the storage guest to $SURVEY_WORLD_SNAP
+# after a full-function leg consumed the world.  Snapshots newer than
+# the checkpoint are removed first (the rerun branch's stale-snapshot
+# law: they survive a rollback but go stale); removal failures WARN and
+# continue — nothing re-snapshots those names on this path.  A failed
+# rollback or a failed post-restore verification escalates to the
+# deterministic restage.
+_survey_world_restore() {
+    local grec gbase gvmid gname rec
+    grec="$(_survey_world_guest)" \
+        || { itf_step fail "world restore" "no storage guest record"; return 1; }
+    read -r gbase gvmid _gip gname <<< "$grec"
+    rec="$(_survey_world_record)"
+    itf_step_start "world restore" \
+        "rollback vmid $gvmid to $SURVEY_WORLD_SNAP"
+    if ! itf_qm "$gbase" listsnapshot "$gvmid" 2>/dev/null \
+            | awk -v s="$SURVEY_WORLD_SNAP" \
+                '$1 == "`->" && $2 == s { found = 1 } END { exit !found }'; then
+        itf_step fail "world restore" \
+            "no $SURVEY_WORLD_SNAP snapshot on vmid $gvmid"
+        _survey_world_restage && return 0
+        return 1
+    fi
+    itf_guest_stop "$gbase" "$gvmid" > "$ITF_RUN_DIR/world-restore-stop.log" 2>&1 || true
+    local stale
+    while IFS= read -r stale; do
+        [[ -n "$stale" ]] || continue
+        if ! itf_qm "$gbase" delsnapshot "$gvmid" "$stale" \
+                > "$ITF_RUN_DIR/world-restore-delsnap.log" 2>&1; then
+            itf_step info "world restore" \
+                "stale snapshot $stale survived the removal (WARN) — see world-restore-delsnap.log"
+        fi
+    done < <(itf_qm "$gbase" listsnapshot "$gvmid" 2>/dev/null \
+            | awk -v ckpt="$SURVEY_WORLD_SNAP" '$1 == "`->" {
+                if ($2 == ckpt) { seen = 1; next }
+                if (seen && $2 != "current") print $2
+            }')
+    if ! itf_qm "$gbase" rollback "$gvmid" "$SURVEY_WORLD_SNAP" \
+            > "$ITF_RUN_DIR/world-restore.log" 2>&1; then
+        itf_step fail "world restore" \
+            "rollback failed — restaging the world instead (see world-restore.log)"
+        _survey_world_restage && return 0
+        return 1
+    fi
+    local new_ip=""
+    if itf_guest_start "$gbase" "$gvmid" \
+            > "$ITF_RUN_DIR/world-restore-start.log" 2>&1; then
+        new_ip="$(itf_guest_ip "$gbase" "$gvmid" 600 || true)"
+    fi
+    if [[ -z "$new_ip" ]] || ! itf_wait_ssh "$new_ip" 300; then
+        itf_step fail "world restore" \
+            "guest unreachable after rollback (${new_ip:-no address}) — restaging"
+        _survey_world_restage && return 0
+        return 1
+    fi
+    echo "$gbase $gvmid $new_ip ${gname:--}" > "$rec"
+    # The rollback must land the world the plan names — the same
+    # verification the staging ran.
+    # shellcheck disable=SC1090
+    source "$ITF_RUN_DIR/survey-env.sh"
+    local recv_ds verify_out
+    recv_ds="${SURVEY_RECV_DS:-zfstest2/survey-$SURVEY_RID-recv}"
+    if ! verify_out="$(_survey_world_verify "$new_ip" \
+            "$ITF_RUN_DIR/survey-world-plan.json" "$recv_ds")"; then
+        itf_step fail "world restore" \
+            "${verify_out:-verification failed} — restaging the world"
+        _survey_world_restage && return 0
+        return 1
+    fi
+    itf_step pass "world restore" \
+        "rolled back to $SURVEY_WORLD_SNAP at $new_ip — $verify_out"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# The realistic site's daily-backup pair (lived-in staging tail)
+# ---------------------------------------------------------------------------
+
+# itf_survey_stage_site_pair <guest-ip> — render the site's daily-backup
+# pair from the staged tree's own templates (bin/zfsdailybackup and
+# bin/rsync-dailybackup are site templates by design — the documented
+# customization path a real user follows):
+#   - pulls limited to hosts this lab actually has (the local pull
+#     always; the compute host's pull in two-node labs; the template's
+#     third-site pull is off — no such host at this site);
+#   - the backup leg on the world's backup-src/receive-tree pair;
+#   - prune left ON (the pinned config's retention rows govern it).
+# The full-function leg runs the pair with NO overrides
+# (_survey_full_function_zfsdailybackup).
+itf_survey_stage_site_pair() {
+    local guest_ip="$1"
+    local enum_root
+    enum_root="$(sed -n 's/^# enum-root //p' "$ITF_RUN_DIR/survey-select.out" \
+        | head -1 | tr -d '\r')"
+    if [[ -z "$enum_root" || ! -f "$enum_root/bin/zfsdailybackup" \
+            || ! -f "$enum_root/bin/rsync-dailybackup" \
+            || ! -f "$enum_root/bin/bashinit" ]]; then
+        itf_step fail "survey site pair staged" \
+            "no enumerated tree (or missing templates) under '${enum_root:-?}'"
+        return 1
+    fi
+    local src_ds="$SURVEY_DS/backup-src"
+    local recv_ds="${SURVEY_RECV_DS:-zfstest2/survey-$SURVEY_RID-recv}"
+
+    # Lab shape: two-node sites pull from the compute host too (over the
+    # lab's root-SSH link; the hostname is the lab's own wiring).
+    local pull_compute="N" compute_ip="" compute_host=""
+    if [[ -f "$ITF_RUN_DIR/guest-compute.txt" ]]; then
+        pull_compute="Y"
+        compute_ip="$(awk '{print $3}' "$ITF_RUN_DIR/guest-compute.txt")"
+        compute_host="$(itf_guest_exec "$compute_ip" 'hostname -s' 2>/dev/null | tail -1)"
+        compute_host="${compute_host//$'\r'/}"
+    fi
+    if [[ "$pull_compute" == "Y" && -z "$compute_host" ]]; then
+        itf_step fail "survey site pair staged" \
+            "two-node lab but the compute guest's hostname is unknown"
+        return 1
+    fi
+
+    # Render dev-side from the enumerated tree, then push the pair.
+    local pair_dir="$ITF_RUN_DIR/survey-site"
+    rm -rf "$pair_dir"
+    mkdir -p "$pair_dir"
+    if ! python3 - "$pair_dir" "$enum_root" "$src_ds" "$recv_ds" \
+            "$pull_compute" "$compute_host" <<'PYEOF'
+import sys
+
+pair, root, src, recv, pull_compute, compute = sys.argv[1:7]
+
+
+def must_replace(text, old, new, what):
+    if old not in text:
+        sys.exit(f"site pair render: the template lost its {what} line")
+    return text.replace(old, new)
+
+
+db = open(f"{root}/bin/zfsdailybackup").read()
+# Hosts at this site: local pull on; the compute host's pull in two-node
+# labs; the third site is absent.
+db = must_replace(db, "pull_rocky='Y'", "pull_rocky='N'", "rocky pull knob")
+# The site's pull architecture is local-only: the jobs array executes
+# wherever rsync-dailybackup runs, and the orchestrator's compute push
+# would run it ON the compute host where the storage-side destinations
+# do not exist (live-observed run-20261124-051625: rc 11/255 WARNs).
+# The compute host's /etc joins the LOCAL pull over the P2P link via a
+# root@ job instead — the customization a real two-node site makes.
+db = must_replace(db, "pull_tweety='Y'", "pull_tweety='N'",
+                  "compute pull knob")
+# One backup source at this site (the world's backup-src); no second
+# pool, so the NVME1 leg is off.
+db = must_replace(db, "backup_NVME1='Y'", "backup_NVME1='N'", "NVME1 knob")
+db = must_replace(db, 'sourcefs="threeamigos/proxmox"', f'sourcefs="{src}"',
+                  "backup sourcefs")
+db = must_replace(db, 'destfs="fivebays"', f'destfs="{recv}"', "backup destfs")
+db = must_replace(db, "threeamigos/proxmox to fivebays/threeamigos/proxmox",
+                  f"{src} to {recv}", "backup banner")
+open(f"{pair}/zfsdailybackup", "w").write(db)
+
+jobs = [f'"/etc/|/{src}/etc/"']
+if pull_compute == "Y":
+    jobs.append(f'"root@{compute}:/etc/|/{src}/compute-etc/"')
+rs = open(f"{root}/bin/rsync-dailybackup").read()
+rs = must_replace(rs, "rsync_dailybackup_jobs=()",
+                  "rsync_dailybackup_jobs=(\n    " + "\n    ".join(jobs) + "\n)",
+                  "empty jobs array")
+open(f"{pair}/rsync-dailybackup", "w").write(rs)
+PYEOF
+    then
+        itf_step fail "survey site pair staged" \
+            "render failed — template drift in the enumerated tree"
+        return 1
+    fi
+    cp "$enum_root/bin/bashinit" "$pair_dir/bashinit"
+
+    # NOT under /root/survey-harness: the GUI stage resets that
+    # directory (rm -rf before pushing gui_probe.py) and would wipe
+    # the pair out from under stage F (live-observed,
+    # run-20261124-000928).  The pair sits in a TREE-SHAPED layout —
+    # bin/ siblings plus a lib/ symlink into the staged tree — so the
+    # resolver's ../lib candidates hit (paths.sh et al.) exactly as a
+    # real installed deployment would (live-observed run-20261124-002726:
+    # from a flat dir, bashinit WARNed paths.sh unresolvable and the
+    # strict-mode site script died silently).
+    local site_dir=/root/survey-site/bin
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if ! itf_guest_exec "$guest_ip" \
+            "mkdir -p $site_dir && ln -sfn /root/ZFSutilities/lib /root/survey-site/lib" \
+            > /dev/null 2>&1 \
+        || ! itf_guest_put "$guest_ip" "$pair_dir/zfsdailybackup" \
+            "$site_dir/zfsdailybackup" > /dev/null 2>&1 \
+        || ! itf_guest_put "$guest_ip" "$pair_dir/rsync-dailybackup" \
+            "$site_dir/rsync-dailybackup" > /dev/null 2>&1 \
+        || ! itf_guest_put "$guest_ip" "$pair_dir/bashinit" \
+            "$site_dir/bashinit" > /dev/null 2>&1 \
+        || ! itf_guest_exec "$guest_ip" \
+            "chmod +x $site_dir/zfsdailybackup $site_dir/rsync-dailybackup" \
+            > /dev/null 2>&1; then
+        itf_step fail "survey site pair staged" "pair push failed"
+        return 1
+    fi
+
+    itf_step pass "survey site pair staged" \
+        "site zfsdailybackup + rsync-dailybackup from the staged tree's templates" \
+        "(pulls: local${pull_compute:+, compute /etc over the P2P link};" \
+        "backup: backup-src → receive tree; prune on)"
+    return 0
+}
+
 # _survey_walk_ladder <ip> <rendered-ladder> <recv-ds> — the clock walk.
 # Runs between freeze and restore; any failure bubbles up so the caller
 # can still restore the clock.
@@ -910,7 +1330,7 @@ itf_survey_stage_world() {
     local guest_ip="$1"
     # The sampler reported the world in select (replay follows the
     # archive, not the env); the env fallback covers direct calls.
-    local variant="${SURVEY_WORLD:-${ITF_SURVEY_WORLD:-thin}}"
+    local variant="${SURVEY_WORLD:-${ITF_SURVEY_WORLD:-lived-in}}"
     local start=$SECONDS
     case "$variant" in
         thin)
@@ -1318,21 +1738,35 @@ itf_survey_compute_ip() {
 # Bespoke recipes (depth=bespoke rows in universe.tsv)
 # ---------------------------------------------------------------------------
 
-# _survey_guest_run <ip> <feed> <cmd> <log> — shared invocation wrapper.
-# <cmd> is harness-authored and may carry quoted arguments (expanded via
-# eval in the guest, where the playground env is sourced); <feed> "-"
-# means empty stdin.
+# _survey_guest_run <ip> <feed> <log> <cmd-word...> — shared invocation
+# wrapper.  The command arrives as separate WORDS (dev-side expansion;
+# every recipe's SURVEY_* name is a dev global from the staging env)
+# and is %q-escaped into the guest's eval line, so quotes, semicolons,
+# and EMPTY arguments inside a word survive intact.  The previous raw
+# string form could not: ssh hands the script to a remote sh -c whose
+# parse CONSUMES the quote characters, and the wrapper's eval then
+# re-parsed the unquoted text — the overrides argument vanished and its
+# semicolons split the line (live-observed, run-20261124-000928: the
+# zfscleanup dry-run ran mislabeled with no overrides; zfsdailybackup
+# executed the overrides' trailing send-receive call in the wrapper
+# shell, rc 127).  <feed> "-" means empty stdin.
 _survey_guest_run() {
-    local ip="$1" feed="$2" cmd="$3" log="$4"
+    local ip="$1" feed="$2" log="$3"
+    shift 3
     [[ "$feed" == "-" ]] && feed=""
     local feed_file="$log.feed"
     printf '%b' "$feed" > "$feed_file"
+    local line="" w
+    for w in timeout 300 "$@"; do
+        printf -v w '%q' "$w"
+        line+="$w "
+    done
     # shellcheck disable=SC2016
     itf_guest_exec_feed "$ip" "$feed_file" "
 source /root/survey-env.sh 2>/dev/null || true
 cd /root/ZFSutilities
 export ZFSCONFIG_PATH=/root/survey-config.json
-eval timeout 300 $cmd" > "$log" 2>&1
+eval \"$line\"" > "$log" 2>&1
 }
 
 survey_recipe_startdocserver() {
@@ -1408,8 +1842,8 @@ survey_recipe_zfssend() {
     local ip="$1" id="$2" profile="$3" log="$4"
     local feed="\\n"
     [[ "$profile" == "decline" ]] && feed="n\\n"
-    _survey_guest_run "$ip" "$feed" \
-        './bin/zfssend "source=$SURVEY_DS dest=$SURVEY_DS2 label=survey"' "$log"
+    _survey_guest_run "$ip" "$feed" "$log" \
+        ./bin/zfssend "source=$SURVEY_DS dest=$SURVEY_DS2 label=survey"
     itf_artifact "item-$id" "$log"
     itf_step pass "item $id" \
         "[bespoke/$profile] zfssend copy flow (see items/$id.log)"
@@ -1418,8 +1852,8 @@ survey_recipe_zfssend() {
 
 survey_recipe_zfsrestore() {
     local ip="$1" id="$2" profile="$3" log="$4"
-    _survey_guest_run "$ip" "\\n" \
-        './bin/zfsrestore "source=$SURVEY_DS dest=$SURVEY_DS2"' "$log"
+    _survey_guest_run "$ip" "\\n" "$log" \
+        ./bin/zfsrestore "source=$SURVEY_DS dest=$SURVEY_DS2"
     itf_artifact "item-$id" "$log"
     itf_step pass "item $id" \
         "[bespoke/$profile] zfsrestore two-step copy attempt (see items/$id.log)"
@@ -1428,8 +1862,8 @@ survey_recipe_zfsrestore() {
 
 survey_recipe_zfsrestoresendstream() {
     local ip="$1" id="$2" profile="$3" log="$4"
-    _survey_guest_run "$ip" "\\n" \
-        './bin/zfsrestoresendstream "$SURVEY_STREAM" "$SURVEY_DS2"' "$log"
+    _survey_guest_run "$ip" "\\n" "$log" \
+        ./bin/zfsrestoresendstream "$SURVEY_STREAM" "$SURVEY_DS2"
     itf_artifact "item-$id" "$log"
     itf_step pass "item $id" \
         "[bespoke/$profile] stream restore attempt (see items/$id.log)"
@@ -1438,8 +1872,8 @@ survey_recipe_zfsrestoresendstream() {
 
 survey_recipe_zfsreplayprops() {
     local ip="$1" id="$2" profile="$3" log="$4"
-    _survey_guest_run "$ip" "-" \
-        './bin/zfsreplayprops "$SURVEY_DS2" "$SURVEY_POOL/survey"' "$log"
+    _survey_guest_run "$ip" "-" "$log" \
+        ./bin/zfsreplayprops "$SURVEY_DS2" "$SURVEY_POOL/survey"
     itf_artifact "item-$id" "$log"
     itf_step pass "item $id" \
         "[bespoke/$profile] property replay attempt (see items/$id.log)"
@@ -1454,8 +1888,8 @@ survey_recipe_clone_vm() {
     [[ "$profile" == "decline" ]] && feed="n\\n"
     [[ "$profile" == "cancel" ]] && feed="\\n"
     [[ "$profile" == "invalid" ]] && feed="definitely-not-yes\\nn\\n"
-    _survey_guest_run "$ip" "$feed" \
-        './bin/clone-vm "$SURVEY_VMID" 9100 "survey$SURVEY_RID"' "$log"
+    _survey_guest_run "$ip" "$feed" "$log" \
+        ./bin/clone-vm "$SURVEY_VMID" 9100 "survey$SURVEY_RID"
     local rc=$?
     itf_artifact "item-$id" "$log"
     # Converge: the survey VM must not linger whatever the profile did.
@@ -1480,8 +1914,8 @@ survey_recipe_new_vm_disk() {
     local feed="y\\ny\\n"
     [[ "$profile" == "decline" ]] && feed="n\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
-    _survey_guest_run "$ip" "$feed" \
-        './bin/new-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 1G' "$log"
+    _survey_guest_run "$ip" "$feed" "$log" \
+        ./bin/new-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 1G
     local rc=$?
     itf_artifact "item-$id" "$log"
     if (( rc == 0 )) || grep -qE "INFO|FATAL" "$log"; then
@@ -1510,8 +1944,8 @@ survey_recipe_remove_vm_disk() {
     local feed="y\\ny\\ny\\n"
     [[ "$profile" == "decline" ]] && feed="n\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
-    _survey_guest_run "$ip" "$feed" \
-        './bin/remove-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK"' "$log"
+    _survey_guest_run "$ip" "$feed" "$log" \
+        ./bin/remove-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK"
     local rc=$?
     itf_artifact "item-$id" "$log"
     # Converge regardless of profile outcome.
@@ -1539,7 +1973,7 @@ survey_recipe_zfsresume() {
     # receive_resume_token, and zfsresume validates that token (it
     # inspects; it does not complete the transfer).
     if [[ "$profile" == "invalid" ]]; then
-        _survey_guest_run "$ip" "-" './bin/zfsresume' "$log"
+        _survey_guest_run "$ip" "-" "$log" ./bin/zfsresume
         local rc=$?
         itf_artifact "item-$id" "$log"
         if (( rc == 8 )) \
@@ -1584,7 +2018,7 @@ survey_recipe_zfsresume() {
         return 1
     fi
     itf_artifact "item-$id-prey" "$log.prey"
-    _survey_guest_run "$ip" "-" './bin/zfsresume "${SURVEY_DS2}-res"' "$log"
+    _survey_guest_run "$ip" "-" "$log" ./bin/zfsresume "${SURVEY_DS2}-res"
     local rc=$?
     itf_artifact "item-$id" "$log"
     # Converge: abort any remaining partial receive, then destroy.
@@ -1627,8 +2061,8 @@ survey_recipe_zfsdelallsnaps() {
     itf_artifact "item-$id-prey" "$log.prey"
     local feed="\\n"
     [[ "$profile" == "decline" ]] && feed="n\\n"
-    _survey_guest_run "$ip" "$feed" \
-        './bin/zfsdelallsnaps "$SURVEY_DS" delme releaseholds recursive' "$log"
+    _survey_guest_run "$ip" "$feed" "$log" \
+        ./bin/zfsdelallsnaps "$SURVEY_DS" delme releaseholds recursive
     local rc=$?
     itf_artifact "item-$id" "$log"
     # Converge: release whatever survived (a decline leaves hold+snap),
@@ -1657,6 +2091,72 @@ named (see items/$id.log)"
         return 0
     fi
     itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
+    return 1
+}
+
+survey_recipe_zfscleanup() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    # Leg 1 — the override surface (the table row this recipe replaced,
+    # unchanged): a retention dry-run over the label with the retain
+    # verb on.  The full-function leg lives in stage F
+    # (_survey_full_function_zfscleanup): real deletion over the aged
+    # ladder, world checkpoint revert.
+    local feed="\\n"
+    [[ "$profile" == "decline" ]] && feed="n\\n"
+    _survey_guest_run "$ip" "$feed" \
+        "$log" \
+        ./bin/zfscleanup "$SURVEY_POOL" "" dailybackup "dryrun='Y';retain_verb='Y'"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    if (( rc == 0 )) && grep -qE "Dry run|Would remove|Would:" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] zfscleanup dry-run override leg (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" \
+        "[bespoke/$profile] override leg rc=$rc — see items/$id.log"
+    return 1
+}
+
+survey_recipe_zfsdailybackup() {
+    local ip="$1" id="$2" profile="$3" log="$4"
+    # Leg 1 — the override surface (the table row this recipe replaced,
+    # unchanged): every site pull and prune off, one real send into the
+    # scratch receive tree.  The full-function leg lives in stage F
+    # (_survey_full_function_zfsdailybackup): the site-adapted pair with
+    # NO overrides.
+    # Snapfile hygiene first: an earlier item's zfssnapbuild can leave a
+    # nextsnap file whose reuse PROMPT would eat the feed's one newline,
+    # starving the script's own press-enter (live-observed,
+    # run-20261124-002726: rc 1 right after the banner, the sends had
+    # already run inside the overrides' send-receive call).
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" 'rm -f /run/zfsutilities/nextsnap_*' \
+        > /dev/null 2>&1 || true
+    _survey_guest_run "$ip" "\\n" \
+        "$log" \
+        ./bin/zfsdailybackup "pull_rocky='N';pull_tweety='N';pull_stewie='N';\
+backup_threeamigos_proxmox='N';backup_NVME1='N';prune='N';\
+sourcefs='$SURVEY_DS';destfs='${SURVEY_DS2}-recv';send-receive"
+    local rc=$?
+    itf_artifact "item-$id" "$log"
+    if (( rc == 0 )) && grep -qE "New snapshot|zfs send|completed" "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] zfsdailybackup override leg (see items/$id.log)"
+        return 0
+    fi
+    # Busy-world acquire-or-refuse: the background op is itself a
+    # zfsdailybackup holding the scratch source's lock, so this item's
+    # send can honestly lose it (only the full holder-naming refusal
+    # passes — any other holder still fails).
+    if _survey_busy_lock_refusal "$log"; then
+        itf_step pass "item $id" \
+            "[bespoke/$profile] zfsdailybackup — [busy-refused] lock holder \
+named (see items/$id.log)"
+        return 0
+    fi
+    itf_step fail "item $id" \
+        "[bespoke/$profile] override leg rc=$rc — see items/$id.log"
     return 1
 }
 
@@ -1718,9 +2218,9 @@ survey_recipe_attach_vm_disk() {
     [[ "$profile" == "cancel" ]] && feed="\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
     _survey_guest_run "$ip" "$feed" \
-        './bin/attach-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" '\
-'"$SURVEY_VMID" "$SURVEY_VDISK"' \
-        "$log"
+        "$log" \
+        ./bin/attach-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" \
+            "$SURVEY_VMID" "$SURVEY_VDISK"
     local rc=$?
     itf_artifact "item-$id" "$log"
     _survey_vmdisk_converge "$ip"
@@ -1751,8 +2251,8 @@ survey_recipe_detach_vm_disk() {
     [[ "$profile" == "decline" ]] && feed="n\\n"
     [[ "$profile" == "cancel" ]] && feed="\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
-    _survey_guest_run "$ip" "$feed" \
-        './bin/detach-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK"' "$log"
+    _survey_guest_run "$ip" "$feed" "$log" \
+        ./bin/detach-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK"
     local rc=$?
     itf_artifact "item-$id" "$log"
     _survey_vmdisk_converge "$ip"
@@ -1786,8 +2286,8 @@ survey_recipe_move_vm_disk() {
     [[ "$profile" == "decline" ]] && feed="n\\n"
     [[ "$profile" == "cancel" ]] && feed="\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
-    _survey_guest_run "$ip" "$feed" \
-        './bin/move-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK" 9101' "$log"
+    _survey_guest_run "$ip" "$feed" "$log" \
+        ./bin/move-vm-disk "$SURVEY_VMID" "$SURVEY_VDISK" 9101
     local rc=$?
     itf_artifact "item-$id" "$log"
     _survey_vmdisk_converge "$ip"
@@ -1808,9 +2308,9 @@ survey_recipe_rename_vm_disk() {
     [[ "$profile" == "cancel" ]] && feed="\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
     _survey_guest_run "$ip" "$feed" \
-        './bin/rename-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" '\
-'"$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-10"' \
-        "$log"
+        "$log" \
+        ./bin/rename-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" \
+            "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-10"
     local rc=$?
     itf_artifact "item-$id" "$log"
     _survey_vmdisk_converge "$ip"
@@ -1828,8 +2328,8 @@ survey_recipe_resize_vm_disk() {
     _survey_vmdisk_ensure_scratch "$ip"
     # Grow-only and promptless: the profile axis has nothing to answer.
     _survey_guest_run "$ip" "-" \
-        './bin/resize-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 2G' \
-        "$log"
+        "$log" \
+        ./bin/resize-vm-disk "$SURVEY_POOL" "$SURVEY_VMID" "$SURVEY_VDISK" 2G
     local rc=$?
     itf_artifact "item-$id" "$log"
     _survey_vmdisk_converge "$ip"
@@ -1939,6 +2439,303 @@ itf_survey_run_gui_items() {
 
     itf_step info "GUI items summary" \
         "$passed pass, $blocked blocked, $failed fail (attempt $attempt)"
+    (( failed == 0 )) && return 0 || return 1
+}
+
+# ---------------------------------------------------------------------------
+# Full-function legs (stage F — the drawn world-consuming commands)
+# ---------------------------------------------------------------------------
+
+# _survey_full_function_zfscleanup <ip> — real retention over the aged
+# ladder: zfscleanup with NO overrides (dryrun N, releaseholds N).  The
+# over-retained dailybackup ladder is the prey the world was built with;
+# outcome properties are asserted against the world plan and the pinned
+# config's retention rows.  The world is consumed -> restored after.
+_survey_full_function_zfscleanup() {
+    local ip="$1"
+    local log="$ITF_RUN_DIR/full-zfscleanup.log"
+    itf_step_start "full-function zfscleanup" \
+        "real retention over the aged ladder (no overrides; label dailybackup)"
+    _survey_guest_run "$ip" "\\n" \
+        "$log" \
+        ./bin/zfscleanup "$SURVEY_POOL" "" dailybackup
+    local rc=$?
+    itf_artifact "full-zfscleanup" "$log"
+    if (( rc != 0 )); then
+        itf_step fail "full-function zfscleanup" \
+            "rc=$rc — see full-zfscleanup.log"
+        return 1
+    fi
+    if grep -qE "Dry run|Would remove" "$log"; then
+        itf_step fail "full-function zfscleanup" \
+            "dry-run lines in a no-override run — see full-zfscleanup.log"
+        return 1
+    fi
+
+    # Post-state vs the plan + the live pinned config: real deletions
+    # happened, held snapshots and the clone origin survive, and every
+    # (dataset, bucket) is within its retention bound.
+    local state_log="$ITF_RUN_DIR/full-zfscleanup-state.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        echo "== config =="
+        cat /root/survey-config.json
+        echo
+        echo "== snaps =="
+        zfs list -Hp -t snapshot -o name -s creation -r "$SURVEY_DS"
+        echo "== holds =="
+        zfs list -H -t snapshot -o name -r "$SURVEY_DS" | while read -r s; do
+            zfs holds -H "$s" 2>/dev/null || true
+        done
+    ' > "$state_log" 2>&1
+    itf_artifact "full-zfscleanup-state" "$state_log"
+    local verdict
+    if ! verdict="$(python3 - "$ITF_RUN_DIR/survey-world-plan.json" \
+            "$state_log" "$SURVEY_DS" <<'PYEOF'
+import json, sys
+
+plan = json.load(open(sys.argv[1]))
+base = sys.argv[3]
+section = None
+config_text = []
+names = []
+holds = set()
+for line in open(sys.argv[2]):
+    if line.startswith("=="):
+        section = line.strip()
+        continue
+    if section == "== config ==":
+        config_text.append(line)
+    elif section == "== snaps ==" and "@" in line:
+        names.append(line.split()[0])
+    elif section == "== holds ==":
+        f = line.split()
+        if len(f) >= 2:
+            holds.add((f[0], f[1]))
+
+cfg = json.loads("".join(config_text))
+retain = {b["name"]: int(b["retain"])
+          for b in cfg.get("retention", {}).get("zfstest1", [])}
+pool = base.split("/")[0]
+problems = []
+
+def full(row):
+    return f"{base}/{row['dataset']}@{row['name']}"
+
+# Items running before stage F legitimately add dailybackup-labeled
+# snapshots (the override-leg dailybackup item snapshots the whole
+# source tree); the retention verdict therefore keys on the PLANNED
+# ladder names only.
+planned_db = {f"{base}/{r['dataset']}@{r['name']}"
+              for r in plan["ladder"] if r["label"] == "dailybackup"}
+current_db = sorted(n for n in names if n in planned_db)
+# Real deletion happened: fewer planned snapshots than staged.
+if len(current_db) >= len(planned_db):
+    problems.append(
+        f"no deletion: {len(current_db)} of {len(planned_db)} planned "
+        "dailybackup snaps survive")
+# Holds and the clone origin survive the churn.
+for r in plan["ladder"]:
+    if r["hold"] and (full(r), r["hold"]) not in holds:
+        problems.append(f"hold {r['hold']} lost on {full(r)}")
+clone_rows = [r for r in plan["ladder"] if r["bucket"] == "c"]
+for r in clone_rows:
+    if full(r) not in names:
+        problems.append(f"clone origin {full(r)} destroyed")
+# Every (dataset, bucket) within its retention bound (holds sit on
+# offsite-labeled rows only, so dailybackup buckets have no blockers).
+from collections import Counter
+per = Counter()
+for n in current_db:
+    ds, _, snap = n.partition("@")
+    bucket = snap.rsplit("-", 1)[-1]
+    per[(ds.split(base + "/", 1)[-1], bucket)] += 1
+for (ds, bucket), count in sorted(per.items()):
+    limit = retain.get(bucket)
+    if limit is not None and count > limit:
+        problems.append(f"{ds} bucket {bucket}: {count} > retain {limit}")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"removed={len(planned_db) - len(current_db)} "
+      f"remaining_db={len(current_db)} bounds=ok holds=ok clone=ok")
+PYEOF
+    )"; then
+        itf_step fail "full-function zfscleanup" \
+            "${verdict:-post-state check failed} — see full-zfscleanup-state.log"
+        return 1
+    fi
+    itf_step pass "full-function zfscleanup" "$verdict"
+    _survey_world_restore
+}
+
+# _survey_full_function_zfsdailybackup <ip> — the site-adapted pair with
+# NO overrides: real zfssnapbuild snapshot, the pulls this site has
+# (local; the compute host in two-node labs), send-receive of the site
+# source into the receive tree, removesnapfile, and the real prune under
+# the pinned config.  The ladder is consumed -> restored after.
+_survey_full_function_zfsdailybackup() {
+    local ip="$1"
+    local log="$ITF_RUN_DIR/full-zfsdailybackup.log"
+    itf_step_start "full-function zfsdailybackup" \
+        "site pair, no overrides — snapshot, pulls, send, prune"
+    local feed_file="$log.feed"
+    # The script's press-enter plus the prune leg's interactive
+    # checkagainst confirmations (ask_yn at the rc-5 "no eligible
+    # entries" snapshots): the operator's yes answers, pre-fed exactly
+    # the way the product's own profile runner pre-feeds cron prompts
+    # (live-proven in the kept lab of run-20261124-031133: with the
+    # answers fed, the whole arc — snapshot, pulls, send, prune over
+    # every pool — completes rc 0).
+    {
+        printf '\n'
+        local _i
+        for _i in $(seq 1 16); do printf 'y\n'; done
+    } > "$feed_file"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if ! itf_guest_exec_feed "$ip" "$feed_file" '
+        source /root/survey-env.sh 2>/dev/null || true
+        cd /root/ZFSutilities
+        export ZFSCONFIG_PATH=/root/survey-config.json
+        # The site pair lives in its own dir: its same-dir bashinit
+        # and rsync-dailybackup resolve first; every OTHER helper must
+        # resolve from the staged tree, never the possibly-stale
+        # installed deployment (the world-stage.sh resolver trap).
+        export ZFSUTILITIES_BIN_DIR=/root/ZFSutilities/bin
+        timeout 600 /root/survey-site/bin/zfsdailybackup
+    ' > "$log" 2>&1; then
+        itf_artifact "full-zfsdailybackup" "$log"
+        itf_step fail "full-function zfsdailybackup" \
+            "rc nonzero — see full-zfsdailybackup.log"
+        return 1
+    fi
+    itf_artifact "full-zfsdailybackup" "$log"
+
+    # Log evidence: every leg of the daily arc ran.
+    local missing=""
+    grep -qE "New snapshot" "$log" || missing="snapshot banner"
+    grep -qE "Pulling rsync backup from .* \(local\)" "$log" \
+        || missing="${missing:+$missing; }local pull"
+    grep -qE "rsync-dailybackup: /etc/" "$log" \
+        || missing="${missing:+$missing; }local rsync job"
+    if [[ -f "$ITF_RUN_DIR/guest-compute.txt" ]]; then
+        grep -qE "rsync-dailybackup: root@.*compute|rsync-dailybackup: root@.*pve" "$log" \
+            || missing="${missing:+$missing; }compute rsync job (over the P2P link)"
+    fi
+    # A failed pull WARNs and continues by design — the realistic site
+    # has all its hosts, so the WARN must not appear.
+    if grep -qE "WARN: Pull from .* failed" "$log"; then
+        missing="${missing:+$missing; }a pull leg failed (WARN)"
+    fi
+    grep -qE "Backing up .*backup-src" "$log" \
+        || missing="${missing:+$missing; }send leg"
+    grep -qE "Pruning snapshots" "$log" \
+        || missing="${missing:+$missing; }prune leg"
+    grep -qE "zfsdailybackup completed" "$log" \
+        || missing="${missing:+$missing; }completion"
+    if [[ -n "$missing" ]]; then
+        itf_step fail "full-function zfsdailybackup" \
+            "missing legs: $missing — see full-zfsdailybackup.log"
+        return 1
+    fi
+
+    # Post-state: the run's snapshot exists on the source AND arrived in
+    # the receive tree; the snapfile is gone (a clean completion).
+    local state_log="$ITF_RUN_DIR/full-zfsdailybackup-state.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$ip" '
+        source /root/survey-env.sh 2>/dev/null || true
+        echo "== src =="
+        zfs list -Hp -t snapshot -o name -s creation -r "$SURVEY_DS/backup-src"
+        echo "== recv =="
+        zfs list -Hp -t snapshot -o name -s creation -r "$SURVEY_RECV_DS" 2>/dev/null || true
+        echo "== snapfile =="
+        for f in /run/zfsutilities/nextsnap_*; do
+            [[ -f "$f" ]] && echo "FOUND $f"
+        done
+        echo "== pulled =="
+        [[ -f "/$SURVEY_DS/backup-src/etc/hostname" ]] && echo "PULLED local"
+        [[ -f "/$SURVEY_DS/backup-src/compute-etc/hostname" ]] && echo "PULLED compute"
+    ' > "$state_log" 2>&1
+    itf_artifact "full-zfsdailybackup-state" "$state_log"
+    local verdict
+    if ! verdict="$(python3 - "$ITF_RUN_DIR/survey-world-plan.json" \
+            "$state_log" <<'PYEOF'
+import json, sys
+
+plan = json.load(open(sys.argv[1]))
+section = None
+src_snaps = recv_snaps = 0
+snapfile = pulled = False
+for line in open(sys.argv[2]):
+    if line.startswith("=="):
+        section = line.strip()
+        continue
+    if section == "== src ==" and "@" in line:
+        src_snaps += 1
+    elif section == "== recv ==" and "@" in line:
+        recv_snaps += 1
+    elif section == "== snapfile ==" and "nextsnap_" in line:
+        snapfile = True
+    elif section == "== pulled ==" and line.strip():
+        pulled = True
+problems = []
+# The world's two product runs + this run's snapshot.
+if src_snaps < len(plan["dailybackup"]) + 1:
+    problems.append(f"source carries {src_snaps} snaps "
+                    f"(< {len(plan['dailybackup']) + 1})")
+if recv_snaps < len(plan["dailybackup"]) + 1:
+    problems.append(f"receive tree carries {recv_snaps} snaps "
+                    f"(< {len(plan['dailybackup']) + 1})")
+if snapfile:
+    problems.append("snapfile survived a completed run")
+if not pulled:
+    problems.append("no pulled file landed in the backup dataset")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"src={src_snaps} recv={recv_snaps} snapfile=clean pulled=yes")
+PYEOF
+    )"; then
+        itf_step fail "full-function zfsdailybackup" \
+            "${verdict:-post-state check failed} — see full-zfsdailybackup-state.log"
+        return 1
+    fi
+    itf_step pass "full-function zfsdailybackup" "$verdict"
+    _survey_world_restore
+}
+
+# itf_survey_run_full_function <guest-ip> — stage F: run the full-
+# function leg for each world-consuming command the draw selected.
+# Structural (like staging and wrap), not part of the archived order:
+# absent commands get no leg.  Runs AFTER the GUI probe so every regular
+# item keeps its populated-world premise; each leg restores the world,
+# and the address is re-resolved per leg (a restore may re-lease the
+# DHCP address).
+itf_survey_run_full_function() {
+    local guest_ip="$1" id ip_now
+    if [[ "$SURVEY_WORLD" != "lived-in" ]]; then
+        for id in cli-zfscleanup cli-zfsdailybackup; do
+            grep -q "^$id" "$SURVEY_ITEMS" || continue
+            itf_step skip "full-function $id" \
+                "world=$SURVEY_WORLD carries no aged ladder" \
+                "— run ITF_SURVEY_WORLD=lived-in for the full-function legs"
+        done
+        return 0
+    fi
+    local failed=0
+    for id in cli-zfscleanup cli-zfsdailybackup; do
+        grep -q "^$id" "$SURVEY_ITEMS" || continue
+        ip_now="$(_survey_storage_ip)"
+        [[ -n "$ip_now" ]] || ip_now="$guest_ip"
+        case "$id" in
+            cli-zfscleanup)
+                _survey_full_function_zfscleanup "$ip_now" || failed=1 ;;
+            cli-zfsdailybackup)
+                _survey_full_function_zfsdailybackup "$ip_now" || failed=1 ;;
+        esac
+    done
     (( failed == 0 )) && return 0 || return 1
 }
 
@@ -2204,40 +3001,9 @@ PYEOF
 
     # Playground teardown first: the scratch state the recipes ran against
     # is the survey's own and must not outlive it (the residue gate below
-    # then proves the pool is clean).
-    # shellcheck disable=SC2016  # the $ expansions run in the guest
-    itf_guest_exec "$guest_ip" '
-        source /root/survey-env.sh 2>/dev/null || true
-        # Lived-in extras first: offsite holds and the clone block
-        # zfs destroy (and the receive tree is its own scratch root).
-        if [[ -n "${SURVEY_RECV_DS:-}" ]]; then
-            zfs list -H -t snapshot -o name -r "$SURVEY_DS" 2>/dev/null \
-                | while read -r s; do
-                    zfs holds -H "$s" 2>/dev/null || true
-                  done | while read -r snap tag _rest; do
-                    case "$tag" in
-                        offsite-*) zfs release "$tag" "$snap" 2>/dev/null || true ;;
-                    esac
-                  done
-            zfs destroy -r "$SURVEY_CLONE_DS" 2>/dev/null || true
-            zfs destroy -r "$SURVEY_RECV_DS" 2>/dev/null || true
-        fi
-        # The scratch datasets are pool-root children (zfstest1/survey-<rid>),
-        # not members of a zfstest1/survey subtree — destroy each by name.
-        # The -recv/-res siblings carry the same rid and are absent in runs
-        # that never created them (harmless destroys).
-        zfs destroy -r "$SURVEY_DS" 2>/dev/null || true
-        zfs destroy "$SURVEY_VOL" 2>/dev/null || true
-        zfs destroy -r "$SURVEY_DS2" 2>/dev/null || true
-        zfs destroy -r "${SURVEY_DS2}-recv" 2>/dev/null || true
-        zfs destroy -r "${SURVEY_DS2}-res" 2>/dev/null || true
-        # Busy-world receive tree (absent in other variants; harmless).
-        zfs destroy -r "${SURVEY_DS2}-busy" 2>/dev/null || true
-        rm -f "$SURVEY_STREAM" /root/survey-tree.tgz
-        # The survey-owned state dir (schedule profiles and any other
-        # runtime state written under the pinned ZFSUTILITIES_STATE_DIR).
-        rm -rf /root/survey-state
-    ' > "$ITF_RUN_DIR/survey-teardown.log" 2>&1 || true
+    # then proves the pool is clean).  _survey_scratch_destroy owns the
+    # block (the restage path reuses it).
+    _survey_scratch_destroy "$guest_ip"
 
     # Two-node labs: every vm-disk recipe converges itself, but the wrap
     # re-runs the convergence on the compute guest so the residue gate

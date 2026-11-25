@@ -5,9 +5,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
 
-# zfsdailybackup sources rsync-dailybackup, which is site-specific and not
-# shipped. Provide a minimal stub via ZFSUTILITIES_BIN_DIR so the script can
-# load without finding the production deployment copy.
+# zfsdailybackup sources rsync-dailybackup, a site-customizable template
+# (the shipped one carries `set -euo pipefail` and a site jobs array).
+# Provide a minimal no-op stub via ZFSUTILITIES_BIN_DIR so the suite runs a
+# known copy rather than whichever one the resolver would find.
 RSYNC_HELPER_DIR=$(mktemp -d)
 printf '#!/usr/bin/bash\nfunction rsync-dailybackup { :; }\n' \
     > "$RSYNC_HELPER_DIR/rsync-dailybackup"
@@ -17,16 +18,18 @@ chmod +x "$RSYNC_HELPER_DIR/rsync-dailybackup"
 # never depends on whatever conf files happen to exist on the test host.
 DAILY_CONF_DIR=$(mktemp -d)
 mkdir -p "$DAILY_CONF_DIR/fhs"
-printf 'NODE_MODE="single-node"\nTHIS_HOST="testhost"\n' \
+printf 'NODE_MODE="single-node"\nTHIS_HOST="testhost"\nSTORAGE_HOST="testhost"\n' \
     > "$DAILY_CONF_DIR/fhs/node.conf"
 printf 'NODE_MODE="single-node"\nTHIS_HOST="legacyhost"\n' \
     > "$DAILY_CONF_DIR/legacy-node.conf"
 printf 'NODE_MODE="single-node"\nTHIS_HOST="twohost"\n' \
     > "$DAILY_CONF_DIR/legacy-two-node.conf"
 
-# zfsdailybackup / zfssnapbuild stores its nextsnap file under the caller script
-# name.  Ensure stale files are gone so zfssnapbuild does not prompt.
-rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
+# zfsdailybackup / zfssnapbuild keep their nextsnap reservation under the
+# caller script's name. Point the reservations at the suite's own run dir:
+# no stale file can make zfssnapbuild prompt, and the suite never touches
+# a real reservation under /run/zfsutilities (the test-zfssnapbuild pattern).
+export ZFSUTILITIES_RUN_NEXTSNAP_PREFIX="${TEST_RUN_DIR}/nextsnap_"
 
 # Disable everything except the Rocky remote pull step.
 _zfsdaily_disabled="pull_tweety='N'; pull_stewie='N'; backup_threeamigos_proxmox='N'; "
@@ -77,6 +80,32 @@ _run_dailybackup() {
         source "$mydir/zfsdailybackup" "$overrides"
     } 2>&1)
     echo "$output"
+}
+
+test_two_node_conf_resolves_compute_host() {
+    test_start "two-node conf: compute_host resolves (no unbound at the pull banner)"
+    mkdir -p "$DAILY_CONF_DIR/two"
+    printf 'NODE_MODE="two-node"\nSTORAGE_HOST="stor"\nCOMPUTE_HOST="comp"\n'\
+'STORAGE_IP="10.1.1.1"\nIQN_PREFIX="iqn.2000-01.test"\n'\
+'declare -A POOL_TARGET=([testpool]="zvol")\n' \
+        > "$DAILY_CONF_DIR/two/node.conf"
+    local output
+    output=$({
+        msg_level="INFO"
+        _mock_interactive
+        scp() { echo "SCP-OK"; return 0; }
+        ssh() { echo "SSH-OK"; return 0; }
+        mydir="$mydir/bin"
+        ZFSUTILITIES_BIN_DIR="$RSYNC_HELPER_DIR"
+        ZFSUTILITIES_SYSTEM_CONFIG_DIR="$DAILY_CONF_DIR/two"
+        ZFSUTILITIES_LEGACY_NODE_CONF="$DAILY_CONF_DIR/nonexistent-legacy.conf"
+        ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$DAILY_CONF_DIR/nonexistent-two.conf"
+        source "$mydir/zfsdailybackup" "pull_rocky='N'; pull_stewie='N'; \
+backup_threeamigos_proxmox='N'; backup_NVME1='N'; prune='N'"
+        echo "compute=$compute_host"
+    } 2>&1)
+    assert_contains "$output" "Pulling rsync backup from comp"
+    assert_contains "$output" "compute=comp"
 }
 
 test_remote_pull_push_failure_continues() {
@@ -151,8 +180,8 @@ test_remote_pull_ssh_failure_continues
 test_local_pull_failure_continues
 test_dry_run_pull_does_not_execute
 test_node_conf_prefers_fhs_conf
+test_two_node_conf_resolves_compute_host
 
-rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
 rm -rf "$RSYNC_HELPER_DIR" "$DAILY_CONF_DIR"
 teardown_test_env
 test_summary

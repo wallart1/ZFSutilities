@@ -1,0 +1,712 @@
+#!/usr/bin/bash
+# backup-settings
+# Copy every ZFS Utilities settings file into dated, pool-resident backups.
+#
+# The settings (the GUI config, the backup profiles, and the administrator
+# files in /etc/zfsutilities — node.conf, deploy.conf,
+# iscsi-encrypted-luns.conf, smtp-credentials.json) live on the OS disk.
+# A storage-host OS-disk loss takes them all while the pools survive — the
+# same failure export-iscsi-state already solves for the iSCSI LUN map.
+# This script writes a dated copy of the whole settings set onto every
+# online pool at <pool>/zfsutilities/settings-backups/<timestamp>/ (the
+# same dataset family the state map uses, created on first use), keeps the
+# copies for a configurable number of days (default 35, read from the
+# config's settings_backup.retention_days), and prunes older entries on
+# every run.
+#
+# The daily cron line in /etc/cron.d/zfsutilities runs this script once a
+# night (cron_manager builds the line); the GUI's Settings menu offers the
+# same backup and the restore on demand.
+#
+# Restore stages the CURRENT live settings aside first
+# (<state>/settings-pre-restore/<run-timestamp>/, kept for the same
+# retention), then copies the chosen backup's files back to their live
+# locations. Restored profiles merge into the live profiles directory
+# (same-name files are replaced; others are left alone). The pool-resident
+# iSCSI state map is deliberately NOT part of the set: it carries its own
+# freshness machinery, and restoring an old LUN map over a newer one would
+# destroy the recovery authority export-iscsi-state guards.
+#
+# Usage: sudo backup-settings [--list] [--restore <timestamp>]
+#   (default)  Back up the settings set to every online pool and prune.
+#   --list     Print one "timestamp|pool|file-count" row per available
+#              backup, newest first (read-only; used by the GUI's restore
+#              dialog). No header — the output is machine-parsed.
+#   --restore <timestamp>
+#              Restore the backup with that timestamp (as printed by
+#              --list) from the first pool that holds it, staging the
+#              current settings aside first.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/backup-settings
+
+set -euo pipefail
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+# node-lib resolves NODE_CONF (modern path, then legacy fallbacks) and
+# provides pool_list / is_single_node for the pool enumeration.
+NODE_LIB="${BACKUP_SETTINGS_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+# state_dataset_mountpoint (create-on-first-use resolver for
+# <pool>/zfsutilities) lives in the shared pool-resident-files section.
+ISCSI_LIB="${BACKUP_SETTINGS_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
+source_helper rootcheck
+
+rootcheck
+
+usage() {
+    log_msg "INFO: Usage: backup-settings [--list] [--restore <timestamp>]"
+    echo ""
+    log_msg "INFO:   (default)  Back up the settings set to every online pool's"
+    log_msg "INFO:               <pool>/zfsutilities/settings-backups/ and prune"
+    log_msg "INFO:               entries older than the retention (35 days)"
+    log_msg "INFO:   --list     Print available backups as"
+    log_msg "INFO:               \"timestamp|pool|file-count\", newest first"
+    log_msg "INFO:   --restore <timestamp>"
+    log_msg "INFO:               Restore that backup (current settings staged aside)"
+    exit 1
+}
+
+list_only=false
+restore_ts=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list)
+            list_only=true
+            shift
+            ;;
+        --restore)
+            if [[ $# -lt 2 ]]; then
+                log_msg "FATAL: --restore requires a timestamp argument"
+                usage
+            fi
+            restore_ts="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            log_msg "FATAL: Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+[[ $EUID -eq 0 ]] || [[ "${BACKUP_SETTINGS_SKIP_ROOT:-}" == "Y" ]] || {
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+}
+
+my_host=$(hostname -s)
+
+# Directory (inside each pool's zfsutilities dataset) holding the dated
+# backups, and the staging area for pre-restore copies of the live files.
+SETTINGS_BACKUP_DIRNAME="settings-backups"
+PRE_RESTORE_DIR="${ZFSUTILITIES_STATE_DIR}/settings-pre-restore"
+
+# Advisory lock serializing backup/restore runs against each other (a cron
+# backup and a GUI restore must not interleave their staged writes).
+SETTINGS_BACKUP_LOCK="${ZFSUTILITIES_LOCK_DIR}/.settings_backup.lock"
+
+# Shape of a backup timestamp name, matched with =~ by the prune, the
+# listing, and the --restore argument check. Read left to right:
+#   ^           the name starts with the timestamp — a timestamp-shaped run
+#               inside a longer name (.staging.20261124T120000, a hand-made
+#               directory) never matches
+#   [0-9]{8}    the date: four-digit year, two-digit month, two-digit day
+#   T           the literal separator `date +%Y%m%dT%H%M%S` writes
+#   [0-9]{6}    the time of day, local: two-digit hour, minute, second
+#   $           nothing follows the seconds
+# Both ends anchored, these names also sort chronologically as plain
+# strings — the prune compares them with the deadline and the listing
+# sorts them newest first.
+settings_ts_pattern='^[0-9]{8}T[0-9]{6}$'
+
+# ------------------------------------------------------------------
+# Settings set: the live files and their canonical backup names
+# ------------------------------------------------------------------
+
+# Canonical name -> live path. The backup stores every file under its
+# canonical name regardless of which legacy location the live install
+# currently resolves to, and restore always writes the canonical modern
+# path (the loaders prefer the modern path, so a restored file immediately
+# shadows any stale legacy copy).
+settings_live_path() {
+    case "$1" in
+        config.json) printf '%s\n' "${ZFSUTILITIES_CONFIG_PATH}" ;;
+        node.conf) printf '%s\n' "$NODE_CONF" ;;
+        deploy.conf)
+            if [[ -f "${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/deploy.conf" ]]; then
+                printf '%s\n' "${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/deploy.conf"
+            else
+                printf '%s\n' "${ZFSUTILITIES_LEGACY_DEPLOY_CONF}"
+            fi
+            ;;
+        iscsi-encrypted-luns.conf) printf '%s\n' "${ISCSI_ENCRYPTED_CONF}" ;;
+        smtp-credentials.json)
+            printf '%s\n' "${ZFSUTILITIES_CONFIG_DIR}/smtp-credentials.json"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# The fixed settings files, in manifest order. config.json and node.conf
+# are expected on every install (WARN when absent); the /etc extras are
+# optional features and skip quietly.
+SETTINGS_FIXED_NAMES=(
+    config.json
+    node.conf
+    deploy.conf
+    iscsi-encrypted-luns.conf
+    smtp-credentials.json
+)
+
+# Profile files that may safely travel in a backup: the product names them
+# <owner>-<name>.json. Anything outside this alphabet is skipped with a
+# WARN naming it (a hand-dropped file with shell characters must never
+# reach the JSON manifest or a restore path).
+_settings_safe_name() {
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+# ------------------------------------------------------------------
+# Retention
+# ------------------------------------------------------------------
+
+# Print the configured retention in days (default 35). Precedence: the
+# SETTINGS_BACKUP_RETENTION_DAYS override (tests, hosts without a config),
+# then the config's settings_backup.retention_days, then the default.
+settings_backup_retention_days() {
+    local days=""
+    if [[ -n "${SETTINGS_BACKUP_RETENTION_DAYS:-}" ]]; then
+        days="${SETTINGS_BACKUP_RETENTION_DAYS}"
+    elif [[ -f "${ZFSUTILITIES_CONFIG_PATH}" ]]; then
+        days=$(python3 -c 'import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        v = json.load(f).get("settings_backup", {}).get("retention_days")
+    if isinstance(v, int) and v > 0:
+        print(v)
+except Exception:
+    pass' "${ZFSUTILITIES_CONFIG_PATH}" 2>/dev/null)
+    fi
+    [[ -n "$days" && "$days" != *[!0-9]* && "$days" -gt 0 ]] || days=35
+    printf '%s\n' "$days"
+}
+
+# Remove entries of dir older than the retention. Only directories whose
+# names parse as a backup timestamp (<YYYYmmddTHHMMSS>, local time, the
+# same format the writer uses) are considered ours; anything else is left
+# untouched. Prints the number of entries removed.
+prune_settings_entries() {
+    local dir="$1" retention="$2"
+    local deadline entry name removed=0
+    [[ -d "$dir" ]] || { printf '0\n'; return 0; }
+    deadline=$(date -d "-${retention} days" +%Y%m%dT%H%M%S)
+
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        name="${entry##*/}"
+        [[ "$name" =~ $settings_ts_pattern ]] || continue
+        if [[ "$name" < "$deadline" ]]; then
+            if rm -rf -- "$entry"; then
+                removed=$((removed + 1))
+                log_msg "VERB: Pruned ${name} from ${dir} (older than ${retention} days)"
+            else
+                log_msg "WARN: Could not prune ${entry}"
+            fi
+        fi
+    done < <(find "$dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null || true)
+    printf '%s\n' "$removed"
+}
+
+# ------------------------------------------------------------------
+# Atomic file installation
+# ------------------------------------------------------------------
+
+# Atomically install src at dst (staged temp file in the destination
+# directory + mv, so a reader never sees a partial file). -p preserves the
+# source's mode and ownership, which is how the 0600 of
+# smtp-credentials.json survives the round trip.
+install_settings_file() {
+    local src="$1" dst="$2" tmp
+    tmp=$(mktemp "${dst}.tmp.XXXXXX") || {
+        log_msg "WARN: Could not create a temp file next to ${dst} — skipped"
+        return 1
+    }
+    if ! cp -f -p -- "$src" "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        log_msg "WARN: Could not stage ${dst} — skipped"
+        return 1
+    fi
+    if ! mv -f -- "$tmp" "$dst"; then
+        rm -f "$tmp"
+        log_msg "WARN: Could not install ${dst} — skipped"
+        return 1
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Pool enumeration and dataset access
+# ------------------------------------------------------------------
+
+# Print the pools that should hold settings backups: the configured pools
+# in two-node mode (the same pools export-iscsi-state writes, so the state
+# map and the settings copies ride together), every online pool in
+# single-node mode (there is no POOL_TARGET to consult there).
+_settings_backup_target_pools() {
+    if is_single_node; then
+        zpool list -Ho name 2>/dev/null || true
+    else
+        pool_list
+    fi
+}
+
+# Print the mountpoint of <pool>/zfsutilities WITHOUT creating anything
+# (read-only resolution for --list and --restore). Prints nothing when the
+# dataset is absent or has no usable mountpoint.
+_settings_existing_mountpoint() {
+    local pool="$1" mnt
+    mnt=$(zfs list -H -o mountpoint "${pool}/zfsutilities" 2>/dev/null) || return 1
+    if [[ -z "$mnt" || "$mnt" == "-" || ! -d "$mnt" ]]; then
+        return 1
+    fi
+    printf '%s\n' "$mnt"
+}
+
+# ------------------------------------------------------------------
+# Manifest
+# ------------------------------------------------------------------
+
+# Emit the backup manifest as JSON on stdout. Every interpolated value is
+# restricted to the safe alphabets above (fixed canonical names, filtered
+# profile names, digits, [A-Za-z0-9.:_/-] timestamps/hosts) — no JSON
+# escaping is required.
+emit_settings_manifest() {
+    local staging="$1" generated="$2" retention="$3"
+    local name path mode bytes
+    local -a items=()
+
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        path="${staging}/${name}"
+        mode=$(printf '%04d' "$(stat -c '%a' "$path")")
+        bytes=$(stat -c '%s' "$path")
+        items+=("    {\"name\": \"${name}\", \"mode\": \"${mode}\", \"bytes\": ${bytes}}")
+    done < <(find "$staging" -mindepth 1 -type f -printf '%P\n' | sort)
+
+    printf '{\n'
+    printf '  "version": 1,\n'
+    printf '  "generated": "%s",\n' "$generated"
+    printf '  "host": "%s",\n' "$my_host"
+    printf '  "node_mode": "%s",\n' "${node_mode:-single-node}"
+    printf '  "retention_days": %s,\n' "$retention"
+    printf '  "files": [\n%s\n  ]\n}\n' "$(settings_json_join "${items[@]}")"
+}
+
+# Print the arguments as JSON array elements, one per line, separated by
+# commas. Arguments are pre-rendered strings; no arguments yield "".
+settings_json_join() {
+    local item out="" first=true
+    for item in "$@"; do
+        if [[ "$first" == true ]]; then
+            first=false
+        else
+            out+=","$'\n'
+        fi
+        out+="$item"
+    done
+    printf '%s' "$out"
+}
+
+# ------------------------------------------------------------------
+# Backup
+# ------------------------------------------------------------------
+
+# Stage the live settings set into staging (canonical names) and emit the
+# manifest. Prints the number of settings files staged (profiles count
+# individually). Returns 1 when nothing at all could be staged.
+stage_settings_set() {
+    local staging="$1" generated="$2" retention="$3"
+    local name live staged=0
+
+    for name in "${SETTINGS_FIXED_NAMES[@]}"; do
+        live=$(settings_live_path "$name") || continue
+        if [[ ! -f "$live" ]]; then
+            case "$name" in
+                config.json|node.conf)
+                    log_msg "WARN: ${live} not found — not backed up"
+                    ;;
+                *)
+                    log_msg "VERB: ${name} not present — skipped"
+                    ;;
+            esac
+            continue
+        fi
+        if install_settings_file "$live" "${staging}/${name}"; then
+            staged=$((staged + 1))
+        fi
+    done
+
+    if [[ -d "${ZFSUTILITIES_PROFILES_DIR}" ]]; then
+        local pf
+        while IFS= read -r pf; do
+            [[ -z "$pf" ]] && continue
+            if ! _settings_safe_name "$pf"; then
+                log_msg "WARN: Profile ${pf} has an unusable name — skipped"
+                continue
+            fi
+            mkdir -p "${staging}/profiles"
+            if install_settings_file "${ZFSUTILITIES_PROFILES_DIR}/${pf}" \
+                "${staging}/profiles/${pf}"; then
+                staged=$((staged + 1))
+            fi
+        done < <(find "${ZFSUTILITIES_PROFILES_DIR}" -mindepth 1 -maxdepth 1 \
+            -type f -name '*.json' -printf '%f\n' | sort)
+    else
+        log_msg "VERB: No profiles directory — skipped"
+    fi
+
+    # Emit the manifest OUTSIDE the staging tree, then install it in: a
+    # redirect straight into staging would create manifest.json before the
+    # emitter's find runs, and the manifest would list itself.
+    local manifest_tmp
+    manifest_tmp="${TMPDIR:-/tmp}/settings-manifest.$$.$RANDOM"
+    emit_settings_manifest "$staging" "$generated" "$retention" \
+        > "$manifest_tmp"
+    install_settings_file "$manifest_tmp" "${staging}/manifest.json" || true
+    rm -f -- "$manifest_tmp"
+
+    printf '%s\n' "$staged"
+    [[ "$staged" -gt 0 ]]
+}
+
+# Write the staged set onto one pool. Prints 1 when the pool received the
+# backup, 0 when it was skipped.
+write_backup_to_pool() {
+    local pool="$1" online="$2" staging="$3" ts="$4"
+    local mnt parent dest stage
+
+    if ! grep -qxF -- "$pool" <<< "$online"; then
+        # Not an alarm: a configured pool that is deliberately offline
+        # (rotation/backup pool) is a standing condition; the backup still
+        # reaches every online pool.
+        log_msg "INFO: Pool ${pool} is offline — settings backup not written there"
+        printf '0\n'
+        return 0
+    fi
+
+    mnt=$(state_dataset_mountpoint "$pool") || { printf '0\n'; return 0; }
+    parent="${mnt}/${SETTINGS_BACKUP_DIRNAME}"
+    dest="${parent}/${ts}"
+
+    if [[ -d "$dest" ]]; then
+        # Same-second rerun: refresh the files in place, each atomically.
+        local item name
+        while IFS= read -r item; do
+            if [[ -z "$item" || ! -f "$item" ]]; then
+                continue
+            fi
+            name="${item#"$staging"/}"
+            mkdir -p "${dest}/$(dirname "$name")"
+            install_settings_file "$item" "${dest}/${name}" || true
+        done < <(find "$staging" -mindepth 1 -type f | sort)
+        log_msg "INFO:   ✓ Settings backup refreshed in ${pool}/${SETTINGS_BACKUP_DIRNAME}/${ts}"
+        printf '1\n'
+        return 0
+    fi
+
+    mkdir -p "$parent"
+    stage=$(mktemp -d "${parent}/.staging.XXXXXX") || {
+        log_msg "WARN: Could not stage under ${parent} — pool ${pool} skipped"
+        printf '0\n'
+        return 0
+    }
+    if ! cp -a -- "${staging}/." "$stage"/ 2>/dev/null; then
+        rm -rf -- "$stage"
+        log_msg "WARN: Could not copy settings into ${stage} — pool ${pool} skipped"
+        printf '0\n'
+        return 0
+    fi
+    if ! mv -f -- "$stage" "$dest"; then
+        rm -rf -- "$stage"
+        log_msg "WARN: Could not install ${dest} — pool ${pool} skipped"
+        printf '0\n'
+        return 0
+    fi
+    log_msg "INFO:   ✓ Settings backup written to ${pool}/${SETTINGS_BACKUP_DIRNAME}/${ts}"
+    printf '1\n'
+    return 0
+}
+
+# Sweep staging directories a crashed run may have left on this pool (the
+# flock guarantees no other run is active, so any .staging.* is a leftover).
+sweep_pool_staging() {
+    local mnt="$1" parent
+    parent="${mnt}/${SETTINGS_BACKUP_DIRNAME}"
+    [[ -d "$parent" ]] || return 0
+    find "$parent" -mindepth 1 -maxdepth 1 -type d -name '.staging.*' \
+        -exec rm -rf -- {} + 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------
+# Listing
+# ------------------------------------------------------------------
+
+# Print one "timestamp|pool|file-count" row per available backup across
+# online pools, newest first. Pure rows, no header: the GUI parses this.
+list_settings_backups() {
+    local pool online mnt dir ts count
+    local -a rows=()
+    online=$(zpool list -Ho name 2>/dev/null || true)
+
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        grep -qxF -- "$pool" <<< "$online" || continue
+        mnt=$(_settings_existing_mountpoint "$pool") || continue
+        dir="${mnt}/${SETTINGS_BACKUP_DIRNAME}"
+        [[ -d "$dir" ]] || continue
+        while IFS= read -r ts; do
+            [[ -z "$ts" ]] && continue
+            [[ "$ts" =~ $settings_ts_pattern ]] || continue
+            count=$(find "${dir}/${ts}" -mindepth 1 -type f 2>/dev/null | wc -l)
+            rows+=("${ts}|${pool}|${count}")
+        done < <(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+    done < <(_settings_backup_target_pools)
+
+    # Newest first: same-format timestamps sort correctly as strings.
+    if [[ ${#rows[@]} -gt 0 ]]; then
+        printf '%s\n' "${rows[@]}" | sort -r
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Restore
+# ------------------------------------------------------------------
+
+# Echo the settings-backups root holding timestamp $1 (first pool in
+# enumeration order); prints nothing when no online pool has it.
+find_backup_dir() {
+    local ts="$1" pool online mnt dir
+    online=$(zpool list -Ho name 2>/dev/null || true)
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        grep -qxF -- "$pool" <<< "$online" || continue
+        mnt=$(_settings_existing_mountpoint "$pool") || continue
+        dir="${mnt}/${SETTINGS_BACKUP_DIRNAME}/${ts}"
+        if [[ -f "${dir}/manifest.json" ]]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+    done < <(_settings_backup_target_pools)
+    return 1
+}
+
+# Copy the CURRENT live settings set into the pre-restore staging area
+# (canonical names, same layout as a backup). Prints the staged path.
+stage_current_settings() {
+    local run_ts="$1" pre live name pf
+    pre="${PRE_RESTORE_DIR}/${run_ts}"
+    mkdir -p "$pre"
+
+    for name in "${SETTINGS_FIXED_NAMES[@]}"; do
+        live=$(settings_live_path "$name") || continue
+        [[ -f "$live" ]] || continue
+        install_settings_file "$live" "${pre}/${name}" || true
+    done
+
+    if [[ -d "${ZFSUTILITIES_PROFILES_DIR}" ]]; then
+        while IFS= read -r pf; do
+            [[ -z "$pf" ]] && continue
+            _settings_safe_name "$pf" || continue
+            mkdir -p "${pre}/profiles"
+            install_settings_file "${ZFSUTILITIES_PROFILES_DIR}/${pf}" \
+                "${pre}/profiles/${pf}" || true
+        done < <(find "${ZFSUTILITIES_PROFILES_DIR}" -mindepth 1 -maxdepth 1 \
+            -type f -name '*.json' -printf '%f\n' | sort)
+    fi
+
+    printf '%s\n' "$pre"
+}
+
+# Restore every file of the backup at $1 to its live location. Prints the
+# number of files restored.
+restore_settings_files() {
+    local backup_dir="$1" name dest restored=0
+
+    for name in "${SETTINGS_FIXED_NAMES[@]}"; do
+        if [[ -f "${backup_dir}/${name}" ]]; then
+            dest=$(settings_restore_path "$name") || continue
+            mkdir -p "$(dirname "$dest")"
+            if install_settings_file "${backup_dir}/${name}" "$dest"; then
+                restored=$((restored + 1))
+                log_msg "VERB: Restored ${name} -> ${dest}"
+            fi
+        fi
+    done
+
+    if [[ -d "${backup_dir}/profiles" ]]; then
+        mkdir -p "${ZFSUTILITIES_PROFILES_DIR}"
+        local pf
+        while IFS= read -r pf; do
+            [[ -z "$pf" ]] && continue
+            _settings_safe_name "$pf" || continue
+            if install_settings_file "${backup_dir}/profiles/${pf}" \
+                "${ZFSUTILITIES_PROFILES_DIR}/${pf}"; then
+                restored=$((restored + 1))
+                log_msg "VERB: Restored profile ${pf}"
+            fi
+        done < <(find "${backup_dir}/profiles" -mindepth 1 -maxdepth 1 \
+            -type f -name '*.json' -printf '%f\n' | sort)
+    fi
+
+    printf '%s\n' "$restored"
+}
+
+# Canonical live destination for a restored canonical name. Restore always
+# writes the modern path: every loader prefers it, so the restored file
+# immediately shadows any stale legacy copy.
+settings_restore_path() {
+    case "$1" in
+        config.json) printf '%s\n' "${ZFSUTILITIES_CONFIG_PATH}" ;;
+        node.conf) printf '%s\n' "${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/node.conf" ;;
+        deploy.conf) printf '%s\n' "${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/deploy.conf" ;;
+        iscsi-encrypted-luns.conf)
+            printf '%s\n' "${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/iscsi-encrypted-luns.conf"
+            ;;
+        smtp-credentials.json)
+            printf '%s\n' "${ZFSUTILITIES_CONFIG_DIR}/smtp-credentials.json"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+main() {
+
+if [[ "$list_only" == true && -n "$restore_ts" ]]; then
+    log_msg "FATAL: --list and --restore are mutually exclusive"
+    exit 1
+fi
+
+# Read-only listing for the GUI's restore dialog: pure rows on stdout, so
+# this runs before any banner.
+if [[ "$list_only" == true ]]; then
+    list_settings_backups
+    exit 0
+fi
+
+log_msg "INFO: === backup-settings ==="
+echo ""
+
+local retention run_ts
+retention=$(settings_backup_retention_days)
+run_ts=$(date +%Y%m%dT%H%M%S)
+
+# ------------------------------------------------------------------
+# Restore
+# ------------------------------------------------------------------
+if [[ -n "$restore_ts" ]]; then
+    if ! [[ "$restore_ts" =~ $settings_ts_pattern ]]; then
+        log_msg "FATAL: Invalid timestamp: ${restore_ts} (expected YYYYmmddTHHMMSS)"
+        exit 1
+    fi
+    local backup_dir pre restored
+    backup_dir=$(find_backup_dir "$restore_ts") || {
+        log_msg "FATAL: No settings backup ${restore_ts} on any online pool"
+        exit 1
+    }
+    log_msg "INFO: Restoring settings from ${backup_dir}"
+
+    pre=$(stage_current_settings "$run_ts")
+    log_msg "INFO: Current settings staged aside at ${pre}"
+
+    restored=$(restore_settings_files "$backup_dir")
+    if [[ "$restored" -eq 0 ]]; then
+        log_msg "FATAL: Nothing was restored from ${backup_dir}"
+        exit 1
+    fi
+
+    prune_settings_entries "$PRE_RESTORE_DIR" "$retention" >/dev/null
+    log_msg "INFO:   ✓ Restored ${restored} settings file(s); rollback copy kept ${retention} days"
+    log_msg "INFO: Restart the ZFS Utilities GUI to apply the restored settings"
+    echo ""
+    exit 0
+fi
+
+# ------------------------------------------------------------------
+# Backup
+# ------------------------------------------------------------------
+local staging staged pools_written=0 pool online
+staging=$(mktemp -d "${TMPDIR:-/tmp}/settings-backup.XXXXXX") || {
+    log_msg "FATAL: Could not create a staging directory"
+    exit 1
+}
+
+staged=$(stage_settings_set "$staging" "$(date -Iseconds)" "$retention") || {
+    log_msg "FATAL: No settings files found to back up on ${my_host}"
+    rm -rf -- "$staging"
+    exit 1
+}
+log_msg "INFO: Staged ${staged} settings file(s) (retention ${retention} days)"
+
+online=$(zpool list -Ho name 2>/dev/null || true)
+while IFS= read -r pool; do
+    [[ -z "$pool" ]] && continue
+    if [[ "$(write_backup_to_pool "$pool" "$online" "$staging" "$run_ts")" == "1" ]]; then
+        pools_written=$((pools_written + 1))
+        # Housekeeping on the pool that took the backup: drop any staging
+        # directory a crashed run left, then apply the retention. Without a
+        # usable mountpoint there is nothing to sweep.
+        local mnt=""
+        mnt=$(_settings_existing_mountpoint "$pool") || mnt=""
+        if [[ -n "$mnt" ]]; then
+            sweep_pool_staging "$mnt"
+            prune_settings_entries "${mnt}/${SETTINGS_BACKUP_DIRNAME}" \
+                "$retention" >/dev/null
+        fi
+    fi
+done < <(_settings_backup_target_pools)
+rm -rf -- "$staging"
+
+prune_settings_entries "$PRE_RESTORE_DIR" "$retention" >/dev/null
+
+if [[ "$pools_written" -eq 0 ]]; then
+    log_msg "FATAL: Settings backup was not written to any pool on ${my_host}"
+    exit 1
+fi
+log_msg "INFO:   ✓ Settings backup written to ${pools_written} pool(s)"
+echo ""
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${BACKUP_SETTINGS_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    mkdir -p "$ZFSUTILITIES_LOCK_DIR" 2>/dev/null || true
+    exec 9>"$SETTINGS_BACKUP_LOCK"
+    if ! flock -w 120 9; then
+        log_msg "FATAL: Another backup-settings run holds ${SETTINGS_BACKUP_LOCK}"
+        exit 1
+    fi
+    main
+fi

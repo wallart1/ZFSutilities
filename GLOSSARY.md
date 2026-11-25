@@ -1,7 +1,6 @@
 # Glossary
 
 **Items to be added by Zcode:**
-    marker
 
 
 Plain-language definitions of terms as they are actually used in this
@@ -59,6 +58,24 @@ but the name is only a birth label: which device a backstore serves is
 the truth. The busy resolver matches exports by device and never by
 name, so a renamed or reused backstore cannot drag the wrong dataset
 into a diagnosis.
+
+## campaign (campaign plan)
+
+A campaign is one phase of the integrated-testing roadmap that groups
+related journeys under a single goal. The recovery-scenario campaign
+(phase 3.9) is the model: journeys j15–j18 share one lab and one
+scenario catalog. The **campaign plan** is the owner-approved plan that
+scopes the campaign before any of it is built. The plan gives every
+scenario a stable ID: `S` for a full scenario, `M` for a small
+wrong-input case such as a mistyped identifier or a wrong passphrase.
+It names the journey that tests each scenario and orders the work into
+gates (G0, G1, and so on). It also names the **wrap criteria**, the
+conditions that close the campaign: every finding in a terminal state,
+the [requirements register](#requirements-register) seeded, the
+coverage map updated, fresh runs green. A campaign starts only when the
+owner names the need. The plan is not a repository file; the roadmap
+row, the journeys, and the coverage map are what remain of it. The
+full account is `docs/docs/developer-guide/itf-coverage.md`.
 
 ## capped table window
 
@@ -319,6 +336,20 @@ private Xvfb display fencing tests off the real desktop, a gate fencing
 a degraded write. The house rule: fences rank above protocols; safety
 must hold when nobody is watching.
 
+## finding
+
+A product defect that a journey observed through the end-user surface,
+recorded as one row of `tests/integrated/FINDINGS.md` with an F-number
+(F-052, for example). The row carries the date, the journey, the
+symptom, the journey's results directory (the raw evidence), and a
+status. A test-harness bug is not a finding: it is fixed directly in
+`tests/integrated/` and never gets a row. Each row ends in exactly one
+**terminal state**: `verified`, `accepted` (the owner waives it),
+`documented`, or `superseded`. A finding marked `verified` was closed
+through a [repair plan](#repair-plan); a UX gap it revealed moves to
+the [requirements register](#requirements-register). **Triage** is the
+act of deciding which state each open finding ends in.
+
 ## full gate
 
 Short form of [full unit gate](#full-unit-gate), the phrase reports use
@@ -457,6 +488,19 @@ exact name (the grant dimension, map schema version 2) and why a
 renamed initiator shows up as drift rather than silently losing its
 LUNs. Report phrases: "the initiator IQN," "IQN prefix mismatch."
 
+## journey
+
+A script that plays one realistic end-user scenario end to end against
+a disposable test guest — a temporary virtual machine created for the
+run. A journey installs and drives ZFSutilities the way a first-time
+user would, then checks the results in the guest: ZFS state, wiring
+files, exit codes, GUI rendering. A journey is not a test suite: it
+proves a workflow, not a function. Journeys live in
+`tests/integrated/journeys/` and run with `itf journey run <name>`.
+Reports call them by short names: j15 is `j15-iscsi-boot-keys`. The
+[function survey](#function-survey) is the journey that draws a random
+sample instead of following one fixed path.
+
 ## keys pending
 
 The posture of an encrypted LUN whose key is not loaded — on this
@@ -570,6 +614,34 @@ the Pools page. The scope helper `get_managed_pool_names`
 (`feature_config.py`) intersects the saved registry with the imported
 pool names, preserving registry order. See **registered** and
 **online** for the two halves.
+
+## marker
+
+A small signal whose presence carries a meaning: a fixed line of text,
+a variable, or a tiny file that says "this happened", "wait here", or
+"say this only once". Reports use the word for six different things:
+
+- **Cron launch marker.** Every scheduled line starts the runner with
+  `ZFSUTILITIES_FROM_CRON=Y`. When the runner sees it, it stops writing
+  to the cron log once its own session log exists, so that log holds
+  only failures from before the log was created.
+- **Input-hold markers.** The `ZFSU-INPUT-REQ` and `ZFSU-INPUT-ACK`
+  lines a prompt prints, which the GUI's job runner turns into a
+  question dialog (see [input hold](#input-hold)).
+- **Print-once markers.** A tiny file under `/tmp` that a script drops
+  after logging a note, so a message that would repeat for every
+  snapshot is logged once per run. An exit trap removes the file.
+- **Snapshot-name markers.** The reservation files in the
+  [run dir](#run-dir) (`nextsnap_*`) that record the snapshot name an
+  interrupted run can reuse.
+- **Step markers.** In an integrated test, a fixed line in a guest's
+  install or serial transcript that a [journey](#journey) waits for
+  before its next step, or uses as the exact place to inject a fault.
+- **LUN markers.** A known byte pattern written through an iSCSI LUN
+  and read back later, proving the same data is still being served.
+
+A [hold tag](#hold-tag) is not a marker: it protects a snapshot instead
+of signalling something.
 
 ## message-level gate
 
@@ -825,6 +897,33 @@ no host and the partial-dir checks stay deterministic. Dev-tarball
 source only — real GitHub cannot be re-labeled. j25 runs on it; j23's
 pass 2 uses the same re-label stage.
 
+## repair plan
+
+The numbered proposal that turns a [finding](#finding) into a change in
+the development repository: `tests/integrated/repair-plans/NNN-slug.md`.
+Numbers run in sequence and are never reused. The agent drafts the plan
+after filing the finding. The plan records the finding, the root cause
+reproduced on the development tree, the proposed change, the blast
+radius (what else the change can affect), and the verification — which
+journeys rerun and what they must show. Nothing is executed until the
+owner approves the plan. The change then lands in the repository, ships
+to the test guest as a dev tarball (a tarball of the development tree),
+and a green rerun closes the plan and the finding. A product bug is
+never fixed inside a test guest.
+
+## requirements register
+
+`tests/integrated/REQUIREMENTS.md`: the list of UX (usability) gaps
+and design directions that journeys proved live but that are not
+defects to fix now. Each entry has an R-number (R-10, for example), a
+date, its source, and a status. A source is a journey outcome, a
+[finding](#finding) judged "not a defect to fix now", or direct owner
+direction — never speculation. An entry moves from `open` to
+`promoted` (a [repair plan](#repair-plan), approved by the owner) to
+`addressed`, or it is `declined` with a date and reason. The register
+is the durable input for future coding; promoting an entry to a plan is
+the owner's call.
+
 ## resource envelope
 
 The memory-and-descriptors trajectory a function-survey run records for
@@ -916,6 +1015,17 @@ it runs. Active profiles are written into `/etc/cron.d/zfsutilities` by
 the GUI; inactive ones only render as rows on the Schedule page. The
 function survey seeds inactive ones so the page has real rows without
 anything firing.
+
+## settings backup
+
+A dated copy of every settings file (the main config, the profiles, and
+the administrator files in `/etc/zfsutilities`), written by
+`backup-settings` into `<pool>/zfsutilities/settings-backups/` on every
+online pool so an OS-disk loss cannot lose them. Copies are kept for a
+configurable number of days (35 by default) and pruned automatically. The
+name covers the whole mechanism: the nightly cron run, the GUI's
+**Settings → Backup Settings...** menu item, and the restore that stages
+the current settings aside before overwriting them.
 
 ## shadowed mount
 

@@ -14,6 +14,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 
 ## Jump to
 
+- [`backup-settings`](#backup-settings)
 - [`check-prerequisites`](#check-prerequisites)
 - [`cleanup-zfsutilities-legacy`](#cleanup-zfsutilities-legacy)
 - [`deploy-version`](#deploy-version)
@@ -73,6 +74,80 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsunmount`](#zfsunmount)
 - [`zfswatcharc`](#zfswatcharc)
 - [`zfswipe`](#zfswipe)
+
+---
+
+### `backup-settings`
+
+Copy every ZFSutilities settings file into dated, pool-resident backups.
+
+```bash
+sudo backup-settings [--list] [--restore <timestamp>]
+```
+
+**Arguments:**
+
+| Argument              | Description                                                            |
+| --------------------- | ---------------------------------------------------------------------- |
+| *(none)*              | Back up the settings set to every online pool and prune old entries   |
+| `--list`              | Print available backups as `timestamp\|pool\|file-count`, newest first |
+| `--restore <timestamp>` | Restore that backup from the first pool holding it                  |
+
+**Globals:** none. The retention comes from the config's
+`settings_backup.retention_days` key (default 35); the environment variable
+`SETTINGS_BACKUP_RETENTION_DAYS` overrides it for tests and hosts without
+a config.
+
+The settings live on the OS disk: `config.json` and the profiles under
+`/var/lib/zfsutilities`, plus `node.conf`, `deploy.conf`,
+`iscsi-encrypted-luns.conf`, and `smtp-credentials.json` under
+`/etc/zfsutilities`. An OS-disk loss takes them all while the pools survive.
+This script copies the whole set, once per run, into
+`<pool>/zfsutilities/settings-backups/<timestamp>/` on every online pool —
+the same dataset family the iSCSI state map uses, created on first use.
+Each backup carries a `manifest.json` recording the host, the node mode, the
+retention, and every file with its mode and size. File modes survive the
+round trip, so the 0600 of `smtp-credentials.json` stays root-only. A
+short `flock` serializes backup and restore runs against each other.
+
+Two-node hosts write to the configured pools (`POOL_TARGET`), exactly where
+`export-iscsi-state` writes the state map. Single-node hosts write to every
+online pool, because no `POOL_TARGET` exists there. An offline pool is
+skipped with an informational note — a rotation pool spends most of its time
+offline, and the remaining pools still receive the copy.
+
+Every run prunes backup entries older than the retention. A daily line in
+`/etc/cron.d/zfsutilities` runs the backup once a night (default 00:17, off
+the top of the hour so profile schedules never collide); the GUI's
+Settings menu offers the same backup and the restore on demand.
+
+`--restore` first stages the *current* live settings into
+`/var/lib/zfsutilities/settings-pre-restore/<run-timestamp>/`, then copies
+the chosen backup's files back to their live locations. Restored profiles
+merge into the profiles directory: same-name files are replaced, newer
+additions stay. The pre-restore copies are kept for the same retention.
+The iSCSI state map is deliberately **not** part of the set: it carries its
+own freshness machinery, and restoring an old LUN map over a newer one
+would destroy the recovery authority that `export-iscsi-state` guards.
+
+**Called modules:**
+
+| Module / Script | Purpose in this command |
+| --- | --- |
+| [node-lib.sh](modules.md#node-libsh) | Resolves the node configuration; `is_single_node` and `pool_list` select the target pools |
+| [iscsi-lib.sh](modules.md#iscsi-libsh) | Only `state_dataset_mountpoint`, the create-on-first-use resolver for `<pool>/zfsutilities` |
+
+**Data structures consumed / produced:** reads the settings files listed
+above; writes the
+[settings backups](../developer-guide/data-structures.md#settings-backups)
+layout on every online pool and the pre-restore staging directory.
+
+**Return codes:**
+
+| Code | Meaning                                                       |
+| ---- | ------------------------------------------------------------- |
+| `0`  | Backup written to at least one pool, or restore completed     |
+| `1`  | Nothing to back up, no online pool took the backup, unknown restore timestamp, or the lock could not be acquired |
 
 ---
 
@@ -1322,6 +1397,7 @@ sudo zfsdailybackup "dryrun='Y'"
 | [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides                           |
 | [zfscleanup](commands.md#zfscleanup)| Prune snapshots after sends                                      |
 | [rsync-dailybackup](modules.md#rsync-dailybackup)| Perform rsync pulls from remote/local hosts                      |
+| [node-lib.sh](modules.md#node-libsh)| Resolve the node configuration and the storage/compute host pair  |
 
 **Data structures consumed / produced:**
 
@@ -1330,23 +1406,32 @@ sudo zfsdailybackup "dryrun='Y'"
 | `$nextsnap`                    | Shared snapshot name used for both send steps | [$nextsnap](../developer-guide/global-variables.md#zfs-sendreceive)                                  |
 | `/run/zfsutilities/nextsnap_*` | Persisted snapshot name, reused if run again  | [snapfile](../developer-guide/data-structures.md#snapshot-name-persistence)                          |
 | JSON config `backup`           | Source of override values from the GUI        | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson)        |
-| Node config                    | Gates two-node rsync pulls                    | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| Node config                    | Resolves the host pair and gates two-node rsync pulls | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 
 **Internal flow:**
 
-1. Generate `$nextsnap` via `zfssnapbuild`.
-2. Apply overrides from `$1`.
-3. Optionally pull rsync backups from `rocky`, `$compute_host` (two-node only), and `$storage_host`.
-4. Snapshot and copy `threeamigos/proxmox` → `fivebays`.
-5. Snapshot and copy `NVME1` → `fivebays`.
-6. Remove the snapfile unless in dry-run mode.
-7. If `$prune='Y'`, run `cleanup '' '' 'dailybackup'` to apply retention policies.
+1. Load the node configuration through `node-lib.sh`. A missing or incomplete configuration aborts the run.
+2. Generate `$nextsnap` via `zfssnapbuild`.
+3. Apply overrides from `$1`.
+4. Optionally pull rsync backups from `rocky`, `$compute_host` (two-node only), and `$storage_host`.
+5. Snapshot and copy `threeamigos/proxmox` → `fivebays`.
+6. Snapshot and copy `NVME1` → `fivebays`.
+7. Remove the snapfile unless in dry-run mode.
+8. If `$prune='Y'`, run `cleanup '' '' 'dailybackup'` to apply retention policies.
+
+The orchestrator runs without strict mode (the template exemption in the
+[developer guide](../developer-guide/coding-policies.md)). The shipped
+[`rsync-dailybackup`](modules.md#rsync-dailybackup) template turns strict mode
+on when it is sourced, so the orchestrator restores its own mode right after
+that source and again before the prune leg. The prune's exit codes 5, 6, and
+7 are outcomes the caller reads, not errors.
 
 **Return codes:**
 
 | Code     | Meaning                           |
 | -------- | --------------------------------- |
 | `0`      | Completed successfully.           |
+| `1`      | The node configuration is missing or incomplete. |
 | non-zero | Invalid input or command failure. |
 
 ---

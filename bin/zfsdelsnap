@@ -176,8 +176,8 @@ function delsnap {
     source_helper zfslockmanager
     source_helper zfs-diagnose-busy
 
-    if [[ "$1" != '' ]]; then
-        snaptoremove=$1
+    if [[ "${1:-}" != '' ]]; then
+        snaptoremove="${1:-}"
     else
         log_msg "FATAL: A snapshot to be removed must be given."
         source "$(find_zfsutility_script bashfatal)" 8
@@ -200,21 +200,26 @@ function delsnap {
     fi
     local delsnap_lock="$zfslock_id"
 
-    if [[ "$2" != '' ]]; then
-        minage=$2
+    if [[ "${2:-}" != '' ]]; then
+        minage="${2:-}"
     else
         log_msg "FATAL: A minimum age (in days) must be specified. Use 0 to skip age check."
         zfslock_release "$delsnap_lock"
         source "$(find_zfsutility_script bashfatal)" 8
     fi
 
-    if [[ $3 = 'releaseholds' ]]; then
+    if [[ ${3:-} = 'releaseholds' ]]; then
         releaseholds='Y'
     else
         releaseholds='N'
     fi
 
     # Default the set of releasable hold tags if the caller did not set it.
+    # The declare -p guard (node-lib's POOL_TARGET law, the same shape as
+    # zfscleanup and zfsretain): under a strict caller the bare
+    # ${#unset[@]} read is fatal, and delsnap has strict callers of its
+    # own — a site copy that sets `set -u` and sources this helper.
+    declare -p releaseholds_tags >/dev/null 2>&1 || releaseholds_tags=()
     if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
         releaseholds_tags=('offsite-*')
     fi
@@ -237,7 +242,7 @@ function delsnap {
         fi
     fi
 
-    if [[ $4 != 'nocheckagainst' ]]; then
+    if [[ ${4:-} != 'nocheckagainst' ]]; then
         exec 3>&1  # Save stdout to fd 3
         checkagainst "$snaptoremove" >&3
         rc=$?
@@ -265,7 +270,9 @@ function delsnap {
 
     if [[ $releaseholds = 'Y' ]]; then
         delallholds "$snaptoremove" "${releaseholds_tags[@]}"
-        if [[ -n "$zfs_delallholds_remaining_tags" ]]; then
+        # :- default: a caller-provided delallholds that leaves the
+        # variable unset must not abort a strict caller here.
+        if [[ -n "${zfs_delallholds_remaining_tags:-}" ]]; then
             log_msg "WARN: Snapshot $snaptoremove still has holds" \
                 "($zfs_delallholds_remaining_tags); skipping deletion."
             zfslock_release "$delsnap_lock"
@@ -290,7 +297,10 @@ function delsnap {
             return 0
         fi
         rc=1
-        if [[ $skipbusy = 'Y' ]]; then
+        # Direct delsnap calls carry no skipbusy: the documented default
+        # is 'N' (zfscleanup's header) — the FATAL branch. retain() sets
+        # its own value before calling.
+        if [[ ${skipbusy:-N} = 'Y' ]]; then
             log_msg "WARN: Unable to remove snapshot $snaptoremove (rc=$rc). Skipping."
             zfslock_release "$delsnap_lock"
             return 1

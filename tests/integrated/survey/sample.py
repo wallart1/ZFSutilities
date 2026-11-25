@@ -276,12 +276,12 @@ def fetch_release_tree(sw, dest_dir):
 def resolve_world(spec):
     """Validate a world-variant name against the closed list.
 
-    Returns the variant string ("" / None mean the default, thin);
+    Returns the variant string ("" / None mean the default, lived-in);
     raises ValueError naming the known variants — resolve_sw's refusal
     style.  Staging the variants is the journey library's call, not
     the sampler's.
     """
-    spec = (spec or "thin").strip()
+    spec = (spec or "lived-in").strip()
     if spec not in WORLDS:
         raise ValueError(f"bad world variant: {spec!r} ({' | '.join(WORLDS)})")
     return spec
@@ -428,8 +428,9 @@ def main(argv=None):
     )
     parser.add_argument(
         "--world",
-        default=os.environ.get("ITF_SURVEY_WORLD", "thin"),
-        help="world variant (thin | lived-in | busy)",
+        default=None,
+        help="world variant (thin | lived-in | busy; default lived-in, "
+        "the full-function survey world)",
     )
     parser.add_argument(
         "--world-seed",
@@ -467,8 +468,13 @@ def main(argv=None):
     except ValueError as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
+    # World resolution mirrors --sw's env handling, plus one distinction
+    # the replay-fidelity check needs: an explicitly requested world
+    # (flag or env) may conflict with an archive; the default may not.
+    world_arg = args.world if args.world is not None else os.environ.get("ITF_SURVEY_WORLD")
+    world_explicit = bool(world_arg)
     try:
-        world_variant = resolve_world(args.world)
+        world_variant = resolve_world(world_arg)
     except ValueError as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 2
@@ -516,14 +522,16 @@ def main(argv=None):
             )
             return 2
         # Replay fidelity, world axis: the archived world defines what
-        # the journey stages; a conflicting explicit ITF_SURVEY_WORLD
-        # is refused the same way (mirrors the SW rule above).
+        # the journey stages; a conflicting explicitly requested world
+        # (flag or env) is refused the same way (mirrors the SW rule
+        # above).  An unset knob is the default and never conflicts —
+        # the archive's variant wins, whatever it is.
         arch_world = archive["world"]["variant"]
-        if world_variant != "thin" and world_variant != arch_world:
+        if world_explicit and world_variant != arch_world:
             print(
                 f"FATAL: archive surveyed world {arch_world!r} but "
-                f"ITF_SURVEY_WORLD={args.world} asks for {world_variant!r} — "
-                "replay must use the archived world",
+                f"--world/ITF_SURVEY_WORLD={world_arg} asks for {world_variant!r} — replay "
+                "must use the archived world",
                 file=sys.stderr,
             )
             return 2

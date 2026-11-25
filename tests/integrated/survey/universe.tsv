@@ -61,6 +61,11 @@
 # Lived-in runs additionally pin ZFSUTILITIES_STATE_DIR=/root/survey-state
 # (schedule profiles) and enrich /root/survey-config.json with retention,
 # backup, and offsite rows — see survey-lib.sh itf_survey_stage_config_rows.
+# zfscleanup and zfsdailybackup are bespoke rows: the recipe runs the
+# override leg above, and stage F (lived-in worlds only) adds the
+# full-function legs — real retention over the aged ladder and the
+# site-adapted pair with no overrides — reverting the world afterward
+# (see survey-lib.sh itf_survey_run_full_function).
 #
 # ---------------------------------------------------------------------------
 # EXCLUDED from the universe.  Every excluded DOCUMENTED command is listed
@@ -101,6 +106,7 @@
 # ---------------------------------------------------------------------------
 
 id	command	lab	node	depth	invoke	profiles	rcs	feeds	assert	busy
+cli-backup-settings	backup-settings	single	storage	deep	backup-settings --list	-	-	-	-	-
 cli-check-prerequisites	check-prerequisites	single	storage	deep	./bin/check-prerequisites --single-node	-	-	-	-	-
 cli-startdocserver	startdocserver	single	storage	bespoke	-	-	-	-	-	-
 cli-watchall	watchall	single	storage	bespoke	-	-	-	-	-	-

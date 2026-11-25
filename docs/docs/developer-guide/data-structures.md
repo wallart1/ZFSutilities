@@ -266,6 +266,7 @@ Top-level keys:
 | `enclosures`                                                          | object                    | Per-enclosure settings keyed by discovery id (see below; seeded empty by migration v30)                                                                                |
 | `notifications`                                                       | object                    | Desktop/email run-completion notification settings (see below; absent until first configured — both channels default off)              |
 | `paths`                                                               | object                    | Installation-specific file paths (see below); seeded from the centralized path layer on first access                  |
+| `settings_backup`                                                     | object                    | Pool-resident settings backups: retention and the nightly run (see below; seeded by migration v33)                     |
 | `config_version`                                                      | integer                   | Config schema version (see migrations below)                                                                         |
 
 All sections default to empty on first run — the user populates them through
@@ -513,6 +514,25 @@ Persisted by the GUI Performance tab.
 | ---------------- | ------- | ------------------------------------------------------------- |
 | `refresh_seconds`| integer | Performance-tab sampling interval (the timer runs for the GUI's whole lifetime; default `5`) |
 
+### `settings_backup` object
+
+Seeded by the v33 migration and read by
+[`backup-settings`](../commands-and-modules/commands.md#backup-settings) and
+by the scheduler (`cron_manager.py`). The GUI has no page for this section;
+the keys live in the main config file.
+
+| Key              | Type    | Contents                                                                                   |
+| ---------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `retention_days` | integer | Days a pool-resident settings backup is kept before a run prunes it (default `35`; any value below `1`, and any non-integer, fall back to the default) |
+| `daily`          | bool    | Whether the scheduler's cron drop-in carries the nightly `backup-settings` line (default `true`) |
+| `daily_hour`     | integer | Hour of the nightly run, 0–23 (default `0`)                                                |
+| `daily_minute`   | integer | Minute of the nightly run, 0–59 (default `17`)                                             |
+
+A retention of 35 days covers a monthly offsite rotation plus one week. The
+nightly time defaults to 00:17, off the top of the hour, so it never
+collides with profile schedules. An hour or minute outside its range, or a
+value that is not a number, logs a WARN and runs the line at 00:17.
+
 ### Config migrations
 
 The `config_version` key tracks the schema of the JSON config independently of
@@ -522,7 +542,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 33
+CONFIG_VERSION = 34
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -557,6 +577,7 @@ MIGRATIONS = [
     _migrate_30_to_31,
     _migrate_31_to_32,
     _migrate_32_to_33,
+    _migrate_33_to_34,
 ]
 ```
 
@@ -593,6 +614,52 @@ Adding a new migration:
     migration that raises keeps every one of them from starting. Treat a
     section of the wrong type as empty: a `null` where a list belongs, or a
     row that is not an object.
+
+## Settings backups
+
+Dated copies of the settings files, written by
+[`backup-settings`](../commands-and-modules/commands.md#backup-settings)
+onto every online pool so an OS-disk loss cannot lose them. The layout
+lives inside the same `<pool>/zfsutilities` dataset family as the iSCSI
+state map:
+
+```text
+<pool>/zfsutilities/
+├── iscsi-state.json                 ← written by export-iscsi-state
+├── node.conf                        ← written by export-iscsi-state
+└── settings-backups/
+    └── <YYYYmmddTHHMMSS>/           ← one directory per backup
+        ├── manifest.json            ← host, node mode, retention, file list
+        ├── config.json              ← from /var/lib/zfsutilities
+        ├── profiles/                ← from /var/lib/zfsutilities/profiles
+        │   └── *.json
+        ├── node.conf                ┐
+        ├── deploy.conf              │
+        ├── iscsi-encrypted-luns.conf│← from /etc/zfsutilities, each
+        └── smtp-credentials.json    ┘   present only when the source is
+```
+
+Rules that hold across the layout:
+
+- The timestamp directory name is local time, the format the writer and
+  the prune both parse. Directories with any other name are left
+  untouched.
+- `manifest.json` records `version`, `generated`, `host`, `node_mode`,
+  `retention_days`, and a `files` array of `{name, mode, bytes}`. A file's
+  mode travels with the copied file itself; the manifest only records it.
+  A restore does not compare files against the manifest. The manifest's
+  presence is what marks a timestamp directory as a complete backup, which
+  is why `--restore` requires it.
+- Every backup run prunes entries older than
+  `settings_backup.retention_days` days (config key, default 35). The
+  same pruning sweeps `/var/lib/zfsutilities/settings-pre-restore/`,
+  where `--restore` stages the displaced current settings before
+  overwriting them.
+- Restores write to the modern canonical paths. Every loader prefers the
+  modern path, so a restored file immediately shadows a stale legacy copy.
+- The iSCSI state map never appears in a backup: it has its own freshness
+  machinery, and restoring an old map over a newer one would destroy the
+  recovery authority.
 
 ## Python command and I/O structures
 

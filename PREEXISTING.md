@@ -188,3 +188,4 @@ The pub3 lane's PREEXISTING.md carries an entry for the same command
 (shared agent memory, 2026-11-24); keep one entry at the lane merge.
 
 ---
+

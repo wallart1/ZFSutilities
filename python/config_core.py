@@ -69,6 +69,21 @@ MEMORY_DEFAULTS = {
 }
 
 
+SETTINGS_BACKUP_DEFAULTS = {
+    # Days a pool-resident settings backup (and a pre-restore staging copy)
+    # is kept before the prune sweeps it. 35 by design: a full week past a
+    # monthly offsite-rotation cycle.
+    "retention_days": 35,
+    # The daily automatic backup: a backup-settings line in the cron
+    # drop-in, converged by cron_manager like the profile lines. The
+    # default time sits off the top of the hour so it never collides with
+    # profile schedules (which almost always run on the hour).
+    "daily": True,
+    "daily_hour": 0,
+    "daily_minute": 17,
+}
+
+
 def get_profiles_dir():
     """Return the directory where profile JSON files are stored."""
     return _paths_get_profiles_dir()
@@ -140,6 +155,7 @@ def load_config():
         "backup": _deep_copy(BACKUP_DEFAULTS),
         "dashboard": _deep_copy(DASHBOARD_DEFAULTS),
         "memory": _deep_copy(MEMORY_DEFAULTS),
+        "settings_backup": _deep_copy(SETTINGS_BACKUP_DEFAULTS),
         "config_version": CONFIG_VERSION,
     }
     try:
@@ -411,3 +427,30 @@ def get_paths_config(config, persist=True):
         except OSError:
             pass
     return paths
+
+
+def get_settings_backup_config(config, persist=True):
+    """Return the settings-backup section, seeding any missing defaults.
+
+    The section drives backup-settings: the pool-retention in days and the
+    daily automatic cron line.  User-set values always win over the seeds.
+
+    With *persist* (the default) a config that lacked the section — or a
+    key — has the seeds written back.  Headless readers (the migration,
+    cron convergence) pass ``persist=False`` to derive without writing.
+    """
+    section = config.get("settings_backup")
+    if not isinstance(section, dict):
+        section = {}
+        config["settings_backup"] = section
+    seeded = False
+    for key, value in SETTINGS_BACKUP_DEFAULTS.items():
+        if key not in section:
+            section[key] = value
+            seeded = True
+    if seeded and persist:
+        try:
+            save_config(config)
+        except OSError:
+            pass
+    return section

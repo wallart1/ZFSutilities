@@ -7,6 +7,7 @@ A GTK3 frontend for ZFS backup, snapshot, and retention operations.
 
 import os
 import re
+import subprocess
 import sys
 import threading
 from typing import ClassVar
@@ -88,7 +89,7 @@ from logs_page import create_logs_page
 from memory_page import create_memory_page, on_memory_timer_tick, refresh_memory_page
 from notifications_dialog import NotificationsDialog
 from offsite_page import create_offsite_page, do_detect_offsite_pool
-from path_utils import get_version
+from path_utils import find_script, get_version
 from pools_page import create_pools_page, on_pools_refresh
 from profile_manager import load_profile
 from restore_page import create_restore_page
@@ -1086,6 +1087,159 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             save_docs_editor(self.config, command)
             log_msg(f"INFO: Documentation editor set to: {command or '(system default)'}")
         dialog.destroy()
+
+    def _run_settings_script(self, args):
+        """Run bin/backup-settings and relay its output lines to the log pane.
+
+        Returns the completed process, or None when the script could not be
+        resolved or launched at all. Output lines already carry their
+        INFO:/WARN:/FATAL: level token, so they are relayed verbatim.
+        """
+        script = find_script("backup-settings")
+        if not script:
+            log_msg("WARN: backup-settings not found on this host")
+            return None
+        try:
+            result = subprocess.run(
+                [script, *args],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            log_msg("WARN: backup-settings did not finish within 600 seconds")
+            return None
+        except OSError as e:
+            log_msg(f"WARN: Could not run backup-settings: {e}")
+            return None
+        for stream in (result.stdout, result.stderr):
+            for line in stream.splitlines():
+                if line.strip():
+                    log_msg(line)
+        return result
+
+    def on_backup_settings(self, widget):
+        """Back up the settings set onto every online pool now."""
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text="Back up settings to every online pool?",
+        )
+        dialog.format_secondary_text(
+            "Copies config.json, the backup profiles, and the /etc/zfsutilities "
+            "administrator files into <pool>/zfsutilities/settings-backups/ on "
+            "every online pool. Copies are kept for the configured retention "
+            "(35 days by default)."
+        )
+        ok_button = dialog.get_widget_for_response(Gtk.ResponseType.OK)
+        if ok_button:
+            ok_button.set_label("Back Up")
+        response = run_dialog(dialog)
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK:
+            log_msg("VERB: Settings backup cancelled")
+            return
+        result = self._run_settings_script([])
+        if result is None:
+            return
+        if result.returncode == 0:
+            log_msg("INFO: Settings backup finished")
+        else:
+            log_msg(f"WARN: Settings backup failed (exit {result.returncode})")
+
+    def on_restore_settings(self, widget):
+        """Restore a pool-resident settings backup onto this host."""
+        result = self._run_settings_script(["--list"])
+        if result is None or result.returncode != 0:
+            log_msg("WARN: Could not list settings backups")
+            return
+        # One picker entry per well-formed "timestamp|pool|file-count" row.
+        # The picker index doubles as the index into this list, so anything
+        # else the listing printed is dropped HERE: skipping it at append
+        # time would shift the indexes and restore a different backup than
+        # the one the user chose.
+        backups = [
+            parts
+            for parts in (line.split("|", 2) for line in result.stdout.splitlines())
+            if len(parts) == 3 and all(field.strip() for field in parts)
+        ]
+        if not backups:
+            log_msg("WARN: No settings backups found on any online pool")
+            return
+
+        dialog = Gtk.Dialog(
+            title="Restore Settings",
+            transient_for=self,
+            flags=0,
+        )
+        dialog.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        dialog.add_button(Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        dialog.set_default_size(460, -1)
+
+        box = dialog.get_content_area()
+        box.set_spacing(10)
+        box.set_margin_top(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_bottom(10)
+
+        label = Gtk.Label(label="Backup to restore (timestamp | pool | files):")
+        label.set_halign(Gtk.Align.START)
+        box.pack_start(label, False, False, 0)
+
+        combo = Gtk.ComboBoxText()
+        for backup_ts, backup_pool, file_count in backups:
+            combo.append_text(f"{backup_ts}  —  {backup_pool} ({file_count} files)")
+        combo.set_active(0)
+        box.pack_start(combo, False, False, 0)
+
+        box.show_all()
+        response = run_dialog(dialog)
+        idx = combo.get_active()
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK or idx < 0:
+            log_msg("VERB: Settings restore cancelled")
+            return
+        chosen_ts, chosen_pool, _chosen_count = backups[idx]
+
+        confirm = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=f"Restore settings from {chosen_ts} on {chosen_pool}?",
+        )
+        confirm.format_secondary_text(
+            "This replaces the current config.json, matching backup profiles, "
+            "and /etc/zfsutilities files with the backup's copies. The current "
+            "settings are staged aside automatically under "
+            "settings-pre-restore/ in the state directory."
+        )
+        ok_button = confirm.get_widget_for_response(Gtk.ResponseType.OK)
+        if ok_button:
+            ok_button.set_label("Restore")
+        response = run_dialog(confirm)
+        confirm.destroy()
+        if response != Gtk.ResponseType.OK:
+            log_msg("VERB: Settings restore cancelled")
+            return
+
+        result = self._run_settings_script(["--restore", chosen_ts])
+        if result is None:
+            return
+        if result.returncode != 0:
+            log_msg(f"WARN: Settings restore failed (exit {result.returncode})")
+            return
+
+        # The restored config.json must survive later GUI saves: reload the
+        # in-memory config from disk instead of keeping the pre-restore dict.
+        self.config = load_config()
+        self.on_refresh(None)
+        log_msg("INFO: Settings restored; restart the GUI to apply every page")
 
     _PAGE_ANCHORS: ClassVar[dict[str, str]] = {
         "dashboard": "dashboard-tab",

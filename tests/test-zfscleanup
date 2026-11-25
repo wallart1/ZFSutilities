@@ -198,6 +198,25 @@ test_no_builtin_selection_criteria() {
     assert_equals "|||" "${zfscleanup_selection[0]}"
 }
 
+test_strict_mode_caller_survives_unset_arrays() {
+    test_start "Strict-mode caller: unset releaseholds_tags does not FATAL"
+    reset_state
+    _mock_zpool_list="tank"
+    local out
+    out=$( (
+        set -u
+        unset releaseholds_tags
+        # Caller context the orchestrator carries (the sourced
+        # send-receive helper initializes these before strict mode
+        # engages): the array read is the hazard under test.
+        autoproceed='Y' dryrun='N' releaseholds='N'
+        cleanup "" "" "dailybackup"
+        echo "STRICT-OK processed=${zfscleanup_processed[*]:-none}"
+    ) 2>&1 )
+    assert_contains "$out" "STRICT-OK"
+    assert_contains "$out" "processed=tank @dailybackup"
+}
+
 test_caller_selection_criteria_forwarded() {
     test_start "Caller dataset selection criteria are forwarded to buildfsarray"
     reset_state
@@ -283,6 +302,7 @@ test_continues_after_retain_lock_conflict
 test_continues_after_retain_policy_error
 test_continues_to_next_pool_after_retain_error
 test_releaseholds_tags_default
+test_strict_mode_caller_survives_unset_arrays
 test_no_builtin_selection_criteria
 test_caller_selection_criteria_forwarded
 test_temp_pool_has_no_builtin_exclude

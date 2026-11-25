@@ -289,8 +289,8 @@ def _sampler_run(*extra_args):
 def test_resolve_world_accepts_closed_list():
     for variant in sampler.WORLDS:
         assert sampler.resolve_world(variant) == variant
-    assert sampler.resolve_world("") == "thin"  # unset knob = default
-    assert sampler.resolve_world(None) == "thin"
+    assert sampler.resolve_world("") == "lived-in"  # unset knob = default
+    assert sampler.resolve_world(None) == "lived-in"
 
 
 def test_resolve_world_refusals_name_the_list():
@@ -360,17 +360,17 @@ def test_new_mode_cli_emits_world_lines(tmp_path):
         "new", "--seed", "cli-world", "--fraction", "1.0", "--archive", str(archive)
     )
     assert out1.returncode == 0
-    assert "# world thin" in out1.stdout
+    assert "# world lived-in" in out1.stdout  # the full-function default
     assert "# world-seed cli-world" in out1.stdout  # defaults to the run seed
     world = json.loads(archive.read_text())["world"]
-    assert world["variant"] == "thin"
+    assert world["variant"] == "lived-in"
     assert world["seed"] == "cli-world"
-    assert world["digest"] == sampler.world_digest("thin", "cli-world")
+    assert world["digest"] == sampler.world_digest("lived-in", "cli-world", world["anchor"])
     assert isinstance(world["anchor"], int)
     assert f"# world-anchor {world['anchor']}" in out1.stdout
     out2 = _sampler_run("replay", "--archive", str(archive))
     assert out2.returncode == 0
-    assert "# world thin" in out2.stdout
+    assert "# world lived-in" in out2.stdout
     assert "# world-seed cli-world" in out2.stdout
     assert f"# world-anchor {world['anchor']}" in out2.stdout
 
@@ -425,10 +425,18 @@ def test_new_mode_plans_busy_world(tmp_path):
 def test_replay_world_conflict_refused(tmp_path):
     """A thin archive replayed under an explicit other variant: rc 2."""
     archive = tmp_path / "c.json"
-    assert _sampler_run("new", "--seed", "s", "--archive", str(archive)).returncode == 0
+    assert (
+        _sampler_run("new", "--seed", "s", "--archive", str(archive), "--world", "thin").returncode
+        == 0
+    )
     refused = _sampler_run("replay", "--archive", str(archive), "--world", "lived-in")
     assert refused.returncode == 2
     assert "thin" in refused.stderr and "lived-in" in refused.stderr
+    # An UNSET knob never conflicts (the --rerun law with the flipped
+    # default): the archive's variant wins without a pin.
+    unpinned = _sampler_run("replay", "--archive", str(archive))
+    assert unpinned.returncode == 0
+    assert "# world thin" in unpinned.stdout
     # The matching explicit variant still replays.
     assert _sampler_run("replay", "--archive", str(archive), "--world", "thin").returncode == 0
 

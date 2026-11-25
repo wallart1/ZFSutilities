@@ -1,10 +1,12 @@
 """Tests for MkDocs documentation integrity — nav, links, hooks, anchors,
-and AGENTS.md reference integrity (repo-relative paths and branch names)."""
+AGENTS.md reference integrity (repo-relative paths and branch names), and
+the repository-root litter guard."""
 
 import importlib.util
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 
 from test_support import (
@@ -129,6 +131,27 @@ def _is_git_ignored(rel_path):
         check=False,
     )
     return result.returncode == 0
+
+
+def _untracked_root_entries(repo):
+    """Untracked, non-ignored entries directly under ``repo``.
+
+    Returns ``(sorted_names, None)``, or ``(None, git_message)`` when git
+    cannot enumerate the tree (a release tarball, or a repository git
+    refuses to touch). Git lists a wholly untracked directory with a
+    trailing slash; that slash is ignored by the depth test and kept in
+    the name, so a reported directory reads as one.
+    """
+    result = subprocess.run(
+        ["git", "-C", repo, "ls-files", "--others", "--exclude-standard", "--directory", "-z"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None, (result.stderr or "git ls-files failed").strip()
+    names = [entry for entry in result.stdout.split("\0") if entry]
+    return sorted(name for name in names if "/" not in name.rstrip("/")), None
 
 
 def _local_branch_exists(name):
@@ -527,6 +550,66 @@ class TestAgentsMdReferences(unittest.TestCase):
         problems = _validate_branch_mentions("Branch: nope-xyz\n", "synthetic")
         self.assertTrue(problems)
         self.assertEqual(_validate_branch_mentions("No branch line.\n", "synthetic"), [])
+
+
+class TestRepositoryRoot(unittest.TestCase):
+    """Stray files at the repository root must fail this suite.
+
+    A hand-run scratch capture lands in the working directory — the
+    repository root — and a later ``git add -A`` commits it. The guard
+    fires while the entry is still untracked: everything directly under
+    the root must be tracked or git-ignored. Entries below the root are
+    not this guard's business; new files there are untracked until
+    committed.
+    """
+
+    def test_root_has_no_untracked_entries(self):
+        untracked, error = _untracked_root_entries(REPO_ROOT)
+        if untracked is None:
+            self.skipTest(f"git cannot enumerate the tree: {error}")
+        self.assertEqual(
+            untracked,
+            [],
+            "Untracked entries at the repository root (stage, move, or "
+            "git-ignore them): " + ", ".join(untracked),
+        )
+
+    def test_untracked_root_checker_on_fixture_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._git(tmp, "init", "-q")
+            self._write(tmp, ".gitignore", content="*.log\n")
+            self._write(tmp, "tracked")
+            self._write(tmp, "sub", "keep")
+            self._git(tmp, "add", ".")
+            # Everything below the root, and everything git-ignored, must
+            # stay out of the report.
+            self._write(tmp, "ignored.log")
+            self._write(tmp, "sub", "extra")
+            self._write(tmp, "current")
+            self._write(tmp, "scratchdir", "f")
+            self.assertEqual(_untracked_root_entries(tmp), (["current", "scratchdir/"], None))
+
+    def test_untracked_root_checker_outside_a_work_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            names, error = _untracked_root_entries(tmp)
+        self.assertIsNone(names)
+        self.assertIn("not a git repository", error)
+
+    @staticmethod
+    def _git(repo, *args):
+        subprocess.run(
+            ["git", "-C", repo, "-c", "init.defaultBranch=fixture", *args],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    @staticmethod
+    def _write(root, *parts, content="x\n"):
+        path = os.path.join(root, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
 
 
 if __name__ == "__main__":

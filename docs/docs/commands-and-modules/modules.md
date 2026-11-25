@@ -341,7 +341,7 @@ sudo /home/dan/rsync-dailybackup
 | ------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `rsync_dailybackup_jobs` | Array of `"source\|destination\|exclude"` jobs | Customize in the script                                                                              |
 | `NODE_MODE`         | Single-node vs two-node mode                    | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
-| `THIS_HOST`         | Short hostname of the local host                | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| `STORAGE_HOST`, `COMPUTE_HOST` | The node pair the script copies into lowercase `storage_host` and `compute_host` in both node modes; an unset name falls back to the local hostname | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 
 **Called modules:**
 
@@ -365,6 +365,13 @@ sudo /home/dan/rsync-dailybackup
 The script is shipped as a template with an empty `rsync_dailybackup_jobs`
 array. Edit the array to match your hosts and paths before using it in
 production.
+
+The script runs under `set -euo pipefail`. `zfsdailybackup` runs without
+strict mode and switches strict mode off again after sourcing this template
+and once more before its prune leg, so the template's strictness does not
+carry into the rest of the orchestrator. Those two lines also switch off a
+`set -euo pipefail` line added to `zfsdailybackup` itself: the orchestrator
+stays non-strict from its first sourced helper onward.
 
 ---
 
@@ -477,6 +484,8 @@ source_helper iscsi-lib.sh
 | `iscsi_unplug_export(<target>, <lun>, <backstore>, [<dataset>])` | Remove one LUN mapping + backstore + its manifest/encrypted-conf entries (shared by `iscsi_teardown_zvol` and the busy resolver); records `iscsi_teardown` only when a dataset rides it |
 | `vm_config_remove_disk_key(<vmid>, <key>)` | Remove one disk key from a VM's config on the compute host (`qm set --delete`) |
 | `vm_shutdown_wait(<vmid>, [<timeout>])` | Clean-shutdown a VM over ssh and poll until stopped; never force-stops |
+| `state_dataset_mountpoint(<pool>)` | Echo the mountpoint of `<pool>/zfsutilities`, creating the dataset on first use; prints nothing and returns 1 when it cannot be created or has no usable mountpoint (shared by `export-iscsi-state` and `backup-settings`) |
+| `newest_iscsi_state_map()` | Locate the newest pool-resident state map across the online pools |
 
 **Called modules:**
 

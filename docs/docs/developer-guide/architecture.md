@@ -347,8 +347,10 @@ A cron line that redirects its output straight into the cron log is treated
 as a cron launch and fenced the same way. The drop-ins are persisted `/etc`
 state: `cron_manager.converge_scheduler_files()` re-derives their content at
 GUI startup and at the start of every run, rewriting each only when it
-differs. Missing drop-ins are created only when active profiles exist, so a
-host with no schedules gains none.
+differs. The logrotate drop-in is created only when active profiles exist.
+The cron drop-in is created then as well, and also when the nightly
+settings backup is on (the default) — that line rides the same file — so a
+host with no schedules still gains the cron drop-in for that one line.
 
 #### Progress parsing
 

@@ -35,10 +35,14 @@ if [[ ! -r "$NODE_CONF" ]]; then
 fi
 source "$NODE_CONF"
 node_mode="${NODE_MODE:-two-node}"
-if [[ "$node_mode" == "single-node" ]]; then
-    storage_host="${THIS_HOST:-$(hostname -s)}"
-    compute_host="$storage_host"
-fi
+# Lowercase host pair for BOTH modes (two-node confs carry the
+# uppercase STORAGE_HOST/COMPUTE_HOST names — the previous copy defined
+# the pair only in single-node mode; found live by the j22
+# full-function leg, run-20261124-004523).  The soft missing-conf skip
+# above stays: this helper degrades, it does not FATAL.
+this_host=$(hostname -s)
+storage_host="${STORAGE_HOST:-$this_host}"
+compute_host="${COMPUTE_HOST:-$storage_host}"
 
 # ---------------------------------------------------------------------------
 # Site-specific rsync jobs.
