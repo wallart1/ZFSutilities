@@ -530,9 +530,18 @@ class TestActionHandlers(unittest.TestCase):
         with patch.object(cap, "log_msg") as mock_log:
             cap.on_checkagainst_get_entries(app)
 
-        self.assertEqual(len(app._ca_backup_store), 2)
+        self.assertEqual(len(app._ca_backup_store), 3)
         self.assertEqual(app._ca_backup_store[0], ["dailybackup", "poolA/a", "poolB/poolA/a", ""])
         self.assertEqual(app._ca_backup_store[1], ["dailybackup", "poolB/poolA/a", "poolA/a", ""])
+        self.assertEqual(
+            app._ca_backup_store[2],
+            [
+                "dailybackup",
+                "poolB/poolA/zfsutilities-manifests",
+                "poolA/zfsutilities-manifests",
+                "",
+            ],
+        )
         self.assertEqual(len(app._ca_offsite_store), 0)
         mock_log.assert_called_once()
 
@@ -1365,9 +1374,18 @@ class TestAutoDerivedLoad(unittest.TestCase):
 
         cap._load_fss_into_store(app)
 
-        self.assertEqual(len(app._ca_backup_store), 2)
+        self.assertEqual(len(app._ca_backup_store), 3)
         self.assertEqual(app._ca_backup_store[0], ["dailybackup", "poolA/a", "poolB/poolA/a", ""])
         self.assertEqual(app._ca_backup_store[1], ["dailybackup", "poolB/poolA/a", "poolA/a", ""])
+        self.assertEqual(
+            app._ca_backup_store[2],
+            [
+                "dailybackup",
+                "poolB/poolA/zfsutilities-manifests",
+                "poolA/zfsutilities-manifests",
+                "",
+            ],
+        )
         self.assertEqual(len(app._ca_offsite_store), 2)
         self.assertEqual(
             app._ca_offsite_store[0],
@@ -1441,7 +1459,7 @@ class TestDerivedStaleness(unittest.TestCase):
         )
         cap.refresh_checkagainst_derived(app)
 
-        self.assertEqual(len(app._ca_backup_store), 2)
+        self.assertEqual(len(app._ca_backup_store), 3)
         self.assertFalse(cap._is_derived_stale(app))
         app._ca_get_entries_button.get_child.assert_not_called()
 

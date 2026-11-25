@@ -466,6 +466,23 @@ class TestTextViewSearch(unittest.TestCase):
         self.assertEqual(search.matches, [])
         view.scroll_to_mark.assert_not_called()
 
+    def test_refresh_reports_zero_matches_when_text_was_replaced(self):
+        """Re-rendered viewers rely on refresh as a full resync.
+
+        When the hosting buffer is rebuilt (short-prefix toggle, level
+        filter) the old matches may be gone entirely: the counter must
+        say so and no stale current match may survive.
+        """
+        search, buffer, view = self._make_search()
+        search.search()
+        view.scroll_to_mark.reset_mock()
+        buffer.text = "no matches remain here"
+        search.refresh()
+        self.assertEqual(search.matches, [])
+        self.assertEqual(search.current, -1)
+        search.counter.set_text.assert_called_with("0 matches")
+        view.scroll_to_mark.assert_not_called()
+
     def test_search_without_matches_reports_zero(self):
         search, _buffer, _view = self._make_search()
         search.entry.get_text.return_value = "zzz"

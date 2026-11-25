@@ -67,6 +67,24 @@ class TestLoadConfig(unittest.TestCase):
             cfg = config_core.load_config()
             self.assertIn("backup", cfg)
 
+    def test_load_config_migrates_config_with_malformed_section(self):
+        """An older config with a hand-damaged section still loads.
+
+        The migration that derives the Check Against rows reads the Backup and
+        Offsite sections; a section of the wrong type must derive no rows
+        rather than raise, or the GUI and every runner would fail to start.
+        """
+        with temp_config_dir():
+            path = config_core.CONFIG_PATH
+            with open(path, "w") as f:
+                json.dump({"backup": None, "offsite": {"steps": None}, "config_version": 32}, f)
+            cfg = config_core.load_config()
+            self.assertEqual(cfg["config_version"], config_core.CONFIG_VERSION)
+            self.assertEqual(cfg["checkagainst"]["backup_derived"], [])
+            self.assertEqual(cfg["checkagainst"]["offsite_derived"], [])
+            with open(path) as f:
+                self.assertEqual(json.load(f)["config_version"], config_core.CONFIG_VERSION)
+
 
 class TestSaveConfig(unittest.TestCase):
     """save_config writes JSON atomically."""

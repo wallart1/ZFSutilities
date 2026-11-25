@@ -1,10 +1,13 @@
 """Tests for checkagainst derivation, merge, and source/dest-root helpers."""
 
+import os
+import subprocess
 import unittest
 
 from feature_config import (
     _compute_destination_root,
     _normalize_checkagainst_row,
+    _propmanifest_store,
     add_checkagainst_entry,
     derive_checkagainst_entries,
     get_checkagainst,
@@ -207,10 +210,17 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
             "offsite": {"steps": []},
         }
         backup_derived, _ = derive_checkagainst_entries(config)
-        self.assertEqual(len(backup_derived), 2)
+        # Three unique rows (forward, reverse, and the manifest store —
+        # poolB/a/poolA/a does not cover poolB/a/poolA/zfsutilities-manifests)
+        # from six raw emissions proves the dedup.
+        self.assertEqual(len(backup_derived), 3)
 
     def test_reverse_row_computes_non_null_counterpart(self):
-        """When dest is just a pool root, reverse row still yields a valid path."""
+        """When dest is just a pool root, reverse row still yields a valid path.
+
+        The step's manifest store is a sibling of the mapped dataset, so it
+        gets its own row naming the never-existing source-side counterpart.
+        """
         config = {
             "backup": {
                 "variables": {"label": "dailybackup"},
@@ -234,8 +244,149 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
                     "dest_root": "threeamigos/proxmox",
                     "label": "dailybackup",
                 },
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
+                    "label": "dailybackup",
+                },
             ],
         )
+
+    def test_manifest_store_row_for_sub_pool_steps(self):
+        """Sub-pool steps emit a store row; pool-level steps need none.
+
+        Production shape: the reverse row of a pool-level step (NVME1)
+        already covers its store, while leaf-mapped steps leave the store
+        (a sibling of the mapped datasets) uncovered without its own row.
+        """
+        config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
+                    {"active": True, "source": "threeamigos/zfsutilities", "dest": "fivebays"},
+                    {"active": True, "source": "NVME1", "dest": "fivebays"},
+                ],
+            },
+            "offsite": {"steps": []},
+        }
+        backup_derived, _ = derive_checkagainst_entries(config)
+        store_rows = [
+            row for row in backup_derived if row["source_root"].endswith("/zfsutilities-manifests")
+        ]
+        self.assertEqual(
+            store_rows,
+            [
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
+                    "label": "dailybackup",
+                },
+            ],
+        )
+
+    def test_store_under_dest_root_needs_no_row(self):
+        """A store already covered by the reverse row's source root is skipped."""
+        config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "NVME1", "dest": "fivebays"},
+                ],
+            },
+            "offsite": {"steps": []},
+        }
+        backup_derived, _ = derive_checkagainst_entries(config)
+        self.assertEqual(
+            backup_derived,
+            [
+                {
+                    "source_root": "NVME1",
+                    "dest_root": "fivebays/NVME1",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/NVME1",
+                    "dest_root": "NVME1",
+                    "label": "dailybackup",
+                },
+            ],
+        )
+
+    def test_section_of_wrong_type_reads_as_no_steps(self):
+        """A malformed section derives nothing, for that section only.
+
+        Config migrations run this function at load time, ahead of any GUI
+        validation, so a hand-edited config must not be able to abort a load.
+        The other section still derives its rows.
+        """
+        for section in ("backup", "offsite"):
+            for bad in (None, [], "steps", 7):
+                with self.subTest(section=section, value=bad):
+                    config = {
+                        "backup": {
+                            "variables": {"label": "dailybackup"},
+                            "send_receive_steps": [
+                                {"active": True, "source": "poolA/a", "dest": "poolB"}
+                            ],
+                        },
+                        "offsite": {
+                            "steps": [{"active": True, "source": "poolA/a", "dest": "<offsite>"}]
+                        },
+                    }
+                    config[section] = bad
+                    backup_derived, offsite_derived = derive_checkagainst_entries(config)
+                    # Forward, reverse, and manifest-store rows.
+                    self.assertEqual(len(backup_derived), 0 if section == "backup" else 3)
+                    self.assertEqual(len(offsite_derived), 0 if section == "offsite" else 2)
+
+    def test_step_list_of_wrong_type_reads_as_no_steps(self):
+        for bad in (None, {}, "poolA/a"):
+            with self.subTest(value=bad):
+                config = {
+                    "backup": {"variables": {}, "send_receive_steps": bad},
+                    "offsite": {"steps": bad},
+                }
+                self.assertEqual(derive_checkagainst_entries(config), ([], []))
+
+    def test_malformed_step_costs_only_that_step(self):
+        """A bad row in the list is skipped; its valid neighbors still derive."""
+        config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    "poolA/a",
+                    None,
+                    {"active": True, "source": None, "dest": "poolB"},
+                    {"active": True, "source": "poolA/ok", "dest": 5},
+                    {"active": True, "source": " poolA/a ", "dest": "poolB"},
+                ],
+            },
+            "offsite": {
+                "steps": ["bad", {"active": True, "source": "poolA/a", "dest": "<offsite>"}]
+            },
+        }
+        backup_derived, offsite_derived = derive_checkagainst_entries(config)
+        self.assertEqual(
+            [row["source_root"] for row in backup_derived],
+            ["poolA/a", "poolB/poolA/a", "poolB/poolA/zfsutilities-manifests"],
+        )
+        self.assertEqual(
+            [row["source_root"] for row in offsite_derived], ["poolA/a", "<offsite>/poolA/a"]
+        )
+
+    def test_label_defaults_when_variables_are_malformed(self):
+        for bad in (None, [], "label"):
+            with self.subTest(variables=bad):
+                config = {
+                    "backup": {
+                        "variables": bad,
+                        "send_receive_steps": [{"active": True, "source": "poolA/a", "dest": "y"}],
+                    },
+                    "offsite": {"steps": []},
+                }
+                backup_derived, _ = derive_checkagainst_entries(config)
+                self.assertEqual({row["label"] for row in backup_derived}, {"dailybackup"})
 
     def test_offsite_pool_root_step_appends_source(self):
         """Offsite step to bare <offsite> must produce <offsite>/source paths."""
@@ -263,6 +414,48 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
                 },
             ],
         )
+
+
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
+
+
+class TestManifestStoreMatchesBash(unittest.TestCase):
+    """The derived store row must name the dataset the backup really writes.
+
+    ``feature_config._propmanifest_store`` mirrors ``propmanifest_dataset``
+    (lib/property-manifest-lib.sh), the function the backup's capture uses to
+    place the store. They are two implementations of one formula, so they are
+    pinned against each other; a divergence would point the row at a dataset
+    that does not exist and leave the real store uncovered.
+    """
+
+    CASES = (
+        ("fivebays", "threeamigos/proxmox"),
+        ("fivebays", "threeamigos/zfsutilities"),
+        ("fivebays", "NVME1"),
+        ("backup", "tank/src/data"),
+        ("offsite", "fivebays/vms/disk1"),
+        ("tank/backup", "tank/a/b"),
+        # A trailing slash is left alone by both; parity includes the quirk.
+        ("fivebays/", "threeamigos/proxmox"),
+    )
+
+    def test_store_matches_propmanifest_dataset(self):
+        # The library sources bashinit only when log_msg is undefined.
+        script = (
+            "log_msg() { :; }\n"
+            f'source "{REPO_ROOT}/lib/property-manifest-lib.sh"\n'
+            'propmanifest_dataset "$1" "$2"\n'
+        )
+        for dest, source in self.CASES:
+            with self.subTest(dest=dest, source=source):
+                result = subprocess.run(
+                    ["bash", "-c", script, "propmanifest_dataset", dest, source],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual(_propmanifest_store(dest, source), result.stdout.strip())
 
 
 class TestRefreshCheckagainstDerived(unittest.TestCase):
@@ -299,6 +492,11 @@ class TestRefreshCheckagainstDerived(unittest.TestCase):
                 {
                     "source_root": "fivebays/threeamigos/proxmox",
                     "dest_root": "threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/threeamigos/zfsutilities-manifests",
+                    "dest_root": "threeamigos/zfsutilities-manifests",
                     "label": "dailybackup",
                 },
             ],

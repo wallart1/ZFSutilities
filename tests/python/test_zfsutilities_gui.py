@@ -217,6 +217,32 @@ class TestLogMessageDisplayFilter(unittest.TestCase):
         self.assertEqual(buf.set_text.call_count, 1)
         self.assertEqual(buf.insert.call_count, 2)
 
+    def test_render_info_panel_reruns_active_search(self):
+        """The re-render replaces every line, so the search must resync.
+
+        Without the refresh, highlights die with the deleted text while
+        the counter and stored offsets keep describing the old layout:
+        the counter claims matches that are no longer marked, and the
+        next Previous/Next paints the current-match highlight at offsets
+        belonging to the previous prefix mode.
+        """
+        window, _buf = self._make_window()
+        window.log_message(self._prefix("INFO: one"))
+        window.info_search = MagicMock()
+        window.info_search.entry.get_text.return_value = "one"
+        with patch("zfsutilities_gui.GLib.idle_add"):
+            window._render_info_panel()
+        window.info_search.refresh.assert_called_once_with()
+
+    def test_render_info_panel_leaves_empty_search_alone(self):
+        window, _buf = self._make_window()
+        window.log_message(self._prefix("INFO: one"))
+        window.info_search = MagicMock()
+        window.info_search.entry.get_text.return_value = ""
+        with patch("zfsutilities_gui.GLib.idle_add"):
+            window._render_info_panel()
+        window.info_search.refresh.assert_not_called()
+
     def test_default_short_prefix_strips_file_line(self):
         window, buf = self._make_window()
         window.log_message(self._prefix("INFO: one"))

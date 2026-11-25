@@ -798,16 +798,19 @@ def _do_sync_log_list(app):
     return False
 
 
-def _refresh_log_search(app, new_text):
+def _refresh_log_search(app, new_text, force=False):
     """Fold newly appended log text into the viewer search, if one is active.
 
     Matches are stored as character offsets, which appends do not disturb,
     but occurrences of the query in the new text are only highlighted and
-    counted when the refresh is run.
+    counted when the refresh is run.  *force* resynchronizes even when the
+    new text lacks the query: the buffer-trim in _tail_log_file deletes
+    leading text, which shifts every stored offset and would otherwise
+    leave highlights and the counter pointing at the wrong places.
     """
     search = app.logs_search
     query = search.entry.get_text()
-    if query and query.lower() in new_text.lower():
+    if query and (force or query.lower() in new_text.lower()):
         search.refresh()
 
 
@@ -869,10 +872,12 @@ def _tail_log_file(app):
                 # Prevent the live tail buffer from growing without bound.
                 current_chars = buf.get_char_count()
                 new_chars = len(filtered)
+                truncated = False
                 if current_chars + new_chars > MAX_VIEWER_BUFFER_CHARS:
                     drop_target = (current_chars + new_chars) // 2
                     drop_end = buf.get_iter_at_offset(drop_target)
                     buf.delete(buf.get_start_iter(), drop_end)
+                    truncated = True
                     log_msg("WARN: Log viewer buffer truncated to prevent excessive memory use")
 
                 # Only auto-scroll if the user is already near the bottom
@@ -887,7 +892,7 @@ def _tail_log_file(app):
                     app.logs_text.scroll_to_mark(scroll_mark, 0.0, False, 0.0, 0.0)
                     buf.delete_mark(scroll_mark)
 
-                _refresh_log_search(app, filtered)
+                _refresh_log_search(app, filtered, truncated)
 
             _update_logs_status_label(app, _last_pv_line(text))
 

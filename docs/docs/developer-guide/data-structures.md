@@ -116,6 +116,14 @@ Derived rows are also refreshed automatically when the Backup or Offsite
 configuration is saved, so they stay in sync with the current send/receive
 steps.
 
+A Backup send/receive step derives a third row, beyond the forward and
+reverse rows, when its destination root does not cover the step's
+property-manifest store — typically when the destination names a pool. The
+store row lets a scheduled or GUI prune delete the store's snapshots instead
+of stopping for a confirmation.
+[Deriving entries from Backup/Offsite steps](../commands-and-modules/modules.md#deriving-entries-from-backupoffsite-steps)
+describes the rows. Offsite steps derive only the forward and reverse rows.
+
 !!! note "Destination root with `<offsite>`"
     A destination of just `<offsite>` is treated as an offsite pool root.
     The source path is appended to it (e.g. `source=fivebays`,
@@ -514,7 +522,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 32
+CONFIG_VERSION = 33
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -548,6 +556,7 @@ MIGRATIONS = [
     _migrate_29_to_30,
     _migrate_30_to_31,
     _migrate_31_to_32,
+    _migrate_32_to_33,
 ]
 ```
 
@@ -566,7 +575,7 @@ def _migrate_14_to_15(config):
 
 1. `load_config()` reads the file
 2. If `config_version` is missing, backfill to current `CONFIG_VERSION`
-3. If `config_version < CONFIG_VERSION`, run `_run_migrations(config)` —
+3. If `config_version < CONFIG_VERSION`, run `run_migrations(config, save_config)` —
    each function in `MIGRATIONS` is called in turn, saving after every step
 4. If `config_version > CONFIG_VERSION`, a warning is printed (config is
    newer than the software) but execution continues
@@ -576,6 +585,14 @@ Adding a new migration:
 1. Write the migration function
 2. Append it to `MIGRATIONS`
 3. Bump `CONFIG_VERSION`
+4. Test the function against a malformed config
+
+!!! note "A migration must never raise"
+    `load_config()` calls `run_migrations()` with no exception handling. The
+    GUI, the profile runner, and logging all load the config through it, so a
+    migration that raises keeps every one of them from starting. Treat a
+    section of the wrong type as empty: a `null` where a list belongs, or a
+    row that is not an object.
 
 ## Python command and I/O structures
 

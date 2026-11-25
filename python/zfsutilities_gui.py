@@ -600,6 +600,16 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             if viewer_should_show(level, self._info_panel_level):
                 self._insert_info_line(timestamp, level, message)
 
+        # The re-render replaced every line, so any active search's
+        # highlights died with the old text and its stored offsets now
+        # belong to the previous prefix/filter layout.  Re-run the query
+        # against the new text so highlights, offsets, and the counter
+        # stay truthful (refresh keeps the current match and does not
+        # scroll, which matters in this live tail).
+        search = getattr(self, "info_search", None)
+        if search is not None and search.entry.get_text():
+            search.refresh()
+
         # Preserve scroll position relative to the new content.
         def _restore_scroll():
             new_upper = vadj.get_upper()

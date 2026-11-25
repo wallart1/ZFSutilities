@@ -90,11 +90,13 @@ function retain {
     # Not modeled here: lock contention at deletion time, destroy failures,
     # and the interactive confirm for snapshots with no checkagainst
     # entries. checkagainst's print-once markers (rc-5 table dump,
-    # absent-counterpart list) are cleaned up at exit, like zfsdelsnap's
-    # own trap.
+    # no-entry, absent-counterpart, and all-counterparts-absent lists) are
+    # cleaned up at exit, like zfsdelsnap's own trap.
     if [[ $dryrun != "N" ]]; then
-        log_msg "INFO: Dry run: shows what a real run would delete."
-        append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$" "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"'
+        append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
+        append_exit_trap 'rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"'
+        append_exit_trap 'rm -f "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$"'
+        append_exit_trap 'rm -f "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"'
     fi
 
     local set_save=$-

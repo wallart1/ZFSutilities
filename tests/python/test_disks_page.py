@@ -339,6 +339,12 @@ class TestCreateDisksPage(unittest.TestCase):
         self.assertEqual(
             [title for title, _tip in recorded],
             [
+                # Enclosures (5) — the first section of the page
+                "Name",
+                "Kind/Location",
+                "Disks",
+                "Pools",
+                "Max I/O Rate",
                 # Disk inventory (13)
                 "Name",
                 "by-id",
@@ -353,12 +359,6 @@ class TestCreateDisksPage(unittest.TestCase):
                 "Pools",
                 "SMART",
                 "Wear/Test",
-                # Enclosures (5)
-                "Name",
-                "Kind/Location",
-                "Disks",
-                "Pools",
-                "Max I/O Rate",
                 # Pool topology (7)
                 "Name",
                 "Type",
@@ -377,8 +377,9 @@ class TestCreateDisksPage(unittest.TestCase):
 
         The shared handler behind ``attach_cell_tooltips`` is unit-tested in
         test_gui_helpers; here the recorder pins that all three panes wire
-        it, with the Enclosures pane passing offset 1 (its unrendered id
-        column precedes the visible ones) and the other panes no offset.
+        it, in page order: the Enclosures pane first, passing offset 1 (its
+        unrendered id column precedes the visible ones), then the Disk
+        Inventory and Pool Topology panes with no offset.
         """
         dp = _import_disks_page()
         app = MagicMock()
@@ -394,16 +395,16 @@ class TestCreateDisksPage(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(
             [c.args[2] if len(c.args) > 2 else c.kwargs.get("offset", 0) for c in calls],
-            [0, 1, 0],
+            [1, 0, 0],
         )
         views = [c.args[0] for c in calls]
         self.assertEqual(
             views,
-            [app.disks_view, app.enclosures_view, app.disks_topology_view],
+            [app.enclosures_view, app.disks_view, app.disks_topology_view],
         )
         self.assertEqual(
             [c.args[1] for c in calls],
-            [app.disks_store, app.enclosures_store, app.disks_topology_store],
+            [app.enclosures_store, app.disks_store, app.disks_topology_store],
         )
 
         # Every pane renderer is an END-ellipsizing CellRendererText: under
@@ -530,6 +531,82 @@ class TestCreateDisksPage(unittest.TestCase):
         labels = [c.kwargs.get("label") for c in dp.Gtk.Label.call_args_list]
         self.assertIn("Selected pool — pool actions and disk highlights follow it", labels)
         self.assertNotIn("Select a pool for its vdev topology", labels)
+
+    def test_enclosures_section_is_packed_first(self):
+        """The Enclosures section is the first section of the page.
+
+        The page reads top to bottom: Enclosures, Disk Inventory, Pool
+        Topology. A GtkBox places its children in pack order, so the page
+        content box packs the Enclosures box before the Disk Inventory
+        title, and that title before the Pool Topology title.
+        """
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        boxes = []
+        titles = {}
+        scrollers = {}
+
+        def _distinct_box(*_args, **_kwargs):
+            box = MagicMock()
+            boxes.append(box)
+            return box
+
+        def _distinct_title(text):
+            title = MagicMock()
+            titles[title] = text
+            return title
+
+        def _distinct_scroll(view, *_args, **_kwargs):
+            scroll = MagicMock()
+            scrollers[scroll] = view
+            return scroll
+
+        # Distinct TreeViews too: the mock hands out one shared instance per
+        # class, which would make the per-section table checks below
+        # meaningless (every pane would be the same object).
+        with (
+            patch.object(dp.Gtk, "Box", side_effect=_distinct_box),
+            patch.object(dp.Gtk, "TreeView", side_effect=lambda *_a, **_k: MagicMock()),
+            patch.object(dp, "bold_label", side_effect=_distinct_title),
+            patch.object(dp, "capped_treeview_scroll", side_effect=_distinct_scroll),
+            patch.object(dp, "refresh_disks_page"),
+        ):
+            dp.create_disks_page(app)
+
+        def _packs(box, widget):
+            """Return True when *box* packs *widget* with pack_start."""
+            return any(
+                call.args and call.args[0] is widget for call in box.pack_start.call_args_list
+            )
+
+        title_of = {text: title for title, text in titles.items()}
+        enclosures_box = next(box for box in boxes if _packs(box, title_of["Enclosures"]))
+        content_box = next(box for box in boxes if _packs(box, enclosures_box))
+
+        # The Disk Inventory and Pool Topology titles sit directly in the
+        # content box; the Enclosures section is one box of its own.
+        self.assertTrue(_packs(content_box, title_of["Disk Inventory"]))
+        self.assertTrue(_packs(content_box, title_of["Pool Topology"]))
+
+        packed = [call.args[0] for call in content_box.pack_start.call_args_list]
+        self.assertIs(packed[0], enclosures_box)
+        self.assertLess(
+            packed.index(title_of["Disk Inventory"]), packed.index(title_of["Pool Topology"])
+        )
+
+        # Each table's scrolled window lives in its own section: the
+        # Enclosures table inside the Enclosures box, the Disk Inventory
+        # table in the content box below it.
+        def _scroll_wrapping(view):
+            return next(scroll for scroll, wrapped in scrollers.items() if wrapped is view)
+
+        self.assertTrue(_packs(enclosures_box, _scroll_wrapping(app.enclosures_view)))
+        self.assertFalse(_packs(enclosures_box, _scroll_wrapping(app.disks_view)))
+        self.assertTrue(_packs(content_box, _scroll_wrapping(app.disks_view)))
 
 
 class TestDiskInventoryCache(unittest.TestCase):
@@ -1308,7 +1385,7 @@ class TestTopologySelectionHighlight(unittest.TestCase):
         self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
 
-    def test_partition_leaf_highlights_whole_disk_row_only(self):
+    def test_partition_leaf_highlights_partition_row_only(self):
         dp = _import_disks_page()
         disks = [
             _disk(path="/dev/sda", pools=[]),
@@ -1321,14 +1398,33 @@ class TestTopologySelectionHighlight(unittest.TestCase):
         )
         app._disks_pool_selector.get_active_text.return_value = "pool1"
         rows = self._select(dp, app, (0, 0, 0))
-        # The partition member tints its backing whole-disk row, not itself.
+        # Kind for kind: the partition member tints its own row, not the disk.
+        self.assertFalse(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
+
+    def test_whole_disk_leaf_highlights_disk_row_only(self):
+        dp = _import_disks_page()
+        disks = [
+            _disk(path="/dev/sda", pools=["pool1"]),
+            _disk(path="/dev/sda1", parent_path="/dev/sda", pools=[]),
+            _disk(path="/dev/sdb", pools=[]),
+        ]
+        app = _make_app(disks=disks, topologies={"pool1": _mirror_topology(("/dev/sda",))})
+        app.disks_store = FakeListStore(
+            [_disk_row("/dev/sda", "pool1"), _disk_row("/dev/sda1"), _disk_row("/dev/sdb")]
+        )
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        rows = self._select(dp, app, (0, 0, 0))
+        # Kind for kind: the whole-disk member tints its own row, and a
+        # partition row on it stays untinted.
         self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
 
 
-class TestTopologySelectionHighlightsBackingDisk(unittest.TestCase):
-    """A topology member tints the physical disk backing it, never a partition."""
+class TestTopologySelectionHighlightsMemberRow(unittest.TestCase):
+    """A topology member tints the row that is the member, kind for kind."""
 
     def _select(self, dp, app, path):
         dp._repopulate_topology(app)
@@ -1371,56 +1467,56 @@ class TestTopologySelectionHighlightsBackingDisk(unittest.TestCase):
         app._disks_pool_selector.get_active_text.return_value = "pool1"
         return app
 
-    def test_by_id_partition_member_tints_disk_not_partition(self):
+    def test_by_id_partition_member_tints_partition_row(self):
         dp = _import_disks_page()
         app = self._app_with_partition_members(("/dev/disk/by-id/ata-SSD-1234-part2",))
         rows = self._select(dp, app, (0, 0, 0))
-        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
-        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[4][dp.COL_D_HIGHLIGHT])
 
-    def test_vdev_node_tints_backing_disks_of_all_members(self):
+    def test_vdev_node_tints_all_member_rows(self):
         dp = _import_disks_page()
         app = self._app_with_partition_members(
             ("/dev/disk/by-id/ata-SSD-1234-part2", "/dev/disk/by-id/ata-HDD-5678-part1")
         )
         rows = self._select(dp, app, (0, 0))
-        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
-        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
-        self.assertTrue(rows[2][dp.COL_D_HIGHLIGHT])
-        self.assertFalse(rows[3][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[3][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[4][dp.COL_D_HIGHLIGHT])
 
-    def test_kernel_path_partition_member_tints_disk_not_partition(self):
+    def test_kernel_path_partition_member_tints_partition_row(self):
         dp = _import_disks_page()
         app = self._app_with_partition_members(("/dev/sda2",))
         rows = self._select(dp, app, (0, 0, 0))
-        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
-        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
 
-    def test_member_missing_from_inventory_falls_back_to_own_path(self):
+    def test_unknown_partition_leaf_tints_nothing(self):
         dp = _import_disks_page()
-        # /dev/sdz9 is unknown to the inventory: the fail-open fallback keeps
-        # the raw path, so the whole-disk prefix rule still tints /dev/sdz.
+        # /dev/sdz9 is unknown to the inventory: kind for kind, its partition
+        # row does not exist, so no row is tinted — not even the parent disk.
         disks = [_disk(path="/dev/sdz", pools=["pool1"])]
         app = _make_app(disks=disks, topologies={"pool1": _mirror_topology(("/dev/sdz9",))})
         app.disks_store = FakeListStore([_disk_row("/dev/sdz", "pool1")])
         app._disks_pool_selector.get_active_text.return_value = "pool1"
         rows = self._select(dp, app, (0, 0, 0))
-        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[0][dp.COL_D_HIGHLIGHT])
 
-    def test_pool_wide_tint_lands_on_parent_disk_of_partition_member(self):
+    def test_pool_wide_tint_lands_on_member_partition_rows(self):
         dp = _import_disks_page()
         app = self._app_with_partition_members(
             ("/dev/disk/by-id/ata-SSD-1234-part2", "/dev/disk/by-id/ata-HDD-5678-part1")
         )
         dp._highlight_pool_disks(app, "pool1")
         rows = app.disks_store.rows
-        self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
-        self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
-        self.assertTrue(rows[2][dp.COL_D_HIGHLIGHT])
-        self.assertFalse(rows[3][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(rows[3][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[4][dp.COL_D_HIGHLIGHT])
 
 
@@ -1772,13 +1868,19 @@ class TestPathMatchesAnyDevice(unittest.TestCase):
         dp = _import_disks_page()
         self.assertTrue(dp._path_matches_any_device("/dev/sda", {"/other/dir/sda"}))
 
-    def test_whole_disk_matches_partition_leaf(self):
+    def test_whole_disk_does_not_match_partition_leaf(self):
         dp = _import_disks_page()
-        self.assertTrue(dp._path_matches_any_device("/dev/sda", {"/dev/sda1"}))
+        # Kind for kind: a disk row never matches a partition device.
+        self.assertFalse(dp._path_matches_any_device("/dev/sda", {"/dev/sda1"}))
 
-    def test_whole_disk_matches_nvme_partition_leaf(self):
+    def test_nvme_whole_disk_does_not_match_partition_leaf(self):
         dp = _import_disks_page()
-        self.assertTrue(dp._path_matches_any_device("/dev/nvme0n1", {"/dev/nvme0n1p1"}))
+        self.assertFalse(dp._path_matches_any_device("/dev/nvme0n1", {"/dev/nvme0n1p1"}))
+
+    def test_partition_row_does_not_match_whole_disk_device(self):
+        dp = _import_disks_page()
+        # Kind for kind, in the other direction too.
+        self.assertFalse(dp._path_matches_any_device("/dev/sda1", {"/dev/sda"}))
 
     def test_unrelated_disk_does_not_match(self):
         dp = _import_disks_page()

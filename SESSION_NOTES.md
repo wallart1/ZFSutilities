@@ -542,3 +542,1256 @@ constructor load, the mint initrd/provision-boot laws).)
   op relaunched). The tracked survey-archive.json now carries the
   busy draw (the fresh gate overwrote it — standing newest-green
   reference practice).
+
+(pub2 lane history block, unioned at the 0.144.0 pub2-lane merge —
+pruned at the next release prune. PREEXISTING retirements at this
+merge, each verified in the merged tree first: Pools-page Export
+bare-first (pub's b01909d export preparation gate,
+_prepare_pools_page_export in pool_actions.py), zlm pool-root
+load flake (_wait_holder_execed fence in test_zfs_lock_manager.py),
+migrate-holds mkstemp redirect (_isolated_mkstemp scoped to the
+migrate-holds- prefix in test_pool_migrate_dialogs.py), and
+test-logging ~/bashinit (the suite now sources the repo's own
+bin/bashinit).)
+
+- **J22 world enrichment, Phase 2 (lived-in, part 1) — COMPLETE
+  (2026-11-18).** Guest time control (`itf_guest_time_freeze/set/restore`
+  in guest-lib.sh; stateful forward-only fence after one deliberate
+  rewind; restore from the dev host epoch; fence-timer masking on
+  timer-bearing guests) + the deterministic ladder planner
+  (`tests/integrated/survey/world.py`: rid-relative names, day-offsets
+  pinned to the archive's staging ANCHOR — buckets follow the calendar,
+  so the anchor is part of the plan identity and lives in the archive
+  world object; digest = sha256 over {seed, variant, anchor-date, plan},
+  thin's document unchanged from Phase 1) + `world-stage.sh` (guest-side
+  plan interpreter; product-sourced zfssnapbuild naming with per-row
+  name assertion; clone via snapname_timestamp; two real zfsdailybackup
+  runs through the product's overrides mechanism redirecting
+  send-receive at survey scratch) + survey-lib select/stage/teardown
+  (world-seed/anchor parse, fence relax to thin|lived-in, digest guard
+  at select and stage, walk over the union of ladder + dailybackup
+  moments, post-restore verification against the plan, holds/clone/recv
+  release before the playground destroys). Docs: developer guide world
+  section, journeys README, GLOSSARY (clock walk; world variant
+  rewritten). Live gate GREEN twice: run-20261118-023346 (fresh
+  world via replayed two-node-free archive, single-node lab) and
+  run-20261118-024359 (replay) — identical digest 875689885d1390ec,
+  identical 40-snapshot world rid-normalized (creations within the 5s
+  clock-set slack), ladder=33 holds=4 product_runs=2 recv=4, world
+  staged in ~55-58s, residue clean, GUI probe green.
+  Defects the campaign surfaced and this phase fixed: j22's
+  single-node lab branch never sourced common.sh (dead path until
+  now); world-stage.sh must source the staged tree's zfssnapbuild
+  directly (source_helper resolves to the installed deployment —
+  0.118.0's copy dies under set -u); zfssnapbuild echoes the
+  @-prefixed name; verify needs `zfs list -p` for epoch creations and
+  must count the playground's base snapshot. Two-node j05 wiring
+  flakes (site-keys, P2P first-connect) went to PREEXISTING.md; the
+  systemctl mask refusal (the timer's unit file lives in
+  /etc/systemd/system) became disable --now / enable --now.
+- **J22 world enrichment, Phase 3 (lived-in, part 2) — COMPLETE
+  (2026-11-18).** Config rows + CLI depth upgrades in survey-lib.sh +
+  universe.tsv: pinned config `config_version` read from the enumerated
+  tree via `_survey_config_version` (step-free helper — an itf_step
+  inside `$( )` vanishes with the subshell; callers validate + report;
+  fails closed without select); `itf_survey_stage_config_rows` after the
+  clock walk (retention default+2 pools+`<offsite>`, one active
+  send/receive step, one inactive pull step, offsite step with STRING
+  includes/excludes; four inactive schedule profiles in the exact
+  profile_manager schema; `ZFSUTILITIES_STATE_DIR` pinned to
+  /root/survey-state). Depth: zfscleanup argcheck→deep (overrides
+  dry-run over {POOL} — cleanup's pool loop `zpool list`s $1 and skips
+  datasets); zfsdailybackup deep sends real prey via overrides
+  (sourcefs={DS} destfs={DS2}-recv); bespoke recipes zfsresume
+  (truncated stream + receive -s → token validation) and zfsdelallsnaps
+  (own-label snapshot + offsite hold + clone → releaseholds; rc 1 is the
+  honest clone-skip); five vm-disk rows argcheck→bespoke on VM 101
+  scratch disks with an empty never-started survey VM 9101 where a
+  second VM is needed; wrap gained depth-distribution info,
+  -recv/-res/state-dir teardown, compute-side vm-disk convergence, 9101
+  in the residue pattern. Universe depth shift: argcheck 17→10,
+  bespoke 10→17, deep 33→33. Two defects the gate surfaced, both FIXED
+  with regression tests: (1) world.py's offsite same-month partner was
+  unconstrained — some (seed, anchor) corners landed under the 65d
+  minage and the plan failed only at stage time, after the lab was
+  cloned; the partner pick is now bounded to days ≥66 back, digest-
+  preserving for every previously-valid plan (P2's 875689885d1390ec
+  pinned by test); 120-corner sweep valid. (2) gui_probe's edit-cell op
+  called CellRendererText.get_editable() — no such accessor (no C
+  getter; property is readable) — the seeded Check Against rows turned
+  a long-blocked item into a real edit and exposed it; fixed to
+  get_property("editable"). Two more, both found by the two-node gate
+  runs and FIXED with tests: (3) the bespoke dispatch looked up
+  `survey_recipe_$command` verbatim, so DASH-named commands (clone-vm,
+  new-vm-disk, remove-vm-disk) never dispatched their recipes — their
+  past greens were vacuous (invoke "-" + rcs "-" + assert "-" through
+  the generic path; old runs' `[bespoke/] - —` step text is the
+  telltale); the lookup now maps dashes to underscores and the old
+  remove-vm-disk recipe ran live for the first time in the final gate.
+  (4) seven of my new universe rows carried an extra field (11 vs 10 —
+  bash `read` glues the surplus onto the LAST column, so assert became
+  "-<TAB>-"); raw-line column-count test added (parse_universe_tsv
+  zip-pairs and never saw it). Plus (5): edit-cell/toggle-active used
+  views[0] only — the Check Against page stacks four views and the
+  editable cells live in the USER view; both ops now walk the views
+  (same law as the 2026-11-11 composite fix). Live gate GREEN at last:
+  run-20261123-132017 (two-node, seed p3gate2026, clean hosts after the
+  user-directed red-lab sweep) — every selected item passed; config
+  rows staged (schema v32, 2s), world 62s, ladder verified, GUI probe
+  green incl. the checkagainst edit on a seeded row,
+  vm-disk recipes (rename/attach/resize + the retro-activated
+  remove-vm-disk) all green, depth distribution argcheck=6 bespoke=9
+  deep=17, residue clean, green labs auto-destroyed at verdict.
+  Earlier gate attempts (2026-11-18) were environment-hostile: j05 P2P
+  race ×2 and a guest-agent boot starvation, one even on a clean host;
+  the substance ran single-node meanwhile via the P2-precedent filtered
+  archive (run-20261118-110522). Standing rule from the user
+  2026-11-18: sweep red labs when their post-mortem is done (itf guest
+  sweep --force --age 0 --apply) — accumulation was the aggravator.
+  Plan-file adaptations (verified against code, disclosed in the
+  approved plan): the deep retention row rides cli-zfscleanup
+  (zfsretain is an undocumented sourced module); "past-due cron" doesn't
+  exist in the product (cron_manager is forward-looking — seeded an
+  ordinal weekday 6#1); zfssendoffsite CLI can't take ladder prey (step
+  bodies assign sourcefs/destfs after overrides eval; site-specific by
+  design) — its config prey lands on the GUI Offsite rows. Suites:
+  test_survey_sample, test_survey_world, and test-itf-survey-journey
+  green; full suite green twice (final tree included); shellcheck
+  warning+ clean.
+
+(2026-11-23 cycle wrap-up: the three world-enrichment phases above,
+both PREEXISTING resolutions — bounded SSH-probe retries in
+install-two-node Step 4 and the j05 first-connection step (the
+recorded two-node wiring races), plus the sample.py repo-root default —
+and the campaign's docs/GLOSSARY updates are committed in the 0.143.0
+release commit. The Phase-1..3 entries stay until the publication
+prune. j05's retry and world-stage.sh verify live with the next
+two-node gate run; the installer retry carries its transient-recovery
+regression test in test-installer-flows.)
+
+(pub2 lane history block, unioned at the 0.143.0 pub2-lane merge
+(a0c7d61) — "uncommitted" in these entries means uncommitted in pub2
+at the time of writing. Pruned at the next release prune.)
+
+## 2026-11-16 (pub2) — Disks: pool names live on partition rows, not partitioned-disk rows
+
+- User rule: on a disk with partitions the disk itself is never a pool
+  member (partitions on one disk can belong to different pools), so the
+  disk row must not name a pool; each partition row names the pool it
+  belongs to. Matches the standing rows-carry-only-their-own-data law.
+- Fix: `DiskInventoryCache._credit_backing_disks` deleted (it existed
+  solely to copy partition members' pools onto the whole-disk row).
+  Partition rows already resolved their own pools via `_pools_for_disk`;
+  whole-disk members (a pool whose leaf names the disk itself) keep the
+  name via the direct path match — that case never used the credit and
+  is unchanged.
+- Verified consequences: selected-pool teal tint still lands on
+  whole-disk rows (partition members map to parent_path in
+  `_highlight_pool_disks`); selecting a partitioned disk row now takes
+  the existing no-pool branch (clears tints + pool selector), covered by
+  the nonmember-selection test; wipe fence intact via
+  `wipe_block_reason`'s same-disk sibling scan — refusal now names the
+  partition; enclosure pools and pool-create eligibility compute
+  membership independently.
+- Tests: the two credit tests rewritten (disk-row assertions flipped to
+  []), plus two `_selected_disk_is_wipeable` tests pinning the GUI fence
+  for the blank-disk-row shape. Pools column tooltip reworded;
+  gtk-gui.md Pools row + pane-sync paragraph updated.
+
+## 2026-11-17 (pub2) — Scrub pause judged by pool state, not the zpool client (stewie incident)
+
+- Incident (stewie, 0.141.0, zfs 2.4.4-pve1, 2026-11-16 12:01, profile
+  root-backup-dailybackup2): `zpool scrub -p threeamigos` blocked ~43 s
+  in-kernel (synchronous ioctl; scrub ~48% + backup starting). The 30 s
+  subprocess timeout killed the client (TimeoutExpired surfaced 44 s after
+  issue — the kill itself waited on the D-state ioctl), but the kernel
+  completed the pause anyway ("paused since 12:01:57" vs WARN 12:01:58).
+  pause_scrubs_for_pools trusted the exception: pool left out of the paused
+  list → post-step resume never ran → scrub stranded paused at 47.98% until
+  the user resumed it manually; the persisted queue never recorded the pause
+  either. Session log:
+  /var/log/zfsutilities/sessions/2026-11-16_12-00-01_backup_profile-root-backup-dailybackup2.log
+- Fix: new `_transition_scrub_verified` helper — issue pause/resume with the
+  30 s client bound, then poll zpool status for up to 120 s regardless of how
+  the command returned; state confirms → success (honest VERB when the client
+  timed out/failed); window expires → the one did-not-pause/resume WARN with
+  raw status. All four call sites rewired (pause/resume wrappers used by GUI
+  buttons + queue tick, and both coordinated for_pools paths).
+  `_wait_for_scrub_state` is now attempt-bounded (timeout/interval) instead
+  of wall-clock-bounded, so mocked-sleep tests can't hot-spin.
+  start/stop deliberately unchanged: their outcomes self-heal via tick
+  reconciliation, unlike pause/resume where a false negative strands state.
+- Tests: wrapper success/failure tests reworked for the state poll; new
+  timeout-but-confirmed cases (wrapper + coordinated, pause + resume — the
+  incident, red-proofed), slow-flip case pinning the widened window (40
+  non-matching polls > the old 25-attempt window). Suite green.
+- messages-manual scrub block restructured (started/stopped = command
+  succeeded; paused/resumed = state-confirmed; new timeout-but-confirmed VERB
+  row; coordinated "Failed to pause/resume" rows absorbed into the state
+  WARN). daily-backup.md pause-scrubs section gained the state-judged bullet.
+
+## 2026-11-17 (pub2) — integrated-testing.md writing-rules rewrite + full fact re-verification; ubuntu template joins the guard
+
+- Re-verification method: every claim in the doc checked against the tree —
+  five parallel claim-cluster verifications (upgrade journeys j10/j12/j19/
+  j23/j25; recovery journeys j15–j18 incl. every S/M scenario; lab + two-node
+  machinery; survey/e2e/framework suites; docs cross-links + FINDINGS/
+  REQUIREMENTS/repair-plan ledgers, several via git history since published
+  rows are pruned) plus first-hand reads of the driver, base/runlock/guest/
+  template/report libs, site config, common.sh rerun staging.
+- Fact fixes landing in the rewrite: j15 S1 oracle is PENDING+DRIFT (was
+  "FAILED+DRIFT", pre-repair-027 wording); j12's SIGKILL fires on version-dir
+  appearance, not the transcript marker (deliberate, j12:205-208); j25's
+  printed activation commands are absolute paths (was "login-shell
+  wrapped"); `itf vmimage build` added to the run-lock entry points and the
+  loose `|| rc=$?` set; framework-tests section now lists all nine itf
+  suites (survey-journey + watch were missing) and says all three template
+  profiles; storage base named as home of BOTH Debian and ubuntu templates
+  (intro + role-split bullet); test-pools callers corrected (j01/j05/j21
+  direct; j04/j11/j20/j22 via the single-node lab); manual-steps claim
+  scoped to dev-side setup (base-PVE prep lives in tests/integrated/README
+  + site-config comments, verified by preflight); template freshness is a
+  skip-with---force-pointer, clone reach "a minute or two"; FINDINGS/
+  REQUIREMENTS legends aligned with the actual ledgers + one pruning note;
+  fence-timer restart worded to j16 (asserts) vs j18 (restarts); j05 prereq
+  failure nuance; watch named as tailing steps.tsv too. F-number/plan
+  identifiers kept (verified via git history). Headings byte-identical;
+  docs-integrity suite + clean mkdocs build green.
+- Guard fix (user-approved): `ITF_UBUNTU_TEMPLATE_NAME` added to
+  `_itf_template_names` (base-lib.sh) — the ubuntu probe template is now
+  refusal-protected like storage/compute; test-itf-base-guard gained the
+  ubuntu refusal case (destroy refused + refusal names the template, other
+  two baselines still protected, clone exempt). Suite green.
+- PREEXISTING: 2 entries resolved (stale two-node passage — fixed in the
+  rewrite; ubuntu guard gap — fixed above); 3 filed (stale `sudo
+  switch-version` transcript markers in j10/j12/j19/j23/j25 vs the
+  absolute-path prints since 4b232a4; stale "FAILED+DRIFT" wording in
+  journeys/README.md:187 + j18 header; tests/integrated/README.md profile
+  count + run-lock entry-point staleness). 4 entries remain (incl. the
+  snapshot-dialog tooltip full-run flake, which did NOT fire today).
+- Full suite green at the end (all suites passed; log /tmp/zfs-run.log).
+
+(pub3 lane history block, unioned at the 0.142.0 pub3-lane merge
+(0493671) — "uncommitted" in these entries means uncommitted in pub3
+at the time of writing. Pruned at the next release prune. Also at
+this merge: pub3's PREEXISTING test-unarchive-vm flake entry retired
+— pub's f23cc92 de-forked existence-probe fix verified in-tree
+(archive-engine.sh/archive-vm/unarchive-vm + the coding-policies
+idiom law); both recorded occurrences (pub3 Test 6 on 2026-11-16,
+Test 25 in the with-soak gate) belong to the fixed fork-pair class.)
+
+## 2026-11-16 (pub3) — Disks-page modal tables: natural sizing + scrollable windows
+
+- User request (scope widened mid-turn to ALL Disks-page action buttons):
+  every treeview including the ones in modal windows gets the universal
+  treatment — natural growth up to 20 rows then scroll — and the window
+  becomes scrollable.
+- Both defects probe-verified under private Xvfb with the repo's own
+  helpers (probe scripts deleted after use): (1) the dialog builders
+  packed the capped scrolls expand=True, so a 6-row picker stretched to
+  fill a 646px table window — the "expand stays on" comments
+  overrode the main-page idiom; (2) create_scrolled_dialog left the
+  viewport on the default MINIMUM vscroll policy, so a short dialog
+  crushed content toward the capped windows' 60px floors instead of
+  scrolling (NATURAL policy → vadj upper 484 > page 316, scrolls).
+- Fix (all in-repo idioms, no new mechanisms):
+  - gui_helpers.create_scrolled_dialog sets viewport
+    vscroll_policy=NATURAL behind the dashboard-style hasattr guard —
+    one change covers every scrolled modal incl. Wipe Labels.
+  - Non-expanding packs: _build_disk_picker + _build_target_tree
+    (pool_growth_dialogs), wizard _build_disks_page, the five growth
+    dialogs' page-level packs, five migrate-dialog packs.
+  - Manage Pool Profiles converted create_dialog →
+    create_scrolled_dialog (size (700,500) kept) + non-expanding table;
+    create_dialog import dropped from the module.
+- Tests: NATURAL-policy assertion added to
+  test_create_scrolled_dialog_returns_dialog_and_box;
+  test_pool_profile_dialogs' nine create_dialog patch sites rewritten to
+  the (dialog, MagicMock()) tuple shape (editor precedent); NEW
+  tests/python/disks_dialogs_realized_check.py (child process, private
+  Xvfb, mirrors backup_realized_check.py: 6-row picker hugs rows,
+  30-row picker caps ~20 rows + scrolls inside, dialog window carries
+  overflow, NATURAL policy asserted).
+- REMAINING: none — completed in the follow-up turn: wrapper
+  test_disks_dialogs_realized.py + requirements.manifest `gi` line;
+  gtk-gui.md Disks-Tab intro paragraph (universal table rule + dialog
+  windows scroll); affected suites green; FULL python suite green
+  (skips = root-gated by design); ruff clean; probe scripts removed.
+  Buttons 8/10-14 (Enroll, Wipe, SMART, Surface Test, Rate, Refresh)
+  audited: no treeviews; Wipe benefits via the shared factory fix.
+  Realized-check scratch dirs under /tmp (mkdtemp, no cleanup) follow
+  the backup_realized_check convention.
+
+## Managed-pool scope campaign (2026-11-16, pub3, uncommitted)
+
+Policy: everywhere except the Pools-tab Pool Registry table, the GUI lists
+and acts on managed pools ONLY (registered AND online; "online" = imported,
+any health — DEGRADED counts, IMPORTABLE/OFFLINE do not). Unregistered pools
+appear nowhere else and are never touched. Configs cannot be SAVED naming
+unregistered/offline pools; stored profiles keep them but skip+WARN at run.
+
+- Canonical helpers in feature_config.py: get_managed_pool_names,
+  non_managed_pool_names, pool_name_from_endpoint (placeholder-prefixed
+  endpoints like "<offsite>/dst" return None — the first cut missed that
+  and skipped every offsite step), non_managed_endpoint_pools. Shared
+  interactive gate: gui_helpers.refuse_non_managed_pool_endpoints (WARN per
+  pool + dialog; early-exits before any zpool call when no endpoints).
+- Display surfaces filtered: dashboard (health grid, tasks, scrub rows,
+  identity warnings — unregistered names suppressed to counts, registered
+  keep names), datasets roots, memory L2ARC/SLOG + enclosure Pools column
+  (alignment via alignment_page._restrict_to_managed_pools on the worker
+  thread), disks Pools column/topology/selector/enclosures (inventory cache
+  keeps FULL membership), growth+migrate pickers (managed), create-wizard
+  name collisions now include registry names.
+- WIPE FENCE: unchanged full-membership wipe_block_reason is the fence;
+  _selected_disk_is_wipeable docstring now states the filtered Pools cell
+  must never be the gate (dedicated tests both sides).
+- Scrub: refresh_scrub_table shows managed only (tick still gets FULL
+  states); ScrubQueue(registered_names=callable) gates external adoption;
+  scrub handlers refuse unregistered selections by name.
+- Retention: prune list managed (fallback REMOVED — empty registry lists
+  nothing; zfscleanup CLI keeps its own), live health shown per row,
+  add-policy candidates managed, _on_ret_save save gate, prune runner
+  defense-in-depth skip. _get_online_pool_names deleted (deprecated).
+- Transfer pages: backup/offsite save+run gates (endpoints; <offsite>
+  passes), restore run gate + managed auto-destination, checkagainst
+  user-entry save gate + managed completion. Profile save gated in
+  show_add_profile_dialog (_profile_pool_refs per tab type).
+- profile_runner: _managed_pools (subprocess zpool list; fail-closed) +
+  skip+WARN for backup/offsite steps, restore abort, retention pools,
+  scrub never-queued; backup prune pairs restricted to steps that RAN.
+- Test-side convention added in this campaign: MagicMock app/config
+  fixtures now carry real registry dicts + mocked zfs_repository rows
+  (dashboard tasks, datasets, disks, memory, alignment, retention, scrub,
+  backup, restore, profile_runner MANAGED_FIXTURE_POOLS setUp patcher).
+- Docs: gtk-gui.md (Pool scope section under Tabs + per-page notes),
+  data-structures.md pools-key policy, GLOSSARY (managed pool/online/
+  registered), architecture.md feature_config row, messages manual rows
+  for every new WARN/FATAL. Strict mkdocs build green.
+- All affected suites green; ruff clean; FULL suite green
+  (tests/run-tests --log: 114 suites passed, 0 failed; python skips =
+  root-gated by design). Two extra suites the plan missed were swept in
+  (test_page_runners, test_checkagainst_page, test_profile_integration)
+  plus the parallel-worker __globals__ patch pattern for gate WARN
+  assertions. Awaiting commit cue (coexists with the uncommitted
+  Disks-modal natural-sizing work in this tree).
+
+## 2026-11-16 (pub3) — Disks page: Detach button gated to mirror vdevs
+
+- User request: the Detach button should be disabled for non-mirror vdevs.
+- disks_page._topology_selection_detach_gate (new) reads the topology-pane
+  selection: enabled for a mirror group row, a disk leaf whose parent is a
+  mirror, or no selection (the dialog is the picker); disabled with the
+  tooltip "Only mirror members can be detached" for raidz/stripe members,
+  special/log/cache/spare/replacing devices, non-mirror groups, and the
+  pool row. Compute-host gate unchanged and takes precedence.
+- update_disks_button_sensitivity: _disks_detach_btn left the shared
+  growth_attrs loop for a dedicated block styled after the Proxmox button.
+- assess_detach (pool_growth.py) untouched — the dialog remains the
+  enforcement; the gate is UI feedback only.
+- Tests: TestDetachButtonMirrorGate (9 cases, truth table incl. host-gate
+  precedence + Replace unaffected) with a path-tuple FakeTopologyStore in
+  test_disks_page_growth_buttons; FakeTreeStore in test_disks_page grew
+  iter_parent (product now reads it; paths are tuples).
+- Docs: gtk-gui.md Detach section gained a button-gating paragraph;
+  testing.md growth-buttons row extended.
+
+## 2026-11-17 (pub) — j22 function survey on the mint leg (first 0.142.0 survey run)
+
+First j22 run against the merged 0.142.0 tree, on the user-chosen mint
+baseline (`--template mint`, full universe). Green on run
+run-20261117-162554 after one product fix (F-051, verified by the
+archive replay) and four harness gaps fixed in-cycle:
+
+- **j22 profile support** (new): reads the driver's `--template` knob
+  (storage default | mint); `itf_single_node_lab_main` gained
+  `--template/--bare-baseline`, `j05_two_node_lab_main` gained
+  `--storage-template`, and the j05 P2P stage branches in-guest
+  (ifupdown stanza vs NetworkManager `nmcli` profile; the lease-bounce
+  fallback chain gained `nmcli device reapply`). The bare mint
+  single-node shape installs the product first-time-user from the
+  staged tree (`itf_survey_install_baseline`).
+- **Mint carries the ZFS kernel module but no userland** — the pool
+  recipe now installs `zfsutils-linux` beside `parted` (mint userland
+  2.2.2 vs module 2.4.1 coexist fine; the GUI logs a version WARN).
+- **GUI probe config**: the GUI is a config-reading surface like the
+  CLI recipes — the probe now runs under the pinned survey config via
+  BOTH names (`ZFSUTILITIES_CONFIG_PATH` for config_core,
+  `ZFSCONFIG_PATH` for shell-outs). Without it, 0.142.0's managed-pool
+  scope legitimately empties the datasets/pools pages (installed
+  config registers no pools) — leg-independent, first 0.142.0 survey
+  proof.
+- **GTK_USE_PORTAL=0 in gui_probe**: on a desktop distro GTK routes
+  native file choosers through xdg-desktop-portal, which cannot start
+  headless under Xvfb and stacks D-Bus timeouts past the op watchdog.
+- **Stale catalog entry removed**: `gui-w-pools-cycle-combo` surveyed a
+  Pools-page combobox that no longer exists (scrub controls moved to
+  the Scrub Manager); it could only block.
+- **F-051 (verified)**: Pools → Export froze the window — a zvol held
+  by a live iSCSI LUN session blocks `zpool export` uninterruptibly
+  (D-state, taskq_wait), and the handler ran it unbounded on the UI
+  thread; a subprocess timeout cannot reclaim a D-state child. Fix:
+  `_export_pool_bounded` worker thread + `EXPORT_STALL_WARN_S`
+  (default 120 s, env-overridable) + holder-naming WARN. Live proof:
+  the Export op passed at the 120.98 s bound with the window alive.
+- Remaining survey skips are fixture-by-design (step-table rows empty
+  under the pinned config) or data-accumulation preconditions
+  (alignment samples for the Performance page).
+
+## 2026-11-17 (pub) — cycle wrap-up: PREEXISTING emptied, export-stall recovery, GTK binding fences
+
+Wrap-up run on the uncommitted j22-mint/F-051 tree. Full suite green
+twice over (final: 115 suites, 6711/0; python 4834 + 22 skip).
+
+- **All four PREEXISTING entries resolved, file emptied.** (1) Upgrade
+  journeys' transcript markers updated to the absolute-path
+  switch-version prints (j10/j12/j19/j23/j25; `sw_cmd` local keeps the
+  lines under 100 cols). (2) j18 header, its closing-report line, and
+  the journeys README j18 row now say PENDING+DRIFT (the parser's
+  failed-mode fixture test is by design). (3) The tooltip full-suite
+  flake: ROOT CAUSE reproduced deterministically — a pytest-xdist
+  worker co-hosting a real-GTK suite (test_main/test_datasets_tree
+  import at collection) leaves GUI modules cached REAL-bound, and
+  mock-internals assertions (`Gtk.Entry.return_value`) then die with
+  AttributeError, full runs only. Fence: the file's 12 import helpers
+  use `import_gui_fresh` (the sanctioned tool; wholesale fresh=True
+  re-executes the cyclic pools_page↔pool_actions graph and breaks 10
+  tests — import_gui_fresh's targeted restore does not). Verified
+  poisoned AND standalone: 140/140. Swept the same conversion across
+  ten more suites (121 sites) + extended the gi-guard audit's parser
+  to recognize module-level `x = import_gui_fresh("mod")` as an
+  import. (4) The export-stall WARN-only branch routed through the
+  recovery machinery: `_BoundedExport` (worker + `wait`), shared
+  `_resolve_export_blockers`, new `_recover_stalled_export` (diagnose
+  → approval dialogs → wait for the stalled worker to settle → one
+  fresh retry → honest give-up WARNs; the "Release holders" manual
+  instruction is gone). Five new pool-actions tests; the zero-caller
+  `_export_pool_bounded` wrapper removed.
+- **Sweep regression caught and fixed by the full gate:** module-level
+  `import_gui_fresh("backup_runner")` in test_backup_runner replaced
+  the cache with a mock-bound copy at collection, and
+  test_offsite_e2e/test_runner_factory plain-import it expecting REAL
+  GLib (`GLib.timeout_add` drives the step watcher) — every mechanics
+  step hung to the 60 s watchdog (5 failed, first full run). Fix:
+  module-level sites keep the original STICKY imports (comment
+  explains why), and test_offsite_e2e now SELF-HEALS its binding
+  (evict + re-import under real gi when it finds MagicMock GLib) —
+  order-independent, verified under deliberate poisoning.
+- Docs: messages manual gained the three stall-recovery rows;
+  gtk-gui.md Export row describes the bounded wait + holder dialogs;
+  testing.md's freshness guidance names both fences and the cyclic-
+  graph trap; GLOSSARY +D-state, +sticky binding, +xdg-desktop-portal.
+  Docs integrity 23/23; mkdocs build green.
+
+## 2026-11-17 (pub2) — Disks page: one selection per page + enclosure correlation tint
+
+- User request, two parts: (1) selecting a row in any of the page's three
+  treeviews deselects everything in the other two; (2) selecting an
+  Enclosures row tints the associated rows in the other panes and expands
+  the Pool Topology so all tinted rows are visible.
+- _deselect_other_views (new) unselect_all()s the other two views under the
+  repurposed _disks_syncing_selection guard (was checked but never set in
+  product code); called inside `if pathlist:` in all three changed
+  handlers, so empty transitions (store clears during the 30 s background
+  refresh) never disturb the selection _repopulate_enclosures is about to
+  capture and restore. Invariant: at most one selection on the page.
+- Enclosure tint reuses the teal flag/columns: _highlight_enclosure_disks
+  (new) tints member whole-disk rows (parent_path rule, like
+  _highlight_pool_disks) plus every topology device on them;
+  _highlight_topology_nodes_for_disk renamed …_for_disks(set) with any()
+  matching (empty set clears). Pool selector deliberately untouched by
+  enclosure selection (not a treeview; drives Proxmox enroll etc.);
+  emptied selection restores the pool baseline.
+- Refresh resilience falls out of ordering: enclosure restore runs last in
+  refresh_disks_page and GTK fires "changed" on the restore, re-tinting.
+- Tests: FakeTreeSelection gained unselect_all (clears paths, counts
+  calls); test_topology_selection_is_never_modified_by_disk_selection
+  inverted into the new law; TestEnclosureSelection (8 cases: deselect
+  both panes, tint disks-not-partitions, multi-pool expansion proves ALL
+  holding pools expand, baseline restore, guard no-op, selector untouched,
+  refresh-restore re-tint, empty-set clears).
+- Docs: gtk-gui.md — inventory sync paragraph rewritten around the
+  one-selection law, Enclosures section gained the correlation paragraph,
+  topology section names the pane-clearing + enclosure tint. Strict mkdocs
+  build green.
+
+## 2026-11-17 — Pool Topology Blocksize column: ashift-based pools, per-disk sectors
+
+- User report: pool rows' Blocksize read as sector sizes (on the node every
+  pool's 1<<ashift coincides with its disks' sector size); device rows showed
+  "-". User decisions: pool rows render the derivation ("4096 bytes (ashift
+  12)"), device rows render that disk's physical sector size.
+- disks_page.py: _member_sector_lookup(new) builds a member-path →
+  physical-sector resolver (by_path index + realpath, same normalization as
+  _collect_disk_paths; fail-open "-" — the always-hidden boot disk lands
+  here); _populate_topology_store takes the resolver and renders per row
+  kind (pool = ashift-based + derivation, disk = sector, groups = "-");
+  Blocksize column width 90 → 150; header tooltip reworded for both kinds.
+- Tests: TestTopologyBlocksizeRendering rewritten + grown (derivation text,
+  ashift-None dash, sector resolution, inventory-miss dash, sector-None
+  dash, mirror dash + mixed 4096/512 members).
+- Docs: gtk-gui.md topology Blocksize row rewritten; GLOSSARY gained
+  "ashift" and "physical sector size" entries. Strict mkdocs build green.
+
+## 2026-11-17 — Migrate Pool: enforced quiesce, safe export, no holding export
+
+- User report (real temp→threeamigos holding migration, ashift change), five
+  items. PREEXISTING first per user instruction: Pools-page Export action
+  still exports bare-first and recovers reactively — must get the same
+  proactive export preparation (new entry).
+- Bandwidth-limit tooltip: text after the dash now states the effective-cap
+  rule (min of this limit and involved enclosure limits).
+- Quiesce is now ENFORCED, not assumed: cutover split into three runner
+  phases (copy / catchup / destructive); after catchup, written@cutover per
+  dataset (new ZfsRepository.datasets_written_since + parse_zfs_bytes,
+  oracle verified live on stewie) — any nonzero refuses (Re-check/Defer
+  dialog); unverifiable also defers.
+- Step 15 export: disruptive-steps confirm (lists remaining steps verbatim,
+  states downtime begins + verified quiesced) + proactive export prep
+  reusing pool_actions blockers/unmount machinery (unmount safe filesystems,
+  re-scan; survivors → blocker dialog + defer). Bare export never attempted.
+- Step 25 holding-pool export DELETED from plan + executor (golden diff =
+  one removed line); holding pool stays online the whole cutover.
+- mixed_size_warning: "limited to" → "limited by" (docs line too).
+- Tests: _drive_handler scripts the new gates (written/disruptive/export
+  knobs); TestQuiesceAndDisruptionGates + TestPreparePoolExport new;
+  three-tuple ripples fixed; goldens regenerated (holding only).
+- Docs: gtk-gui Cutover section rewritten (gates in order, holding pool
+  never exported); messages manual rows for the new INFO/WARN lines;
+  GLOSSARY "quiesce" added.
+
+## 2026-11-17 — Disks page: migrate-picker sizing verified pinned; pane cells ellipsize + hover
+
+- User report, two items (both observed on 0.141.0 during the real
+  temp→threeamigos migration): Migrate Pool's new-disks picker too short +
+  window not scrollable; Disk Inventory cells neither ellipsized nor
+  tooltip'd on overflow.
+- Item 1 was ALREADY FIXED by the same-day pub3 merge a06f1bf (natural
+  dialog sizing): probe-verified on the real show_migrate_pool_dialog under
+  private Xvfb — 0.141.0/pre-merge 801c644 crush the picker to ~3 rows
+  (71px) on a short window (resize 700x480 = the deterministic red
+  condition); the merged tree keeps the full 20-row cap (464px), scrolls
+  inside, and the dialog window carries the overflow at every screen size
+  incl. the 90%-workarea cap. No product change; the geometry is now PINNED
+  in disks_dialogs_realized_check.py (real dialog, resized short).
+- Item 2: all three Disks-page panes (user widened scope from Disk
+  Inventory to include Enclosures + Pool Topology) now END-ellipsize every
+  text renderer and wire gui_helpers.attach_cell_tooltips — Disk Inventory
+  and Pool Topology offset 0, Enclosures offset 1 (unrendered id column at
+  store 0). Same idiom as the Pools/Dashboard/Alignment tables; docs
+  already state the universal rule (Tooltips section + Disks-tab intro),
+  so no doc changes.
+- Tests: mocked wiring/offset/renderer test in test_disks_page.py;
+  realized check grew the real-migrate-dialog case + a real-page panes
+  case (every renderer END, every view has-tooltip), red-proofed on a
+  /tmp copy with the fix reverted (PANGO_ELLIPSIZE_NONE).
+- GOTCHA (realized probes): once create_disks_page's returned page widget
+  is garbage-collected, the container tree tears down and the views' column
+  lists EMPTY (app attributes hold the bare views only) — realized probes
+  must keep the page widget referenced.
+
+## 2026-11-17 — zfscheckagainst: absent counterpart is a verdict, not a WARN
+
+User reported three `WARN: Dataset to check ... does not exist or is offline.`
+lines (zfscheckagainst:333) from the Retention page's Prune Snapshots on
+stewie (session 2026-11-17_21-21-20_prune_gui.log, label=offsite). Verified
+live: the WARNs fired on fivebays prune candidates whose reverse fss rows
+map to source-side datasets that don't exist — NVME1/zfsutilities-manifests
+(store exists only at the first hop, by design) and
+threeamigos/proxmox/vm-215-disk-0/1 (VM 215 archived to
+temp/archive/threeamigos/proxmox/...). No harm: every deletion verified via
+other rows (z22tb hold-tag / z40tb common snap); all 5 steps rc=0.
+
+Fix (this tree, uncommitted): a counterpart dataset missing on an ONLINE
+pool is now a distinct "absent" outcome — logged once per run per dataset
+at INFO (`/tmp/caabsentprinted.$PPID` marker, repeats at VERB), folded like
+offline_pools, and when every matched row is absent the verdict is rc 4
+("not common — nothing to protect"; user-approved auto-delete). Absent
+never overrides a different row's offline/locked rc 6 or last-common rc 7.
+The old WARN+skip fallthrough wrongly landed absent-only cases on rc 5
+(interactive confirm; GUI non-interactive = keep) — the store's
+@dailybackup pruning (new in 0.142.0) would have been stuck on that.
+Caller side needed nothing: delsnap/preview already treat 0|4 alike.
+Cleanup of the new marker added to the fssalreadyprinted exit traps
+(zfsdelsnap, zfsretain dry-run, this suite). Docs: messages/index.md row
+replaced (2 new rows), modules.md rc-4 row + new "Absent counterpart
+datasets" subsection, GLOSSARY gained "counterpart dataset". Tests: 3 new
+in test-zfscheckagainst (absent-only → 4 + INFO once, INFO-then-VERB via
+with_msg_level — log_verb hides from stderr unless a gate is set,
+absent+offline → 6). Suites: checkagainst 38/38, delsnap 25/25, retain
+32/32, cleanup 16/16; full suite green; mkdocs --strict clean; shellcheck
+matches baseline (SC2016 info, intentional single-quoted trap).
+
+## 2026-11-18 — Log Viewer: path line no longer highlights on pop-out/focus
+
+User report: Logs page → Log Viewer — "the log path should not be
+highlighted." Root cause (verified against GTK 3.24.41 gtklabel.c):
+`gtk_label_grab_focus` runs `select_region(0, -1)` — select ALL text —
+whenever a selectable label gains focus by any route other than a click,
+gated by GtkSettings `gtk-label-select-on-focus` (default on); the
+selection is drawn while focused. The path line (`logs_path_label`,
+selectable) is the first focusable child of viewer_box, so the pop-out
+window's initial focus (`_on_logs_popout_toggled` → show_all) and Tab
+navigation deterministically highlighted the whole path.
+
+Fix (this tree, uncommitted, user-approved scope): one line in main.py
+`do_activate` next to the CSS provider —
+`Gtk.Settings.get_default().set_property("gtk-label-select-on-focus",
+False)` — app-wide. Labels stay click/drag-copyable everywhere (docs
+promise "selectable for copying" in gtk-gui.md, still true); only the
+focus-driven select-all is disabled. The other 11 set_selectable sites
+are untouched and inherit the same protection. No docs change needed.
+
+Verification: Xvfb probe (3 phases: stock pop-out path reproduces
+bounds (0,75); fix → bounds None; manual select_region still selects) +
+realized-style smoke driving the REAL `_on_logs_popout_toggled` /
+`_update_logs_path_label` / `LogPopoutWindow` with a faithful viewer_box
+build — stock phase highlighted, fixed phase plain (screenshots
+inspected). Affected suites test_main + test_logs_page green; full
+suite green (run-tests -q). No new permanent test (plan-scoped one-off
+probes; mock_gtk can't exercise real GtkSettings).
+
+## 2026-11-18 — Miscellaneous Logs heading tooltips removed; heading dead zone fixed
+
+Two user asks, one turn. (1) Logs page → Miscellaneous Logs treeview:
+remove the pre-existing tooltips. (2) Disks page → Disk Inventory column
+headings need tooltips.
+
+(1) The Miscellaneous list shares `_make_log_view_columns` with the main
+list, which attached a tooltip-bearing header label to every column.
+New `header_tooltips=False` parameter; the Miscellaneous call passes it
+and gets plain default headings (no header widget at all). The main
+list keeps its tooltips, and the "Miscellaneous Logs (N)" expander-bar
+tooltip is not on the treeview and stays (stated in the approved plan).
+
+(2) The Disk Inventory headings ALREADY had tooltips — every Disks
+column calls `set_column_header_tooltip`. Root cause (probe-verified
+earlier in the campaign session): GTK seats the custom header label
+inside the column's header Gtk.Button at the label's NATURAL text
+width, so a 160px heading carried only a ~40px tooltip-active strip;
+hovering the rest showed nothing, hence "needs tooltips". Fix at the
+helper: the header label now connects its `realize` to
+`_on_header_label_realize`, which arms the enclosing header Button with
+the same tooltip text — the button spans the full heading width. One
+helper change arms every heading app-wide (all pages using the helper
+plus EditableListView); checkagainst's bespoke `_build_header` Box does
+not use the helper and stays for the pending campaign.
+
+Tests: test_logs_page header test now expects 7 main-list header
+tooltips and 14 appended columns (both lists; shared TreeView mock);
+test_gui_helpers gained the realize-wiring assert plus handler tests
+(arms button / no-op without ancestor);
+disks_dialogs_realized_check now realizes the real Disks page in its
+private-Xvfb window and asserts per column: label tooltip non-empty,
+Button ancestor exists, button tooltip equals the label's, button
+allocation spans the column width (±2px), and first-column button
+minus label strip ≥ 40px (dead-zone evidence). Docs: gtk-gui.md Tooltips
+section carves the Miscellaneous table out of the every-heading claim.
+Affected suites green; realized check green; ruff clean.
+
+Follow-up, same day (user: "I still see tooltips everywhere in this
+treeview, and they all say the same thing"): the survivor was the
+EXPANDER tooltip. GTK shows a widget with no tooltip of its own the
+nearest armed ancestor's text, and the expander wraps the whole
+Miscellaneous treeview, so its one tooltip surfaced over every heading,
+row, and cell — uniform text everywhere is the fall-through signature.
+Removed the expander tooltip too; a code comment at the expander
+records the law so it does not come back. New guard test
+test_misc_section_carries_no_tooltips asserts create_logs_page never
+arms the shared Expander mock (with the file's idiom for isolating the
+viewer-frame one-shot side effect — the shared-mock trap bit once
+during development). gtk-gui.md exception sentence widened to the whole
+section: title bar, headings, and cells all tooltip-free.
+
+## 2026-11-18 — All treeviews: ellipsize + clipped-cell tooltips campaign
+
+User cue: "GUI -> All treeviews: Ellipsize all the cells on text overflow
+and provide tooltips containing the cell's full text." Executes the
+campaign planned earlier the same day (approval had been pending; the
+re-issued request was the go).
+
+Helper: attach_cell_tooltips/_on_cell_query_tooltip gained column_map
+(gui_helpers) — a per-visible-column list of store indices, None = never
+tooltip. Needed because two views' visible order diverges from store
+order and no constant offset can route them: the Pool Registry (visible
+Name, Offsite, Health, Errors, numeric vs store 0 name, 1 health, 2
+size … 9 flag, 10 offsite, 11 errors) and the pool-growth target tree
+(visible Size = store 5, State = store 2). Existing offset call sites
+untouched.
+
+Treated (21 views, 13 files): pages — Pool Registry (map), Datasets,
+Schedule (bespoke always-on _on_next_run_query_tooltip deleted,
+superseded by the shared clipped-only handler; all five text renderers
+ellipsize now, not just Next Run), Offsite steps, Retention bucket (spin
+renderers untouched — int store values fall through the str check) +
+prune, Checkagainst editable + readonly ×3 (the _build_header Box
+duplicate migrated to set_column_header_tooltip — dedup AND the
+full-heading fix; helper deleted), Logs main + Miscellaneous (inline
+header-label block swapped for the shared helper on main; misc keeps
+plain headings; BOTH lists attach clipped-cell tooltips — per-celled
+text, not the removed uniform ancestor tooltip; guard test docstring
+narrowed to expander/title bar), EditableListView (covers both Backup
+step tables), memory_page _device_table (L2ARC/SLOG/Enclosures).
+Dialogs — pool_watch Watch window, pool_actions Import-Pool picker,
+pool_create_wizard + pool_growth disk pickers, growth target tree (map),
+pool_profile manage, profile manage/add-overwrite/recall pickers, and
+the apply-profile picker — whose Description column KEEPS its deliberate
+word-wrap (wrapped text never clips; full text already visible) and
+passes column_map=[0, 1, None] so it never tooltips.
+
+Ellipsize idiom: files that import Pango use the enum; the rest follow
+the dashboard/pools precedent `set_property("ellipsize", 3)  #
+Pango.EllipsizeMode.END`.
+
+Tests: column_map routing unit tests in test_gui_helpers (map reads the
+named store column; None entry and beyond-map positions return False);
+per-view wiring tests everywhere (recorder pattern: view/store/offset or
+map + renderer ellipsize counts — reset the shared CellRendererText mock
+before counting, earlier same-module tests accumulate on it). Schedule's
+bespoke handler tests replaced. FakePickerTreeView gained
+set_has_tooltip/connect no-ops. The gi-import guard caught one bare
+in-function import — use the module-level binding.
+
+Docs: gtk-gui.md Tooltips carve-out sentence now reads "neither the
+collapsed section's title bar nor its column headings carries a tooltip
+— though its clipped cells still show their full text on hover, like
+every other table"; the Schedule Next Run paragraph generalized to every
+cell. Docs validation pair green; site rebuilt.
+
+Smoke: full GUI launch as dan re-execs through pkexec (main.py:422,
+root-by-design) — passwordless launch smoke not possible; the realized
+checks (disks/backup/alignment, real GTK under private Xvfb) carry the
+render validation instead, in the full suite.
+
+(pub3 lane history block, unioned at the 0.143.0 pub3-lane merge
+(5165d7f) — "uncommitted" in these entries means uncommitted in pub3
+at the time of writing. Pruned at the next release prune.
+PREEXISTING union-minus-retired at the 0.143.0 merges, retired with
+in-tree verification: pub2's sudo switch-version journey markers,
+FAILED+DRIFT wording, and integrated-README rows (defects absent
+from base 6042728 and every lane tree) plus pub3's ruff-format nits
+in the export-stall code (merged tree passes ruff format --check;
+pub2's reformatting carries). Kept: pub2's three full-suite
+load-flake offenders + Pools-page Export entry, pub3's stewie
+desktop-menu and test-logging bashinit entries.)
+
+## 2026-11-17 (pub3) — One-click Ctrl-click deselect across every tree
+
+- User report: every treeview needed TWO Ctrl-clicks to deselect a row.
+  Verified against GTK 3.24.41 source + synthesized-event probes: GTK's
+  ctrl-click toggle is focus-gated (real_toggle_cursor_row returns on
+  !has_focus; GTK grabs focus at handler END) — the first click just
+  takes focus. Stock GTK behavior, not an app bug.
+- Fix: gui_helpers.enable_ctrl_click_deselect(view) — grabs focus on a
+  Ctrl+left press (button-press-event runs before the view's bubble-phase
+  gesture; modifier test mirrors GTK's MODIFIER_INTENT_MODIFY_SELECTION).
+  Wired at all 27 selectable sites in 17 modules; SelectionMode.NONE
+  sites (wizard disk list, growth read-only list) exempt by design.
+- Tests: unit tests in test_gui_infrastructure; wiring sweep
+  test_ctrl_click_wiring (runtime builds where mocks allow + an AST audit
+  of every Gtk.TreeView site — pools/retention/offsite/logs/checkagainst
+  builds trip the pre-existing set_button_markup isinstance-on-mock wall,
+  so the audit covers them); realized check test_ctrl_click_realized
+  (private Xvfb, ONE synthesized Ctrl+click per view; the unwired control
+  view is the GTK-behavior sentinel). FakePickerTreeView in
+  test_profile_dialogs grew connect() recording (product wires every
+  view now). requirements.manifest: gi row for the realized suite.
+- Docs: gtk-gui.md deselect clauses at the five multi-select spots;
+  coding-policies.md focus-gate law; testing.md two suite rows.
+- ruff clean; affected suites green. (Full-suite line recorded in the
+  turn report, not here.)
+
+## 2026-11-17 (pub3) — Scrub-profile pause-window wait + single-write logs
+
+- User report (stewie session log, 2026-11-15 06:11): doubled WARN lines and
+  an unknown scrub-profile timeout. Root cause chain, node-verified: the
+  06:00 root-backup-dailybackup pauses scrubs on its pools per step
+  (attach_step_scrub_callbacks) and resumes them ~47 min later; the scrub
+  profile's 60×10 s paused-only give-up clock expired mid-window (06:01:30 →
+  06:11:22). Backup resumed both scrubs at 06:48; fivebays finished 11-15
+  13:44; threeamigos still scrubbing legitimately. No operator action.
+- run_scrub_profile now suspends the idle clock while
+  _other_profile_locks_held() (flock probe of PROFILE_LOCK_DIR *.lock,
+  self-pid metadata skipped, fail-open), logging once per wait episode
+  "INFO: Waiting on paused scrubs; another profile running". WARN reworded
+  to name the pools: "Scrub profile timed out; still paused: <pools>".
+- Double logging fixed: _scrub_log's write_raw_line duplicated every line
+  (log_msg's session_log_context write carries the file:line prefix; the
+  raw line had none). Now log_msg(msg, session_log_file=...) only — one
+  target, one write, prefixed.
+- Tests: timeout test reworded + hermetic PROFILE_LOCK_DIR; new wait-
+  deferral test (in-process flock holder released at tick 70), single-write
+  session-log regression, _other_profile_locks_held truth table.
+- Docs: messages manual rows (waiting INFO + reworded WARN), gtk-gui.md
+  Scrub profiles behavior paragraph, testing.md row extended.
+
+## 2026-11-17 (pub3) — Modal-dialog dimming of every other GUI window
+
+- User request: while a modal dialog is open, dim the GUI's other windows
+  to show they are disabled.
+- gui_helpers grew the display choke point: run_dialog(dialog) wraps
+  dialog.run() and dims every other toplevel (Gtk.Window.list_toplevels,
+  set_opacity to MODAL_DIM_OPACITY 0.6) with a per-window recorded prior;
+  dimmed_modal() is the context-manager form for the one show()-without-
+  run() modal (datasets-page expand-rows progress). Nested dialogs dim the
+  parent dialog too; pop restores in stack order. Unlistable toplevels
+  (headless/mock_gtk) degrade to a pure passthrough — that is why every
+  existing dialog suite stayed green with no mock changes.
+- Sweep: all 81 call-site .run() display sites across 24 modules now go
+  through run_dialog (gui_helpers' own show_error/show_error_dialog/
+  show_warning_dialog/confirm_and_minimize_width converted internally;
+  iscsi_enroll/notifications_dialog/proxmox_enroll gained the import).
+  main.py's _show_wait_dialog deliberately NOT converted: transient_for
+  None during single-instance replace, no in-process siblings to dim.
+  subprocess.run and app.run(None) untouched.
+- Tests: test_modal_dim (state machine under fake toplevels: restore
+  fidelity, nested order, exception safety, destroyed-window guard, stray
+  pop, mock passthrough) + test_modal_dim_wiring (AST audit: outside
+  run_dialog's single passthrough, only subprocess.run and app.run(None)
+  may call .run(; callers must import run_dialog) — red-proofed with a
+  planted violation. No requirements.manifest rows needed (no module-level
+  gi guards).
+- Docs: gtk-gui.md "Modal Dialog Dimming" section; coding-policies.md
+  run_dialog law; testing.md two suite rows; GLOSSARY compositing entry.
+- ruff clean; affected suites green; full tests/run-tests green.
+
+## 2026-11-17 (pub3) — Scrub logging: View Log classification + lifecycle wording
+
+- User report (stewie, 0.141.0, three parts): (1) Dashboard → Tasks → View
+  Log on a scrub-profile row WARNs "Log entry not found" though the file
+  exists; (2) scrub start/finish/pause/resume log entries "inconsistent at
+  best"; (3) every _scrub_log line doubled (with/without file:line prefix).
+  Part (3) was already fixed earlier this lane (see the pause-window entry
+  above) — only re-verified this turn.
+- (1) root cause: _LOG_FILENAME_RE's core type set
+  (backup|offsite|restore|prune|dataset|gui) omitted scrub AND retention —
+  those profile session logs matched the misc regex and landed in the
+  Miscellaneous list, which select_log_by_path (main list only) never
+  searches. Fixed by adding both types to the core alternation; existing
+  files re-classify on the next scan (index is path-keyed). Verified
+  against stewie: 3 scrub session logs existed, all misc-buried.
+- (2) vocabulary unified in scrub_manager.py to one template
+  "Scrub <verb> on 'X'" + qualifier: external transitions now INFO with
+  "(external)" (was three VERB "External … detected" wordings);
+  "Scrub completed on X" → "Scrub finished on X"; "Paused scrub
+  finished/canceled on X" → "… (was paused)"; silent paused→NONE now logs
+  "Scrub ended on 'X' (was paused)"; "New scrub detected on X" → "Scrub
+  started on 'X' (external)"; dropped the stray word "pool" from
+  Starting/Pausing/Resuming/Stopping lines; backup-window per-pool lines
+  (pause/resume_scrubs_for_pools) raised VERB→INFO to match the queue
+  paths (plural summaries unchanged). Production evidence: the Nov-14
+  scrub session log showed the same pause as VERB-detection (scrub log),
+  VERB action + INFO summary (backup log), invisible at default level.
+- run_scrub_profile: "INFO: Scrub profile complete" no longer logged on
+  the timeout path (the naming WARN is the closer; rc stays 0 — messaging
+  fix only, history/notifications semantics unchanged).
+- Tests: test_logs_page (scrub/retention classify core; _parse_log_filename
+  new types; select_log_by_path scrub row), test_scrub_manager (reworded
+  assertions + 5 new transition tests), test_profile_runner (timeout path
+  asserts NO "complete"; drained path asserts it). ruff clean; affected
+  suites green; full run green.
+- Docs: messages manual scrub_manager section rewritten to the new
+  vocabulary (external trio merged into one row), scrub-profile "complete"
+  row notes the gating, gtk-gui.md Type column gains scrub/retention.
+  mkdocs --strict green (only the standing MkDocs-2.0 banner).
+- PREEXISTING: 0 found, 0 addressed this turn; 4 entries remain.
+
+## 2026-11-17 (pub3) — Desktop-notification resolver: PKEXEC_UID + loginctl
+
+- Symptom: Settings → Notifications → Show test notification logged
+  "Desktop notification skipped: no logged-in desktop session" on the
+  deployed GUI. Root cause chain: the GUI's normal launch path elevates
+  via pkexec (main.py re-exec), which never sets SUDO_USER (it sets
+  PKEXEC_UID instead), and the last-resort probe — owner of
+  /tmp/.X11-unix/X0 — is dead on both the dev host and stewie because
+  LightDM runs Xorg as root (socket uid 0 → rejected). Only
+  sudo-from-terminal launches ever resolved; root-cron scheduled runs
+  never did.
+- Fix in notifications.py: resolution is now override → PKEXEC_UID
+  (uid 0 ignored) → SUDO_USER → active graphical loginctl session
+  (Class=user, State=active, Type x11|wayland; covers cron and is
+  Wayland-ready) → X11 socket owner, each candidate still requiring a
+  live /run/user/<uid>/bus. New helpers _loginctl_graphical_user() and
+  _user_session(); the skip INFO wording is unchanged (still true when
+  nothing resolves).
+- Verified live on the dev host in both previously-dead contexts
+  (PKEXEC_UID=1000 and no-hints cron): both resolve to
+  ('dan', '/run/user/1000/bus', ':0').
+- Tests: TestResolveDesktopUser rewritten for the cascade (16 red
+  pre-fix, green post) + new TestLoginctlGraphicalUser (session
+  selection, wayland, root/greeter/tty/online rejects, per-session
+  failure skip, missing-binary degrade). Full suite green; ruff clean;
+  mkdocs --strict green (standing MkDocs-2.0 banner only).
+- Docs: messages-manual skip-row cause column updated; python-modules.md
+  notifications narrative updated; GLOSSARY gains "loginctl".
+- PREEXISTING: 1 found (stewie .desktop Exec points at nonexistent
+  /usr/local/bin/zfsutilities-gui — site state, repo doesn't manage
+  .desktop files), 0 addressed; 1 entry now in the file.
+
+## 2026-11-17 (pub3) — Manifest-store retention: store in prune_datasets + file sweep in retain
+
+- Reported: fivebays/threeamigos/zfsutilities-manifests snapshots never
+  pruned (30 since Nov 4); asked how the store's FILES are pruned.
+  Answer to the second question: they weren't — nothing anywhere deleted
+  manifest files; they accumulate one per dataset per generation (556 in
+  two weeks). ZFS snapshot destroy never removes live files.
+- Snapshot gap root cause: the lib's "existing cleanup prunes it in
+  lockstep — no new pruning code" claim holds for pool-mode cleanup
+  (zfsdailybackup template, zfsoffsiteretain — verified live: @offsite
+  snaps on the store ARE pruned) but NOT for the GUI/scheduler prune
+  step: build_backup_prune_command builds an explicit prune_datasets
+  list of source+dest pairs, and the store is neither (it is created at
+  the destination by capture). Verified in the Nov-16 run log's dataset
+  list. Sibling zfsutilities IS pruned because it rides the chain as a
+  real source dataset.
+- Fix 1 (python/command_builders.py): each step's prune script now
+  derives the store via propmanifest_dataset "$destfs" "$sourcefs"
+  (sources ../lib/property-manifest-lib.sh mydir-relative, matching the
+  script's existing source style), existence-guards it, and adds it to
+  prune_datasets through _prune_seen. Goldens regenerated (6) and
+  reviewed; 2 new red-proofed builder tests.
+- Fix 2 (lib/property-manifest-lib.sh + bin/zfsretain): new
+  propmanifest_prune_files <mds> — deletes manifest files whose
+  generation snapshot no longer exists (one zfs list of the store's
+  snapshots; a failed listing WARNs and skips the sweep, fail-safe).
+  Hooked at the end of retain() for */zfsutilities-manifests datasets,
+  under the write lock retain already holds — covers GUI prune mode,
+  pool mode, zfsoffsiteretain, AND the offsite-pool replica stores that
+  never see captures. Fix rule: files live exactly as long as their
+  snapshots; no new knobs.
+- Tests: 6 new propmanifest_prune_files cases in test-property-manifest-lib
+  (mock zfs extended with the snapshot-listing form); retain-hook tests
+  in test-zfsretain (stub lib in mock mydir; sweep-after-lock proven via
+  op_seq; non-store not swept). Affected suites green; full bash suite
+  green; full Python suite green; ruff clean; shellcheck clean on new
+  code (one pre-existing SC2016 info in zfsretain untouched); mkdocs
+  --strict green.
+- Docs: modules.md function row + corrected lockstep claim,
+  python-modules.md prune row, messages manual gains 4 sweep rows +
+  reworded snapshot row.
+- Self-heals on first profile run after deploy: store joins the prune
+  list (backlog snapshots go per policy), then the sweep drops the
+  stale files. PREEXISTING: 0 found this turn; 1 entry remains (stewie
+  .desktop).
+
+## 2026-11-18 (pub3) — Datasets page: Repair Mount Order button → Dashboard-pointing warning banner
+
+- Rationale: the button asked the user to decide a subtree needs
+  mount-order repair from a selection — knowledge he does not have; all
+  he would see is disconcerting unmount/remount churn. The Dashboard
+  already detects unreachable mounts and offers the repair.
+- Removed: the Datasets-page button (action_dispatch button tuple +
+  import + dispatch-map entry), its sensitivity gating
+  (can_repair_mount_order in update_ds_button_sensitivity), and the
+  handler on_datasets_repair_mount_order + its selection-guard WARN.
+  Shared repair machinery (plan/_confirm/execute/run_mount_repair) is
+  untouched — the Dashboard handler is its only caller now (scope=None).
+- Added: _update_ds_mount_order_warning in datasets_page — runs the same
+  find_unreachable_mounts the Dashboard uses, on every
+  refresh_datasets_page; shows a red ⚠ banner under the page title with
+  the affected count and a pointer to Dashboard Warnings + Repair Mount
+  Order; hidden when clean or the mount state is unverifiable (detector
+  returns []). Banner label: app._ds_mount_order_warning,
+  no-show-all, packed above the search bar.
+- Message rewording (Datasets-page variant is gone, pointers now name
+  the Dashboard only): _warn_browse_unreachable lost its repair_dataset
+  arg ("Run Repair Mount Order from the Dashboard, then browse.") and
+  the unmount FATAL says "(Dashboard)" not "(Dashboard or Datasets
+  page)".
+- Tests: removed the two on_datasets_repair_mount_order handler tests;
+  updated the two Browse-refusal assertions; new TestMountOrderWarning
+  class (hidden-clean, shown-with-count+pointer, singular wording,
+  no-op without the label). Refresh tests deliberately do NOT fence
+  find_unreachable_mounts — matches the Dashboard refresh-test
+  convention (detector degrades to [] off-ZFS).
+- Docs: gtk-gui.md (Datasets intro paragraph gains the banner
+  description; button row removed; Dashboard row drops the
+  subtree-variant parenthetical; unreachable-mounts note re-angled),
+  messages/index.md (selection-guard row deleted; two rows reworded),
+  python-modules.md (handler row removed; banner helper + zfs_repository
+  import documented; run_mount_repair row notes its Dashboard caller).
+- Realized check: datasets_banner_realized_check.py +
+  test_datasets_banner_realized.py (new, following the disks-dialogs
+  realized pattern — private Xvfb, child process, REALIZED-DISPLAY
+  fence). Builds the real Datasets page in a realized window and proves
+  the banner contract: hidden through show_all (no-show-all), hidden
+  when the detector is clean, visible with count + Dashboard pointer on
+  findings, hidden again once clean. Listed in requirements.manifest
+  (gi).
+- Verification: affected suites green; full Python suite green
+  (started before the two new realized files were written — those ran
+  separately green immediately after; no product code changed in
+  between); ruff clean; mkdocs --strict green (known MkDocs 2/Material
+  warning only). PREEXISTING: 0 found this turn; 2 entries remain.
+
+## 2026-11-18 (pub3) — 0.143.0 release-gate wrap-up
+
+- Version number corrected with the user before bumping: the wrap-up
+  instructions named 0.142.0, but VERSION already read 0.142.0
+  (published/tagged 2026-11-17); the user chose 0.143.0. Steps 1 and 4
+  (PREEXISTING resolution) skipped by instruction — pub-main-only.
+- Review fixes (all in this cycle's new code): `# noqa: SIM115` on
+  TestWriteRsyncLogChunk's persistent handle (mirrors BackupRunner's
+  own); `propmanifest_prune_files` now WARNs on a refused `rm` (the
+  lib's every-failure-WARNs contract; new test case + messages-manual
+  row); `(end_lineno or end_lineno)` no-op cleaned in
+  test_modal_dim_wiring. Doc gap-fills: rsync misc-row + builder row +
+  write_raw_line row + get_log_hostname import row + BackupRunner
+  tagging paragraph (rsync-pull host tags were undocumented).
+- Pre-existing filed: ruff format nits in the 0.142.0 export-stall
+  recovery code (python/pool_actions.py three hunks,
+  tests/test_pool_actions.py two) — PREEXISTING.md now 3 entries. The
+  zfsretain SC2016 info stays (below the project's `-S warning` gate,
+  documented since the retention turn).
+- Gates: ruff check clean tree-wide; shellcheck clean on changed files;
+  docs integrity 23/23; mkdocs build clean (standing MkDocs-2.0 banner
+  only); full no-soak run green (log /tmp/zfs-run-0143-nosoak.log);
+  with-soak gate line recorded in the turn report. Changelog 0.143.0
+  section written; GLOSSARY needed nothing further (compositing +
+  loginctl rode their campaigns).
+
+## 2026-11-23 (pub) — j22 survey against the merged 0.143.0 tree
+
+- Fresh random draw (106 items, two-node, lived-in world) GREEN in ~8 min
+  (run-20261123-194723): 164/151/0 — first survey of the merged tree;
+  no product defects in the draw. 3 blocked: 2 logs empty-state
+  (by design) + 1 catalog defect — gui-w-retention-adjust-spin pointed
+  at a standalone SpinButton, but retention buckets are editable
+  CellRendererSpin columns.
+- Catalog fix: retention row re-pointed to a new edit-spin-cell probe
+  role (commits through the renderer's "edited", same law as
+  edit-cell); schedule adjust-spin row DROPPED (page has toggle/text
+  renderers only — could only ever block; same class as the old pools
+  combo). Universe 212 → 211 items; tracked archive regenerated from
+  the verification replay (old one replays-refuses on digest by
+  design).
+- Pinned-seed verification (seed 3) exposed two more, both fixed:
+  - F-052 (product): bin/zfsresume printed NO verdict for a valid
+    token on zfs 2.2.2 — zfs send -nP -t exits 0 with decoded
+    contents, and both report branches sat inside the failure path;
+    unrecognized probe errors were misreported as "seems valid".
+    Fixed: decoded contents (not exit code) are the validity signal;
+    unexpected failures now reuse zfs-migrate-send's WARN wording.
+    4 regression tests in tests/test-zfsresume, red-proven against
+    the old logic. First-ever live run of the recipe's real path —
+    the Nov 17 "real" draw actually took the old no-arg surface.
+  - Probe: TreeViewColumn.get_attributes is NOT introspectable in
+    PyGObject (always AttributeError → fallback) — the spin role now
+    resolves the first gint store column and verifies by readback
+    (live-proven "3 -> 4").
+- World-verify tolerance ±5s → ±30s (run-20261123-202102: one ladder
+  snapshot landed +6s; clock-walk landing jitter, minute-scale
+  semantics unaffected).
+- Final replay GREEN: run-20261123-202938 (165/152/0, both fixed
+  items pass, world verified, lab auto-destroyed). F-052 verified.
+  Suites: zfsresume/send-receive-resume/survey-journey/sampler/docs
+  green; full suite once at wrap-up. Docs: messages/index.md rows +
+  commands.md zfsresume narrative/flow updated.
+
+## 2026-11-23 (pub2) — Stewie 0.143.0 follow-up: manifest store rc-5 stall, WARN noise, dry-run banner
+
+- User-reported (live-verified against stewie config + prune_gui log):
+  `fivebays/threeamigos/zfsutilities-manifests` @dailybackup snapshots
+  never pruned; 36 repeated `No eligible enteries` WARNs per dry run; the
+  zfsretain dry-run banner printed once per dataset (46x).
+- Root cause: leaf-mapped backup steps (threeamigos/proxmox -> fivebays)
+  derive reverse rows that cover only the mapped datasets; the store is a
+  SIBLING at the dest, so no row matched -> rc-5 -> interactive confirm ->
+  GUI/scheduled prunes keep everything. NVME1 worked only because its
+  step is pool-level (reverse row covers its store -> absent -> rc-4).
+- Fix: derive a manifest-store row per sub-pool backup step (counterpart
+  = never-existing source-side store -> absent -> rc-4 auto-delete);
+  skipped when the reverse row already covers the store; migration
+  32->33 refreshes stored rows (stewie sits at v32). rc-5 WARN: typo
+  fixed, now once per dataset per run (/tmp/canoentryprinted.$PPID
+  marker, swept by zfsdelsnap/zfsretain exit traps). Dry-run banner line
+  removed from zfsretain.
+- End-user effect after deploy + one GUI launch: dry run shows the
+  store's snapshots as "Would: Remove"; the next real prune deletes them
+  and propmanifest_prune_files sweeps the orphaned manifest files. No
+  manual cleanup.
+- Full suite green once at wrap-up; derivation/migration/page/checkagainst/
+  delsnap/retain suites updated. No VERSION/changelog touch. Committed in a2bb0f7.
+
+## 2026-11-24 (pub2) — Log-panel search desync after Short Prefix toggle
+
+- User-reported, both directions: search then toggle Short prefix off ->
+  highlights in wrong places; clear + re-search then toggle on -> no
+  highlights while the counter still claims matches.
+- Root cause (reproduced under real GTK 3.24 in Xvfb): the bottom log
+  panel's _render_info_panel rebuilds every line (prefix lengths change)
+  but never resynchronized info_search. Tags die with the deleted text;
+  the match list keeps offsets from the old layout, so the counter lies
+  and the next Previous/Next paints the current-match highlight at
+  offsets belonging to the other prefix mode. The Logs-tab viewer was
+  verified NOT affected (its toggle already re-runs search()).
+- Same-class latent find fixed in-pass: _tail_log_file's 2 MB buffer trim
+  shifts stored offsets; _refresh_log_search now takes force= for the
+  trim so the search resyncs even when the new text lacks the query.
+- Fix: TextViewSearch.refresh() handles the zero-match case ("0
+  matches", current=-1); _render_info_panel refreshes an active query
+  after re-rendering (covers short-prefix toggle AND level filter);
+  truncation flag passed to _refresh_log_search.
+- Tests: refresh zero-match (gui_helpers), render/resync + empty-query
+  guard (zfsutilities_gui), force-refresh + trim-driven refresh
+  (logs_page). Real-GTK Xvfb end-to-end run of the patched
+  _render_info_panel: highlights land on actual occurrences, counter and
+  current stay consistent through both toggle directions and navigation.
+- Docs: gtk-gui.md — panel search bullet (re-render resync) and Logs-tab
+  search bullet (trim resync). Full suite green once at wrap-up. No
+  VERSION/changelog touch. Committed in a2bb0f7.
+
+## 2026-11-24 (pub2) — Disks tab: kind-for-kind tint law (user law override)
+
+- User-reported (not previously fixed): partition members under a vdev tint
+  whole-disk rows in the Disk Inventory — both the pool-selector baseline
+  and topology-node selection. User law: devices correspond with devices,
+  partitions with partitions. The 2026-11-17 design (partition tints its
+  parent disk) is overridden; the Pools COLUMN already followed the new law.
+- disks_page.py: _highlight_pool_disks tints {disk.path} (entry itself, no
+  parent resolution); _backing_disk_paths renamed _inventory_entry_paths
+  (target = disk.path); _path_matches_any_device lost the whole-disk-prefix
+  branch (disk row no longer matches a partition device). Unknown partition
+  leaf now tints nothing (its row does not exist) instead of the disk.
+- Kept: inventory->topology direction (_topology_node_matches_disk) —
+  partition row tints exactly its node; whole-disk row tints all leaves on
+  it (containment). Enclosure tint stays whole-disk (enclosure members are
+  physical disks). Docstrings updated; gtk-gui.md pool-topology paragraph
+  rewritten to the kind-for-kind law.
+- Tests: TestTopologySelectionHighlightsBackingDisk ->
+  TestTopologySelectionHighlightsMemberRow (partition rows tinted, disk rows
+  not; new whole-disk-member positive; unknown-leaf tints nothing); prefix
+  matcher tests inverted both directions. Full suite green once at wrap-up.
+  No VERSION/changelog touch. Committed in a2bb0f7.
+
+## 2026-11-24 (pub2) — zfscheckagainst: rc-4 verdict INFO once per dataset
+
+- User-reported after manually adding Checkagainst-tab entries on stewie
+  (0.143.0): real prune swept the stale manifest files ("Pruned 712/4" —
+  propmanifest_prune_files IS dry-run aware; "Would: prune" under dry run,
+  so those lines prove a real run), but the log flooded with one rc-4
+  "All matched counterparts absent ... nothing to protect." INFO per
+  snapshot (~716 stale store snapshots).
+- Not previously addressed anywhere: the rc-5 WARN and fss-row absent INFO
+  got $PPID-keyed once-per-dataset markers; this third message had none.
+- Fix: _ca_log_all_absent (marker /tmp/caallabsentprinted.$PPID, keyed on
+  the snapshot's dataset; INFO first, VERB repeats) replaces the raw
+  log_msg at the rc-4 site; marker joins the exit-trap sweeps in
+  zfsdelsnap, zfsretain, and the test suite's own trap.
+- Tests: once-per-dataset-then-VERB + different-dataset-re-arms; the three
+  existing rc-4 tests hardened to rm the new marker. checkagainst, delsnap,
+  and retain suites green; python full suite green (one known
+  rolling-charts renderer flake, clean on rerun and second full run).
+- Docs: messages/index.md — rc-4 row notes once-per-run-per-dataset; the
+  rc-5 row updated to the corrected "entries" spelling (was still quoting
+  the old "enteries" typo, completing the earlier fix's doc trail).
+  No VERSION/changelog touch. Committed in a2bb0f7.
+
+## 2026-11-24 (pub2) — Disks page: Enclosures section moved to the top (user request)
+
+- User request: "Disks page: Move the Enclosures section to the top." The
+  page reads Enclosures → Disk Inventory → Pool Topology.
+- disks_page.py: the Enclosures build block (box, title, description,
+  store, view, columns, tooltips, scroller) moved verbatim above the Disk
+  Inventory block in create_disks_page (cut-and-paste by marker lines, block
+  verified byte-identical to HEAD's); the content-box comment names the
+  order. No widget, text, or behavior change inside the block.
+- Deliberately unchanged: refresh_disks_page repopulation order (enclosure
+  selection restore runs LAST — load-bearing, see the 2026-11-17 one-selection
+  entry), the pool-selector tooltip ("table above" still true),
+  ENCLOSURES_MIN_HEIGHT.
+- Tests: new test_enclosures_section_is_packed_first (red-proven against the
+  old layout); the two order-pinned tests flipped (header-tooltip title
+  sequence; cell-tooltip offsets [1, 0, 0] with views/stores in page order).
+  Trap: under mock_gtk every Gtk.TreeView() is ONE shared instance, so a
+  "this box does not pack that pane's table" assertion is unfalsifiable
+  until the test hands out distinct TreeViews.
+- Real-GTK lock: disks_dialogs_realized_check._check_disks_page_panes now
+  asserts the Enclosures box is the content box's first child and sits above
+  the other two titles (private Xvfb).
+- Visual probe (private Xvfb, seeded data, 1024x768, script removed):
+  Enclosures section ~159 px tall with 0 or 1 enclosure row, ~165 px with 2;
+  the Disk Inventory title lands ~180 px below the top of the page. With NO
+  enclosures the section still shows (title + description + empty table) —
+  unchanged behavior, new position; no auto-hide was requested.
+- Docs: gtk-gui.md Disks-tab intro names the sections top to bottom
+  (subsections left in place — Disk inventory first, it introduces the shared
+  selection law; user may ask for the subsections to follow the page);
+  testing.md gained the previously missing test_disks_dialogs_realized row
+  (pre-existing catalog gap, closed in-task) and its test_disks_page row
+  names the section order.
+- Housekeeping: the rc-4 entry above recorded suite pass counts — removed
+  (notes files carry no test counts).
+- ruff clean; affected suites green. Full suite run once at wrap-up: ONE
+  failure, test_alignment_realized (Performance page) in the full gate
+  only — root-caused to the realized-check Xvfb adoption race (new
+  PREEXISTING.md entry; unrelated to this change), suite green on a solo
+  rerun; bash layer green.
+  No VERSION/changelog touch. Committed in a2bb0f7.
+
+## 2026-11-24 (pub2) — 0.144.0 wrap-up review (change summary + six-step)
+
+- Scope: lane commit a2bb0f7 (the five entries above) plus this review's
+  edits. Steps 1 and 4 (PREEXISTING resolve-all) are PUB-only
+  and did not apply in this lane.
+- Defect found and fixed (in the cycle's new code): migration 32→33 calls
+  a derivation that assumed a well-formed config. A hand-edited file
+  (`"backup": null`, a `null` step list, a step with a `null` source)
+  raised inside `load_config()` — there is no try/except there — so the
+  GUI, the profile runner, logging, and the enclosure-rate helper would
+  all fail to start, on every launch (a raising migration never rewrites
+  the file). `derive_checkagainst_entries` now reads a section, list, or
+  row of the wrong type as no steps. Law recorded in coding-policies.md
+  ("Config migrations never raise") and data-structures.md.
+- Tests: malformed-config tests at three levels (derivation, migration,
+  the real load path), each red against the pre-fix derivation; the
+  Python store-row math pinned against bash `propmanifest_dataset` (the
+  test_snapshot_naming precedent; the lib sources standalone once a no-op
+  `log_msg` exists); a zfsretain dry-run sweep test (child process with a
+  stubbed zfsdelsnap that carries NO trap, so only retain's registration
+  can sweep); the delsnap sweep test widened to all four markers; the
+  joined two-counterpart "all absent" message. Nothing obsolete.
+- Line length: the marker-sweep trap lines had grown to ~260 columns. Now
+  one marker per `append_exit_trap` (four handlers) in zfsdelsnap,
+  zfsretain, and test-zfscheckagainst; over-long lines in the cycle's new
+  tests and three older ones wrapped.
+- RED-PROOF TRAP: deleting zfsretain's four trap lines leaves an EMPTY
+  `if … then fi`, which is a bash syntax error — the whole suite then
+  fails for the wrong reason. Substitute `:` for the block instead.
+- Docs: the messages-manual row for the REMOVED zfsretain dry-run banner
+  was still present (its preview caveats moved to retention.md);
+  data-structures.md still said `CONFIG_VERSION = 32` and named a
+  nonexistent `_run_migrations`; the store-row rule was overbroad ("source
+  deeper than its pool") — a store row is derived only when the reverse
+  row would not already reach the store, so pool-level sources AND
+  full-path destinations get none; corrected in modules.md, gtk-gui.md,
+  data-structures.md, and GLOSSARY. testing.md rows extended; GLOSSARY
+  gained "print-once marker". Docs integrity green; mkdocs build green.
+- PREEXISTING: +2 — print-once markers live in world-writable /tmp under
+  guessable PID-keyed names (fix shape = the run dir); and no real-GTK
+  test pins the log-search resync fix (mock-level only; sequence it after
+  the Xvfb adoption-race fix) — the second filed on the user's
+  instruction after the report.
+- LANE-MERGE HEADS-UP: this lane's CONFIG_VERSION is 33 (32→33 = manifest-
+  store rows). Per shared memory, pub3's uncommitted settings-backup
+  feature is ALSO at 33 (its own 32→33). At the next three-lane merge one
+  of the two 32→33 migrations must be renumbered to 33→34, with its
+  CONFIG_VERSION and docs following.
+- End user after deploy: the first GUI start or scheduled run migrates
+  the config (the pre-migration copy is archived under config-archive/);
+  a direct CLI prune run before that still sees the old rows once.
+- Gates: ruff check + format clean; shellcheck clean at the warning gate;
+  full no-soak suite green once at wrap-up.
+- Wrap-up continuation (user-directed steps 7–9, same day): VERSION →
+  0.144.0 and the 0.144.0 changelog section written; no code changes
+  after that point; the full no-soak gate runs once more before the
+  commit (result in the turn report); everything in this entry rides the
+  lane's 0.144.0 release commit. Step 8 of the continuation names PUB's
+  PREEXISTING.md for new issues, and the wrap-up instructions supersede
+  the working-directory Hard Rule, so the one find that is real in pub's
+  tree was filed there: the documented whole-set shellcheck command exits
+  1 on SC2120 in two test mocks (uncommitted in pub until its next
+  commit). Not filed: a format nit in tests/integrated/survey/gui_probe.py
+  that pub main has already fixed; it retires at the lane merge. One
+  GLOSSARY line over the wrap width, this cycle's own, was re-wrapped
+  (documentation only, no wording change).

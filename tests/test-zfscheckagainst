@@ -404,7 +404,8 @@ test_missing_destination_dataset_continue() {
 test_absent_counterpart_only_row_returns_4() {
     test_start "Absent-only counterpart row returns 4 - nothing to protect"
     reset_mocks
-    rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"
+    rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$" \
+        "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"
     _zfscheckagainst_checkagainst_lines=("fivebays/poolA/data poolA/data offsite")
     set_online_pools poolA
     # poolA online, poolA/data absent: no chain exists through the row.
@@ -413,14 +414,34 @@ test_absent_counterpart_only_row_returns_4() {
     assert_rc 4 "$rc"
     assert_contains "$out" \
         "INFO: Counterpart dataset poolA/data absent - no chain through this fss row."
-    assert_contains "$out" \
-        "INFO: All matched counterparts absent for fivebays/poolA/data@offsite-2025-01-01T10:00-05:00-s"
+    local _expected="INFO: All matched counterparts absent for "
+    _expected+="fivebays/poolA/data@offsite-2025-01-01T10:00-05:00-s"
+    assert_contains "$out" "$_expected"
+}
+
+test_absent_counterparts_are_joined() {
+    test_start "Every absent counterpart is named in the rc-4 verdict"
+    reset_mocks
+    rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$" \
+        "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"
+    # Two rows match the snapshot and both counterparts are absent: the
+    # verdict names each one, in row order.
+    _zfscheckagainst_checkagainst_lines=(
+        "fivebays/poolA/data poolA/data offsite"
+        "fivebays/poolA/data poolC/data offsite"
+    )
+    set_online_pools poolA poolC
+    local rc=0 out
+    out=$(checkagainst "fivebays/poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 4 "$rc"
+    assert_contains "$out" "(poolA/data, poolC/data) - nothing to protect."
 }
 
 test_absent_counterpart_info_once_then_verb() {
     test_start "Absent counterpart logs INFO once per run, then VERB"
     reset_mocks
-    rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"
+    rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$" \
+        "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"
     _zfscheckagainst_checkagainst_lines=("fivebays/poolA/data poolA/data offsite")
     set_online_pools poolA
     local rc=0 out1 out2 combined _info_count _verb_count
@@ -428,7 +449,8 @@ test_absent_counterpart_info_once_then_verb() {
     assert_rc 4 "$rc"
     # log_verb hides the repeat from stderr unless a level gate shows it;
     # open the VERB gate the way an operator would.
-    out2=$(with_msg_level VERB checkagainst "fivebays/poolA/data@offsite-2025-01-02T10:00-05:00-s" 2>&1) || rc=$?
+    out2=$(with_msg_level VERB checkagainst \
+        "fivebays/poolA/data@offsite-2025-01-02T10:00-05:00-s" 2>&1) || rc=$?
     assert_rc 4 "$rc"
     combined="$out1
 $out2"
@@ -436,6 +458,111 @@ $out2"
     _verb_count=$(grep -c "VERB: Counterpart dataset poolA/data absent" <<< "$combined")
     assert_equals 1 "$_info_count"
     assert_equals 1 "$_verb_count"
+}
+
+test_all_absent_info_once_per_dataset_then_verb() {
+    test_start "All-counterparts-absent INFO prints once per dataset, then VERB"
+    reset_mocks
+    rm -f "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"
+    _zfscheckagainst_checkagainst_lines=("fivebays/poolA/data poolA/data offsite")
+    set_online_pools poolA
+    local rc=0 out1 out2 combined _info_count _verb_count _pattern
+    out1=$(checkagainst "fivebays/poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 4 "$rc"
+    assert_contains "$out1" "(poolA/data) - nothing to protect."
+    # Same dataset, next snapshot: the verdict is keyed per dataset, so a
+    # bulk cleanup of one dataset's snapshots logs it once, with the
+    # per-snapshot repeats only at VERB.
+    out2=$(with_msg_level VERB checkagainst \
+        "fivebays/poolA/data@offsite-2025-01-02T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 4 "$rc"
+    combined="$out1
+$out2"
+    _pattern="All matched counterparts absent for fivebays/poolA/data"
+    _info_count=$(grep -c "INFO: $_pattern" <<< "$combined")
+    _verb_count=$(grep -c "VERB: $_pattern" <<< "$combined")
+    assert_equals 1 "$_info_count"
+    assert_equals 1 "$_verb_count"
+}
+
+test_all_absent_new_dataset_relogs() {
+    test_start "All-counterparts-absent INFO re-arms for a different dataset"
+    reset_mocks
+    rm -f "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"
+    _zfscheckagainst_checkagainst_lines=(
+        "fivebays/poolA/data poolA/data offsite"
+        "fivebays/poolB/data poolB/data offsite"
+    )
+    set_online_pools poolA poolB
+    local rc=0 out1 out2 combined _info_count
+    out1=$(checkagainst "fivebays/poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 4 "$rc"
+    out2=$(checkagainst "fivebays/poolB/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 4 "$rc"
+    combined="$out1
+$out2"
+    _info_count=$(grep -c "INFO: All matched counterparts absent" <<< "$combined")
+    assert_equals 2 "$_info_count"
+}
+
+test_noentry_warn_once_per_dataset_then_verb() {
+    test_start "No-eligible-entry WARN prints once per dataset, then VERB"
+    reset_mocks
+    rm -f "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$"
+    _zfscheckagainst_checkagainst_lines=("poolB/data <offsite>/poolB/data offsite")
+    set_online_pools z22tb
+    local rc=0 out1 out2 combined _warn_count _verb_count
+    out1=$(checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 5 "$rc"
+    # Same dataset, next snapshot: the WARN is keyed per dataset, so the
+    # repeat only shows with the VERB gate open.
+    out2=$(with_msg_level VERB checkagainst \
+        "poolA/data@offsite-2025-01-02T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 5 "$rc"
+    combined="$out1
+$out2"
+    _warn_count=$(grep -c "WARN: No eligible entries in the checkagainst array" <<< "$combined")
+    _verb_count=$(grep -c "VERB: No eligible entries in the checkagainst array" <<< "$combined")
+    assert_equals 1 "$_warn_count"
+    assert_equals 1 "$_verb_count"
+    if grep -q "enteries" <<< "$combined"; then
+        test_fail "Typo 'enteries' still present; out='$combined'"
+    fi
+}
+
+test_noentry_warn_new_dataset_rewarns() {
+    test_start "No-eligible-entry WARN re-arms for a different dataset"
+    reset_mocks
+    rm -f "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$"
+    _zfscheckagainst_checkagainst_lines=("poolB/data <offsite>/poolB/data offsite")
+    set_online_pools z22tb
+    local rc=0 out1 out2 combined _warn_count
+    out1=$(checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 5 "$rc"
+    out2=$(checkagainst "poolA/data/child@offsite-2025-01-01T10:00-05:00-s" 2>&1) || rc=$?
+    assert_rc 5 "$rc"
+    combined="$out1
+$out2"
+    _warn_count=$(grep -c "WARN: No eligible entries in the checkagainst array" <<< "$combined")
+    assert_equals 2 "$_warn_count"
+}
+
+test_manifest_store_row_absent_returns_4() {
+    test_start "Manifest-store row absent counterpart returns 4 - nothing to protect"
+    reset_mocks
+    rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$" \
+        "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"
+    # Production shape: the derived store row names the never-existing
+    # source-side counterpart, so pruning the store auto-deletes.
+    _zfscheckagainst_checkagainst_lines=(
+        "fivebays/threeamigos/zfsutilities-manifests threeamigos/zfsutilities-manifests dailybackup"
+    )
+    set_online_pools threeamigos
+    local rc=0 out _snap
+    _snap="fivebays/threeamigos/zfsutilities-manifests@dailybackup-2026-11-04T11:00Z-d"
+    out=$(checkagainst "$_snap" 2>&1) || rc=$?
+    assert_rc 4 "$rc"
+    assert_contains "$out" "INFO: All matched counterparts absent for $_snap"
 }
 
 test_absent_counterpart_with_offline_pool_blocks() {
@@ -732,7 +859,13 @@ test_getcommonsnap_rc_zero
 test_unexpected_getcommonsnap_rc
 test_missing_destination_dataset_continue
 test_absent_counterpart_only_row_returns_4
+test_absent_counterparts_are_joined
 test_absent_counterpart_info_once_then_verb
+test_all_absent_info_once_per_dataset_then_verb
+test_all_absent_new_dataset_relogs
+test_noentry_warn_once_per_dataset_then_verb
+test_noentry_warn_new_dataset_rewarns
+test_manifest_store_row_absent_returns_4
 test_absent_counterpart_with_offline_pool_blocks
 test_legacy_conf_fallback
 test_offline_hold_excludes_candidate
@@ -765,9 +898,13 @@ rm -rf "$mock_base"
 
 # This suite sources zfscheckagainst directly (not via zfsdelsnap, which
 # owns the production marker cleanup), so remove the print-once markers the
-# no-eligible-entry and absent-counterpart tests leave behind. Composable
-# registration keeps the test-lib artifact cleanup alive.
-append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$" "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"'
+# no-eligible-entry, absent-counterpart, and all-counterparts-absent tests
+# leave behind. Composable registration keeps the test-lib artifact cleanup
+# alive.
+append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
+append_exit_trap 'rm -f "/tmp/caabsentprinted.$PPID" "/tmp/caabsentprinted.$$"'
+append_exit_trap 'rm -f "/tmp/canoentryprinted.$PPID" "/tmp/canoentryprinted.$$"'
+append_exit_trap 'rm -f "/tmp/caallabsentprinted.$PPID" "/tmp/caallabsentprinted.$$"'
 
 test_summary
 teardown_test_env

@@ -677,6 +677,17 @@ target must pickle). Python 3.14 made forkserver the default, which is
 why several suites now pin the fork start context explicitly — the
 pickling constraint is about the process model, not the test logic.
 
+## print-once marker
+
+A tiny file that lets a script log a message only once per run. The
+retention safety check (`zfscheckagainst`) writes one under `/tmp` for
+each message it would otherwise repeat for every snapshot. The file is
+keyed by the calling process's PID, and the callers remove it when they
+exit. The keyed message then appears once at its normal level and again
+only when verbose logging is on. A marker that survives its run — after
+a crash, or when a caller forgets the cleanup — silences that message
+for the next process that happens to reuse the PID.
+
 ## probe
 
 A small scripted live check of one ZFS behavior, run inside a test guest
@@ -706,9 +717,13 @@ restore. One file per dataset per generation, named
 `<dataset with / → %2F>@<snapname>`, stored on a dedicated filesystem
 (`<destfs>/<source pool>/zfsutilities-manifests`) that is snapshotted
 under the same generation snapname as the data — so ordinary retention
-prunes it in lockstep. The store also travels: offsite onward legs carry
-it to the offsite pool as an ordinary dataset (capture stays off — copies
-hold no local properties), and replay finds it by probing the deeper
+prunes it in lockstep. When a Backup step sends part of a pool to another
+pool, the store sits beside the mapped dataset, outside the reverse row, so
+it gets its own derived `zfscheckagainst` row; without that row a scheduled
+or GUI prune would keep the store's snapshots forever. The
+store also travels: offsite onward legs carry it to the offsite pool
+as an ordinary dataset (capture stays off — copies hold no local
+properties), and replay finds it by probing the deeper
 offsite-hop shape before the direct backup root. Excludes what the raw
 stream already carries (the encryption family, `volblocksize`);
 `keylocation` is deliberately kept.

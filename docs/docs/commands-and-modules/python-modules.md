@@ -95,7 +95,7 @@ the GUI tabs and the bash scripts.
 | `get_restore_config()` / `save_restore_config()`                             | Restore tab state                                               |
 | `get_pools()` / `save_pools()`                                               | Registered pool list, including `offsite_candidate` flag        |
 | `get_checkagainst()` / `save_checkagainst()`                                 | Nested checkagainst object (derived + user entries)             |
-| `derive_checkagainst_entries()`                                              | Build forward/reverse rows from active Backup/Offsite steps     |
+| `derive_checkagainst_entries()`                                              | Build forward, reverse, and manifest-store rows from active steps |
 | `merge_checkagainst_entries()`                                               | Merge derived and user entries for `zfsconfig_get_checkagainst` |
 | `add_checkagainst_entry()`                                                   | Append a row to `user_entries` if not already present           |
 | `get_retention()` / `save_retention()`                                       | Per-pool retention policies                                     |
@@ -1865,7 +1865,7 @@ in the viewer.
 | `create_logs_page()`           | Build the Logs tab widget                    |
 | `_sync_log_list()`             | Rescan `SESSION_LOG_DIR` and update the list |
 | `_scan_cron_log_rows()`        | List the cron log and its rotations as `cron` rows |
-| `_tail_log_file()`             | Append new lines from a running log          |
+| `_tail_log_file()`             | Append new lines from a running log; a buffer trim resyncs an active search |
 | `_load_log_into_viewer()`      | Load selected log, tail-first if large       |
 | `_load_gzip_into_viewer()`     | Decompress a `.gz` rotation into the viewer (bounded, tail-first past the threshold) |
 | `_on_load_full_log_clicked()`  | Switch from tail to full-file mode           |
@@ -2749,7 +2749,7 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `DirtyTracker`     | Generic save/revert dirty-state tracker                                                                                                                                                                                                                 |
 | `EditableListView` | Reusable ListStore with Add/Remove/Move                                                                                                                                                                                                                 |
 | `TreeSearch`       | Debounced search with prev/next for a `Gtk.TreeView`                                                                                                                                                                                                    |
-| `TextViewSearch`   | Search/navigation for a `Gtk.TextView`; matches are stored as character offsets (not `Gtk.TextIter`s, which buffer edits invalidate) so prev/next keeps working as the buffer grows; `refresh()` folds new text into an active search without scrolling |
+| `TextViewSearch`   | Search/navigation for a `Gtk.TextView`; matches are stored as character offsets (not `Gtk.TextIter`s, which buffer edits invalidate) so prev/next keeps working as the buffer grows; `refresh()` re-runs the query against the current text — folding in new lines, or resyncing after a re-render or a trim — without scrolling, and reports `0 matches` when none remain |
 | `LogPopoutWindow`  | Independent window for popping out the info panel                                                                                                                                                                                                       |
 | `UIStateManager`   | Debounced save/restore of window geometry                                                                                                                                                                                                               |
 | `LogFontController` | Relative font sizing for one log `Gtk.TextView` (±4 steps of 1.5 pt via a per-widget CSS class), persisted in `ui_state` under `font_sizes`                                                                                                             |

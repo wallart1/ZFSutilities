@@ -94,6 +94,32 @@ function checkagainst {
             log_msg "INFO: Counterpart dataset $_ds absent - no chain through this fss row."
         fi
     }
+    # Log the rc-5 no-eligible-entry WARN once per dataset per run, then at
+    # VERB - same $PPID-keyed marker pattern as _ca_log_absent, so a prune
+    # over many snapshots of one uncovered dataset does not repeat it.
+    _ca_log_noentry() {
+        local _snap="$1" _ds="${1%%@*}" _marker="/tmp/canoentryprinted.$PPID"
+        if grep -qFx "$_ds" "$_marker" 2>/dev/null; then
+            log_verb "No eligible entries in the checkagainst array for $_snap."
+        else
+            printf '%s\n' "$_ds" >> "$_marker" 2>/dev/null
+            log_msg "WARN: No eligible entries in the checkagainst array for $_snap."
+        fi
+    }
+    # Log the rc-4 all-counterparts-absent INFO once per dataset per run,
+    # then at VERB - same $PPID-keyed marker pattern, so a bulk cleanup of
+    # one uncovered dataset's snapshots does not repeat it per snapshot.
+    _ca_log_all_absent() {
+        local _snap="$1" _counterparts="$2" _ds="${1%%@*}" _marker="/tmp/caallabsentprinted.$PPID"
+        if grep -qFx "$_ds" "$_marker" 2>/dev/null; then
+            log_verb "All matched counterparts absent for $_snap" \
+                "($_counterparts) - nothing to protect."
+        else
+            printf '%s\n' "$_ds" >> "$_marker" 2>/dev/null
+            log_msg "INFO: All matched counterparts absent for $_snap" \
+                "($_counterparts) - nothing to protect."
+        fi
+    }
 
     local \
         _absent_counterparts="" \
@@ -353,7 +379,7 @@ function checkagainst {
                         if [[ -z "$_entry_absent_counterparts" ]]; then
                             _entry_absent_counterparts="$_candidate_dstocheck"
                         elif [[ "$_entry_absent_counterparts" != *"$_candidate_dstocheck"* ]]; then
-                            _entry_absent_counterparts="$_entry_absent_counterparts, $_candidate_dstocheck"
+                            _entry_absent_counterparts+=", $_candidate_dstocheck"
                         fi
                         continue
                     fi
@@ -455,12 +481,11 @@ function checkagainst {
             # Every matched row's counterpart dataset is absent (missing on
             # an online pool): no incremental chain exists through any of
             # them, so nothing protects this snapshot.
-            log_msg "INFO: All matched counterparts absent for $snaptocheck" \
-                "($_absent_counterparts) - nothing to protect."
+            _ca_log_all_absent "$snaptocheck" "$_absent_counterparts"
             _ca_unlock
             return 4
         fi
-        log_msg "WARN: No eligible enteries in the checkagainst array for $snaptocheck."
+        _ca_log_noentry "$snaptocheck"
         if [[ ! -f /tmp/fssalreadyprinted.$PPID ]]; then
             touch /tmp/fssalreadyprinted.$PPID
             echo 'Source root            Destination root       Label'
