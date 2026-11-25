@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from typing import ClassVar
 from unittest.mock import patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -142,6 +143,66 @@ class TestGetPathsConfig(unittest.TestCase):
             self.assertEqual(paths["scrub_manager_log"], "/tmp/custom-logs/scrub-manager.log")
             self.assertEqual(paths["rsync_pull_log"], "/tmp/custom-logs/rsync-pull.log")
             self.assertEqual(paths["rewrite_data_log"], "/tmp/custom-logs/rewrite-data.log")
+
+
+class TestGetSettingsBackupConfig(unittest.TestCase):
+    """get_settings_backup_config seeds the settings_backup section."""
+
+    SEED: ClassVar[dict[str, object]] = {
+        "retention_days": 35,
+        "daily": True,
+        "daily_hour": 0,
+        "daily_minute": 17,
+    }
+
+    def test_seeds_all_keys_and_persists(self):
+        with temp_config_dir():
+            path = config_core.CONFIG_PATH
+            with open(path, "w") as f:
+                json.dump({"config_version": config_core.CONFIG_VERSION}, f)
+            cfg = {"config_version": config_core.CONFIG_VERSION}
+            section = config_core.get_settings_backup_config(cfg)
+            self.assertEqual(section, self.SEED)
+            self.assertIs(cfg["settings_backup"], section)
+            # The seeded section is written back so the configuration file
+            # visibly holds it.
+            with open(path) as f:
+                self.assertEqual(json.load(f)["settings_backup"], self.SEED)
+
+    def test_user_values_win_over_seeds(self):
+        with temp_config_dir():
+            cfg = {"settings_backup": {"retention_days": 90, "daily": False}}
+            section = config_core.get_settings_backup_config(cfg, persist=False)
+            self.assertEqual(section["retention_days"], 90)
+            self.assertIs(section["daily"], False)
+            # Keys the user did not set still seed.
+            self.assertEqual(section["daily_hour"], 0)
+            self.assertEqual(section["daily_minute"], 17)
+
+    def test_persist_false_leaves_disk_untouched(self):
+        with temp_config_dir():
+            path = config_core.CONFIG_PATH
+            with open(path, "w") as f:
+                json.dump({"config_version": config_core.CONFIG_VERSION}, f)
+            cfg = {"config_version": config_core.CONFIG_VERSION}
+            section = config_core.get_settings_backup_config(cfg, persist=False)
+            self.assertEqual(section, self.SEED)
+            with open(path) as f:
+                self.assertNotIn("settings_backup", f.read())
+
+    def test_non_dict_section_is_replaced(self):
+        with temp_config_dir():
+            for bad in ("nonsense", ["retention_days"], None):
+                with self.subTest(bad=bad):
+                    cfg = {"settings_backup": bad}
+                    section = config_core.get_settings_backup_config(cfg, persist=False)
+                    self.assertEqual(section, self.SEED)
+                    self.assertIs(cfg["settings_backup"], section)
+
+    def test_load_config_carries_the_section(self):
+        with temp_config_dir():
+            cfg = config_core.load_config()
+            self.assertEqual(cfg["settings_backup"], self.SEED)
 
 
 class TestDeepCopy(unittest.TestCase):

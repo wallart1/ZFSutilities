@@ -1147,7 +1147,16 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         if result is None or result.returncode != 0:
             log_msg("WARN: Could not list settings backups")
             return
-        backups = [line for line in result.stdout.splitlines() if line.strip()]
+        # One picker entry per well-formed "timestamp|pool|file-count" row.
+        # The picker index doubles as the index into this list, so anything
+        # else the listing printed is dropped HERE: skipping it at append
+        # time would shift the indexes and restore a different backup than
+        # the one the user chose.
+        backups = [
+            parts
+            for parts in (line.split("|", 2) for line in result.stdout.splitlines())
+            if len(parts) == 3 and all(field.strip() for field in parts)
+        ]
         if not backups:
             log_msg("WARN: No settings backups found on any online pool")
             return
@@ -1173,10 +1182,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         box.pack_start(label, False, False, 0)
 
         combo = Gtk.ComboBoxText()
-        for row in backups:
-            parts = row.split("|", 2)
-            if len(parts) == 3:
-                combo.append_text(f"{parts[0]}  —  {parts[1]} ({parts[2]} files)")
+        for backup_ts, backup_pool, file_count in backups:
+            combo.append_text(f"{backup_ts}  —  {backup_pool} ({file_count} files)")
         combo.set_active(0)
         box.pack_start(combo, False, False, 0)
 
@@ -1187,14 +1194,14 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         if response != Gtk.ResponseType.OK or idx < 0:
             log_msg("VERB: Settings restore cancelled")
             return
-        chosen = backups[idx].split("|", 2)
+        chosen_ts, chosen_pool, _chosen_count = backups[idx]
 
         confirm = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
             message_type=Gtk.MessageType.WARNING,
             buttons=Gtk.ButtonsType.OK_CANCEL,
-            text=f"Restore settings from {chosen[0]} on {chosen[1]}?",
+            text=f"Restore settings from {chosen_ts} on {chosen_pool}?",
         )
         confirm.format_secondary_text(
             "This replaces the current config.json, matching backup profiles, "
@@ -1211,7 +1218,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             log_msg("VERB: Settings restore cancelled")
             return
 
-        result = self._run_settings_script(["--restore", chosen[0]])
+        result = self._run_settings_script(["--restore", chosen_ts])
         if result is None:
             return
         if result.returncode != 0:

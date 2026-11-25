@@ -1704,3 +1704,40 @@ holds; sections left word-for-word.
   the root must be staged, moved, or git-ignored, or the gate goes red
   — and a hand-debug redirect must never write into the repository
   root (that is how `current` and its two siblings were born).
+
+## 2026-11-24 (pub3) — 0.144.0 lane wrap-up review pass (uncommitted)
+
+Review of everything since v0.143.1 (commits 9b9b3ff, 9f4bb5a, 036b764).
+Steps 1 and 4 skipped by their own precondition (PUB main only).
+
+- Product: `delsnap` still aborted under a strict caller — three reads
+  the F-054 fix missed (the tag-array length, the remaining-holds
+  result, `skipbusy`) — plus the same tag-array read in
+  `zfsmassdelsnaps`. Closed with the `declare -p` / `:-` pattern;
+  strict-caller regression tests in test-zfsdelsnap, test-zfsretain,
+  and test-zfsmassdelsnaps, each red-proven.
+- `zfsdailybackup` sources node-lib.sh in the coding-policy form
+  (`NODE_LIB` override, between bashinit and rootcheck).
+- `backup-settings`: one documented timestamp pattern (it was three
+  undocumented copies); the housekeeping step reuses
+  `_settings_existing_mountpoint`.
+- GUI restore picker: malformed `--list` lines are dropped before the
+  picker is built, so the picker index always addresses the backup the
+  user sees (a skipped line could restore a different timestamp).
+- Tests: the over-length lines wrapped (render-proven
+  byte-identical); test-backup-settings announces and counts every test
+  (the whole suite used to report as one) and covers retention,
+  argument validation, and housekeeping (each red-proven); new coverage
+  for the cron line builder, the settings accessor, and the GUI
+  handlers; the survey journey suite's `itf_step` stand-in joins every
+  detail argument like the real function; test-zfsdailybackup points
+  nextsnap reservations at the suite run dir instead of deleting live
+  `/run` files.
+- Docs: the testing.md catalog lists every suite on disk (23 were
+  missing); `settings_backup` keys documented and the generation
+  example at 33; messages-manual rows for node-lib's fatals under
+  zfsdailybackup and for the cron line's WARNs; module tables name the
+  moved and new functions; the two-node config page matches F-053;
+  GLOSSARY `marker` entry (the user's queue term — the queue is empty).
+- PREEXISTING: two lint findings filed (SC2120 ×2 on the whole-set
+  shellcheck run; ruff format drift in gui_probe.py).

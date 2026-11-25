@@ -202,33 +202,53 @@ This applies to: [rescan-storage](../commands-and-modules/two-node.md#rescan-sto
 
 ## Repo-Root Scripts
 
-If [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs), [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup), and [rsync-dailybackup](../commands-and-modules/modules.md#rsync-dailybackup) run from the
-ZFSutilities project tree (not from the versioned installation PATH), they source
-the config directly instead of using the library. Running from the repo-root is
-supported only in a development environment. All three resolve the config with
+[zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup) resolves
+its node configuration through `node-lib.sh`, like every other node-aware
+script. [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs) and
+[rsync-dailybackup](../commands-and-modules/modules.md#rsync-dailybackup)
+source the config directly instead when they run from the ZFSutilities project
+tree (not from the versioned installation PATH). Running from the repo root is
+supported only in a development environment. Both resolve the config with
 node-lib's precedence — the current FHS conf first, then the two legacy paths,
 honoring the `ZFSUTILITIES_*` environment overrides — and keep the config
-file's uppercase names at source time, then work with lowercase copies
-(`node_mode`, `storage_host`, `compute_host`):
+file's uppercase names at source time:
 
 ```bash
-: "${NODE_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/node.conf}"
+: "${NODE_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/node.conf"
 if [[ ! -r "$NODE_CONF" ]]; then
     if [[ -r "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; then
         NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
     elif [[ -r "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
         NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
     else
-        # Per-script failure: zfsdelfs and zfsdailybackup abort the run;
-        # rsync-dailybackup logs a WARN and skips its pulls.
+        # Per-script failure: zfsdelfs aborts the run; rsync-dailybackup
+        # logs a WARN and skips its pulls.
         :
     fi
 fi
 source "$NODE_CONF"
+```
+
+Each script then derives the lowercase working copies (`node_mode`,
+`storage_host`, `compute_host`) in its own way. `rsync-dailybackup` derives
+the host pair in both node modes; an unset name falls back to the local
+hostname:
+
+```bash
 node_mode="${NODE_MODE:-two-node}"
-if [[ "$node_mode" == "single-node" ]]; then
-    storage_host="${THIS_HOST:-$(hostname -s)}"
-    compute_host="$storage_host"
+this_host=$(hostname -s)
+storage_host="${STORAGE_HOST:-$this_host}"
+compute_host="${COMPUTE_HOST:-$storage_host}"
+```
+
+`zfsdelfs` fills the single-node pair itself and then sources `node-lib.sh`,
+which validates a two-node configuration:
+
+```bash
+: "${NODE_MODE:=two-node}"
+if [[ "$NODE_MODE" == "single-node" ]]; then
+    STORAGE_HOST="${THIS_HOST:-$(hostname -s)}"
+    COMPUTE_HOST="$STORAGE_HOST"
 fi
 ```
 

@@ -174,6 +174,7 @@ reset_mocks() {
 # ------------------------------------------------------------------
 
 test_sourcing_defines_functions() {
+    test_start "Sourcing the script defines its functions"
     make_settings
     local fn
     for fn in main stage_settings_set write_backup_to_pool list_settings_backups \
@@ -181,9 +182,11 @@ test_sourcing_defines_functions() {
         declare -f "$fn" >/dev/null 2>&1 \
             || test_fail "$fn should be defined after sourcing"
     done
+    test_pass
 }
 
 test_backup_writes_to_every_online_pool() {
+    test_start "Backup writes the settings set to every online pool"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -204,9 +207,11 @@ test_backup_writes_to_every_online_pool() {
         grep -q '"marker": "live"' "${dir}/config.json" \
             || test_fail "${pool}: backup config.json content differs"
     done
+    test_pass
 }
 
 test_backup_manifest_fields() {
+    test_start "Manifest records the backup's fields and files"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -226,9 +231,11 @@ for expected in ("config.json", "node.conf", "profiles/root-daily.json"):
     assert expected in names, names
 assert "manifest.json" not in names, names
 PYEOF
+    test_pass
 }
 
 test_backup_creates_dataset_on_first_use() {
+    test_start "Backup creates the pool's zfsutilities dataset on first use"
     make_settings
     reset_mocks
     # Online configured pool with NO zfsutilities dataset yet. The pools
@@ -246,11 +253,17 @@ test_backup_creates_dataset_on_first_use() {
     # The create mock's mountpoint registration happened inside main's
     # subshell; the directory itself survives, so assert on the filesystem.
     local mnt="${_mock_pools_root}/freshpool_zfsutilities"
-    [[ -f "${mnt}/settings-backups/$(cd "${mnt}/settings-backups" && find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tail -1)/config.json" ]] \
+    # The newest entry under settings-backups/ must hold the config copy.
+    local newest
+    newest=$(cd "${mnt}/settings-backups" \
+        && find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tail -1)
+    [[ -f "${mnt}/settings-backups/${newest}/config.json" ]] \
         || test_fail "backup should be written to the created dataset"
+    test_pass
 }
 
 test_backup_skips_offline_pool() {
+    test_start "Backup skips an offline configured pool and reports it"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -262,18 +275,22 @@ test_backup_skips_offline_pool() {
         || test_fail "offline pool should be reported"
     [[ -n "$(latest_backup_ts threeamigos)" ]] \
         || test_fail "online pool should still receive the backup"
+    test_pass
 }
 
 test_backup_fails_with_no_online_pool() {
+    test_start "Backup fails when no pool is online"
     make_settings
     reset_mocks
     register_offline_pool z22tb
     local out rc=0
     out=$(main 2>/dev/null) || rc=$?
     [[ $rc -ne 0 ]] || test_fail "all-offline should fail the backup"
+    test_pass
 }
 
 test_backup_fails_with_no_settings() {
+    test_start "Backup fails when nothing can be staged"
     make_settings
     reset_mocks
     # Empty the settings tree: nothing can be staged.
@@ -282,9 +299,11 @@ test_backup_fails_with_no_settings() {
     local out rc=0
     out=$(main 2>/dev/null) || rc=$?
     [[ $rc -ne 0 ]] || test_fail "no settings files should fail the backup"
+    test_pass
 }
 
 test_optional_files_and_mode_preservation() {
+    test_start "Optional settings files travel and keep their mode"
     make_settings
     reset_mocks
     printf 'DEPLOY=1\n' > "$_etc/deploy.conf"
@@ -301,9 +320,11 @@ test_optional_files_and_mode_preservation() {
     local mode
     mode=$(stat -c '%a' "${dir}/smtp-credentials.json")
     [[ "$mode" == "600" ]] || test_fail "0600 should survive the backup (got $mode)"
+    test_pass
 }
 
 test_prune_removes_old_entries_keeps_recent() {
+    test_start "Prune removes entries older than the retention only"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -317,9 +338,11 @@ test_prune_removes_old_entries_keeps_recent() {
     [[ ! -d "$root/20200101T000000" ]] || test_fail "35-day-old entry should be pruned"
     [[ -d "$root/20990101T000000" ]] || test_fail "recent entry should be kept"
     [[ -d "$root/not-a-backup" ]] || test_fail "malformed name should be untouched"
+    test_pass
 }
 
 test_retention_env_override() {
+    test_start "Retention override in the environment is honored"
     make_settings
     reset_mocks
     # The retention reader rejects 0 (it would mean "keep nothing"), so the
@@ -340,9 +363,11 @@ test_retention_env_override() {
     [[ ! -d "$root/${old_entry}" ]] || test_fail "1-day retention should prune the 2-day-old entry"
     [[ -d "$root/${future_entry}" ]] || test_fail "future entry should be kept"
     unset SETTINGS_BACKUP_RETENTION_DAYS
+    test_pass
 }
 
 test_list_newest_first_across_pools() {
+    test_start "List prints one row per backup, newest first"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -359,9 +384,11 @@ test_list_newest_first_across_pools() {
         || test_fail "newest row should be first: ${rows[0]}"
     [[ "${rows[1]}" == "20261101T080000|threeamigos|0" ]] \
         || test_fail "older row second: ${rows[1]}"
+    test_pass
 }
 
 test_single_node_uses_all_online_pools() {
+    test_start "Single-node backup covers every online pool"
     make_settings
     reset_mocks
     NODE_MODE="single-node"
@@ -374,9 +401,11 @@ test_single_node_uses_all_online_pools() {
     [[ $rc -eq 0 ]] || test_fail "single-node backup should succeed"
     [[ -n "$(latest_backup_ts scratchpool)" ]] \
         || test_fail "unconfigured pool should receive a single-node backup"
+    test_pass
 }
 
 test_restore_stages_current_and_restores() {
+    test_start "Restore stages the current settings aside and merges profiles"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -407,9 +436,11 @@ test_restore_stages_current_and_restores() {
     [[ -n "$staged" ]] || test_fail "pre-restore staging should capture config.json"
     grep -q '"marker": "changed"' "$staged" \
         || test_fail "staging should hold the pre-restore content"
+    test_pass
 }
 
 test_restore_unknown_timestamp_fails() {
+    test_start "Restore of an unknown timestamp fails and changes nothing"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -421,9 +452,11 @@ test_restore_unknown_timestamp_fails() {
     [[ $rc -ne 0 ]] || test_fail "unknown timestamp should fail the restore"
     grep -q '"marker": "live"' "$_state/config.json" \
         || test_fail "live config must be untouched by a failed restore"
+    test_pass
 }
 
 test_existing_destination_refreshes_files_in_place() {
+    test_start "An existing destination is refreshed in place"
     make_settings
     reset_mocks
     register_online_pool threeamigos
@@ -446,9 +479,193 @@ test_existing_destination_refreshes_files_in_place() {
         || test_fail "existing entry's config.json should be refreshed"
     [[ -f "${dest}/manifest.json" ]] || test_fail "manifest should be refreshed too"
     # No staging leftovers on the pool.
-    [[ -z "$(find "$(pool_backup_root threeamigos)" -maxdepth 1 -name '.staging.*' -print -quit)" ]] \
-        || test_fail "pool staging should not be left behind"
+    local leftover
+    leftover=$(find "$(pool_backup_root threeamigos)" -maxdepth 1 \
+        -name '.staging.*' -print -quit)
+    [[ -z "$leftover" ]] || test_fail "pool staging should not be left behind"
     rm -rf -- "$staging"
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Retention source, argument validation, and housekeeping
+# ------------------------------------------------------------------
+
+test_retention_read_from_config() {
+    test_start "Retention comes from the config and falls back to the default"
+    make_settings
+    reset_mocks
+    # The production path: nothing in the environment, the value comes
+    # from the config's settings_backup section.
+    unset SETTINGS_BACKUP_RETENTION_DAYS
+    printf '{"config_version": 33, "settings_backup": {"retention_days": 1}}\n' \
+        > "$_state/config.json"
+    assert_equals "1" "$(settings_backup_retention_days)"
+    printf '{"config_version": 33, "settings_backup": {"retention_days": 400}}\n' \
+        > "$_state/config.json"
+    assert_equals "400" "$(settings_backup_retention_days)"
+    # Zero would mean keep-nothing, a non-integer is unusable, and an
+    # unreadable config says nothing: each falls back to the default.
+    printf '{"config_version": 33, "settings_backup": {"retention_days": 0}}\n' \
+        > "$_state/config.json"
+    assert_equals "35" "$(settings_backup_retention_days)"
+    printf '{"config_version": 33, "settings_backup": {"retention_days": "n"}}\n' \
+        > "$_state/config.json"
+    assert_equals "35" "$(settings_backup_retention_days)"
+    printf '{"config_version": 33}\n' > "$_state/config.json"
+    assert_equals "35" "$(settings_backup_retention_days)"
+    printf 'not json\n' > "$_state/config.json"
+    assert_equals "35" "$(settings_backup_retention_days)"
+}
+
+test_restore_rejects_malformed_timestamp() {
+    test_start "Restore refuses a malformed timestamp before touching anything"
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    # Neither a word nor a path is a timestamp; both are refused before
+    # anything is staged or overwritten.
+    local bad out rc=0
+    for bad in "not-a-timestamp" "../../etc"; do
+        printf '{"config_version": 33, "marker": "changed"}\n' > "$_state/config.json"
+        restore_ts="$bad"
+        rc=0
+        out=$(main 2>&1) || rc=$?
+        [[ $rc -eq 1 ]] || test_fail "A malformed timestamp should fail with rc 1 (got $rc)"
+        grep -q "FATAL: Invalid timestamp: ${bad}" <<< "$out" \
+            || test_fail "Expected the invalid-timestamp FATAL, got: $out"
+        [[ ! -d "$_state/settings-pre-restore" ]] \
+            || test_fail "A malformed timestamp must not stage the current settings"
+        grep -q '"marker": "changed"' "$_state/config.json" \
+            || test_fail "A malformed timestamp must leave the live config untouched"
+    done
+    test_pass
+}
+
+test_restore_fails_when_backup_holds_no_settings() {
+    test_start "Restore of a backup without settings files fails"
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    # A timestamp directory whose settings files were lost: the restore
+    # must refuse rather than report success over nothing.
+    local ts="20200101T000000"
+    mkdir -p "$(pool_backup_root threeamigos)/${ts}"
+    printf '{"version": 1, "files": []}\n' \
+        > "$(pool_backup_root threeamigos)/${ts}/manifest.json"
+    printf '{"config_version": 33, "marker": "live"}\n' > "$_state/config.json"
+    restore_ts="$ts"
+    local out rc=0
+    out=$(main 2>&1) || rc=$?
+    [[ $rc -eq 1 ]] || test_fail "An empty backup should fail the restore (got rc $rc)"
+    grep -q "FATAL: Nothing was restored from" <<< "$out" \
+        || test_fail "Expected the nothing-restored FATAL, got: $out"
+    grep -q '"marker": "live"' "$_state/config.json" \
+        || test_fail "The live config must be untouched by an empty restore"
+    test_pass
+}
+
+test_profile_with_unusable_name_is_skipped() {
+    test_start "A profile with an unusable name is skipped with a WARN"
+    make_settings
+    reset_mocks
+    # A hand-dropped file whose name carries a space must never travel
+    # into a backup: the manifest and the restore take names verbatim.
+    printf '{"profile_name": "bad"}\n' > "$_state/profiles/bad name.json"
+    register_online_pool threeamigos
+    local out rc=0
+    out=$(main 2>&1) || rc=$?
+    [[ $rc -eq 0 ]] || test_fail "backup should succeed despite the unusable name"
+    grep -q "WARN: Profile bad name.json has an unusable name" <<< "$out" \
+        || test_fail "Expected the unusable-name WARN, got: $out"
+    local dir
+    dir="$(pool_backup_root threeamigos)/$(latest_backup_ts threeamigos)"
+    [[ ! -e "${dir}/profiles/bad name.json" ]] \
+        || test_fail "A profile with an unusable name must not be backed up"
+    [[ -f "${dir}/profiles/root-daily.json" ]] \
+        || test_fail "The well-named profile should still be backed up"
+    if grep -q "bad name" "${dir}/manifest.json"; then
+        test_fail "The manifest must not list the unusable profile name"
+    fi
+    test_pass
+}
+
+test_list_skips_offline_pools() {
+    test_start "List covers online pools only"
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    mkdir -p "$(pool_backup_root threeamigos)/20261101T080000"
+    # A configured pool with a real, populated backups directory that is
+    # simply not imported: only its absence from `zpool list` may keep its
+    # entry out of the listing.
+    local offline_mnt="${_mock_pools_root}/z22tb"
+    mkdir -p "${offline_mnt}/settings-backups/20261102T090000"
+    POOL_TARGET[z22tb]="z22tb"
+    _mock_zfs_dataset["z22tb/zfsutilities"]=1
+    _mock_zfs_mountpoint["z22tb/zfsutilities"]="$offline_mnt"
+    list_only=true
+    local out
+    out=$(main 2>/dev/null) || test_fail "--list should succeed"
+    assert_equals "20261101T080000|threeamigos|0" "$out"
+}
+
+test_list_and_restore_are_mutually_exclusive() {
+    test_start "--list with --restore is refused"
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    mkdir -p "$(pool_backup_root threeamigos)/20261101T080000"
+    list_only=true
+    restore_ts="20261101T080000"
+    local out rc=0
+    out=$(main 2>&1) || rc=$?
+    [[ $rc -eq 1 ]] || test_fail "--list with --restore should fail with rc 1 (got $rc)"
+    grep -q "FATAL: --list and --restore are mutually exclusive" <<< "$out" \
+        || test_fail "Expected the mutual-exclusion FATAL, got: $out"
+    if [[ "$out" == *"20261101T080000|threeamigos"* || "$out" == *"Restoring settings"* ]]; then
+        test_fail "Neither action may run when both are requested"
+    fi
+    test_pass
+}
+
+test_prune_matches_only_whole_timestamp_names() {
+    test_start "Prune treats only whole timestamp names as entries"
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    local root name
+    root=$(pool_backup_root threeamigos)
+    # Only the exact old timestamp is a backup entry. The other names
+    # contain or resemble one and must never be treated as ours.
+    for name in 20200101T000000 x20200101T000000 20200101T000000x 20200101T00000; do
+        mkdir -p "${root}/${name}"
+    done
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    [[ ! -d "${root}/20200101T000000" ]] \
+        || test_fail "The exact old timestamp should be pruned"
+    for name in x20200101T000000 20200101T000000x 20200101T00000; do
+        [[ -d "${root}/${name}" ]] || test_fail "${name} is not a backup entry and must stay"
+    done
+    test_pass
+}
+
+test_run_sweeps_stale_staging_dir() {
+    test_start "A run sweeps a stale staging directory on the pool"
+    make_settings
+    reset_mocks
+    register_online_pool threeamigos
+    local root
+    root=$(pool_backup_root threeamigos)
+    mkdir -p "$root/.staging.XXXXXX"
+    # A crashed earlier run left this directory. The lock guarantees no
+    # other run is active, so the next run on the pool must remove it.
+    local _out
+    _out=$(main 2>/dev/null) || test_fail "backup should succeed"
+    [[ ! -e "$root/.staging.XXXXXX" ]] \
+        || test_fail "A stale staging directory should be swept by the next run"
+    test_pass
 }
 
 # ------------------------------------------------------------------
@@ -464,12 +681,20 @@ test_backup_fails_with_no_online_pool
 test_backup_fails_with_no_settings
 test_optional_files_and_mode_preservation
 test_prune_removes_old_entries_keeps_recent
+test_prune_matches_only_whole_timestamp_names
 test_retention_env_override
+test_retention_read_from_config
 test_list_newest_first_across_pools
+test_list_skips_offline_pools
+test_list_and_restore_are_mutually_exclusive
 test_single_node_uses_all_online_pools
 test_restore_stages_current_and_restores
 test_restore_unknown_timestamp_fails
+test_restore_rejects_malformed_timestamp
+test_restore_fails_when_backup_holds_no_settings
+test_profile_with_unusable_name_is_skipped
 test_existing_destination_refreshes_files_in_place
+test_run_sweeps_stale_staging_dir
 
 [[ -n "$_mock_pools_root" && -d "$_mock_pools_root" ]] && rm -rf "$_mock_pools_root"
 

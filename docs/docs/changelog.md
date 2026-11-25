@@ -1,5 +1,145 @@
 # Changelog
 
+## 0.144.0
+
+*Released 2026-11-24*
+
+### Added
+
+- **Pool-resident settings backups.** The settings live on the OS disk:
+  the main config, the backup profiles, and the administrator files
+  under `/etc/zfsutilities`. An OS-disk loss takes them all while the
+  pools survive. The new `backup-settings` command writes a dated copy
+  of the whole set into `<pool>/zfsutilities/settings-backups/` on every
+  online pool. That dataset family also holds the iSCSI state map.
+  Two-node hosts write to the configured pools; single-node hosts to
+  every online pool. An offline pool is skipped with a note, and a host
+  with no online pool reports `FATAL` — backups are pool-resident.
+
+- **Settings backups keep themselves current.** Each backup carries a
+  `manifest.json`, and file modes survive the round trip, so the mail
+  credentials file stays root-only. A short `flock` keeps backup and
+  restore runs from interleaving. Entries older than the configured
+  retention are pruned on every run (35 days by default).
+
+- **Settings restore.** `backup-settings --list` prints the available
+  backups as `timestamp|pool|file-count`, newest first.
+  `backup-settings --restore <timestamp>` first stages the current
+  settings aside under `settings-pre-restore/`, then copies the chosen
+  backup back to its live locations. Profiles merge: a same-name file
+  is replaced, the others stay. The iSCSI state map is deliberately
+  not part of the set.
+
+- **A nightly settings backup.** The scheduler's cron drop-in carries a
+  daily `backup-settings` line (00:17 by default, off the top of the
+  hour), written at GUI startup and at the start of every scheduled
+  run. The new `settings_backup` config section holds the retention
+  and the nightly time; the GUI has no page for it.
+
+- **GUI Settings menu: Backup Settings... and Restore Settings...** The
+  same backup on demand, and a restore with a picker and a confirmation.
+  After a successful restore the GUI reloads its configuration; restart
+  it to refresh every page.
+
+- **Function-survey full-function legs (test framework).** The survey's
+  default world is `lived-in`. `zfscleanup` and `zfsdailybackup` also
+  run a leg with no overrides. `zfscleanup` really deletes under
+  retention over the aged ladder. `zfsdailybackup` runs the
+  site-adapted daily-backup pair end to end: snapshot, pulls, send,
+  prune. A `world-staged` checkpoint reverts the world after each leg;
+  a failed revert builds the identical world again.
+
+### Fixed
+
+- **Daily backups on two-node sites: the compute host was never
+  resolved.** `zfsdailybackup` and the `rsync-dailybackup` template
+  defined the storage and compute host names only in single-node mode.
+  A two-node run left `compute_host` unset: a stock run degraded to a
+  failed-pull warning, and a strict-mode site copy died "unbound
+  variable". Both resolve the host pair in either node mode now.
+  `zfsdailybackup` loads its node configuration through `node-lib.sh`,
+  so a missing or incomplete configuration stops the run (exit 1) with
+  the install hint.
+
+- **The daily backup's prune step aborted under strict mode.** The
+  shipped `rsync-dailybackup` template turns strict mode on when
+  `zfsdailybackup` sources it. The prune chain then stopped with
+  "unbound variable" before deleting anything. The orchestrator now
+  restores its documented non-strict mode after that source and again
+  before the prune leg. `zfscleanup`, `zfsretain`, `zfsdelsnap`, and
+  `zfsmassdelsnaps` also tolerate a strict caller on their own.
+
+- **Guest address discovery in two-node labs (test framework).** A
+  rediscovery after a guest restart could return the lab's static
+  point-to-point address, which the development host cannot route.
+  Discovery skips that pair and returns the management address.
+
+### Changed
+
+- **The cron drop-in exists on hosts without schedules.** The scheduler
+  creates `/etc/cron.d/zfsutilities` when an active profile exists or
+  the nightly settings backup is on (the default). The file used to
+  appear only with an active profile.
+
+- **Config version 33.** The config gains the `settings_backup`
+  section. An earlier build that reads the newer config warns, keeps an
+  archived copy, and loads it.
+
+- **`state_dataset_mountpoint` lives in `iscsi-lib.sh`.** The helper
+  moved out of `export-iscsi-state`, so the state map export and the
+  settings backup share one resolver.
+
+- **Survey replay conflicts (test framework).** Only a world requested
+  explicitly (`--world` or `ITF_SURVEY_WORLD`) can conflict with an
+  archive. An unset setting takes the archive's world.
+
+### Tests
+
+- New suites for `backup-settings` (shell) and the GUI's settings
+  backup and restore handlers (Python). They cover the retention, the
+  argument checks, the housekeeping step, the nightly cron line, and
+  the config section's seeding and migration.
+
+- Strict-caller regressions across the prune chain (`zfscleanup`,
+  `zfsretain`, `zfsdelsnap`, `zfsmassdelsnaps`), and two-node host-pair
+  resolution tests for `zfsdailybackup` and `rsync-dailybackup`.
+
+- Survey journey suite: the world checkpoint, revert, and rebuild
+  paths, and both full-function legs. The tracked sample archive is
+  regenerated for the default world.
+
+- The docs-integrity suite fails on an untracked, non-ignored entry
+  directly under the repository root.
+
+- The cron output-silencing tests opt their seeded config out of the
+  nightly backup. The `zfsdailybackup` suite points its snapshot-name
+  reservations at the suite's run directory.
+
+### Documentation
+
+- Commands guide: the `backup-settings` page, and `zfsdailybackup`'s
+  flow, return codes, and node-configuration handling.
+
+- GTK GUI guide: the Settings-menu pair, a "Settings backup and
+  restore" section, and the nightly line in the schedule notes.
+
+- Developer guide: the `settings_backup` config object and the settings
+  backups layout; the scheduler's settings line; `node-lib.sh` in the
+  bash modules guide and `state_dataset_mountpoint` under
+  `iscsi-lib.sh`; the host-pair resolution on the two-node config page.
+
+- Messages catalog: the `backup-settings`, Settings-menu, and scheduler
+  rows, and `node-lib.sh`'s fatal lines under `zfsdailybackup`.
+
+- Integrated-testing docs: campaign plans, the finding-to-repair loop
+  as six steps, and the requirements-register seeding process; the
+  survey's full-function legs and world lifecycle.
+
+- Testing guide: the suite catalog lists every suite on disk.
+
+- GLOSSARY gains *campaign*, *finding*, *journey*, *marker*, *repair
+  plan*, *requirements register*, and *settings backup*.
+
 ## 0.143.0
 
 *Released 2026-11-23*

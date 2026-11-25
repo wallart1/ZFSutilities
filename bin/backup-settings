@@ -119,6 +119,20 @@ PRE_RESTORE_DIR="${ZFSUTILITIES_STATE_DIR}/settings-pre-restore"
 # backup and a GUI restore must not interleave their staged writes).
 SETTINGS_BACKUP_LOCK="${ZFSUTILITIES_LOCK_DIR}/.settings_backup.lock"
 
+# Shape of a backup timestamp name, matched with =~ by the prune, the
+# listing, and the --restore argument check. Read left to right:
+#   ^           the name starts with the timestamp — a timestamp-shaped run
+#               inside a longer name (.staging.20261124T120000, a hand-made
+#               directory) never matches
+#   [0-9]{8}    the date: four-digit year, two-digit month, two-digit day
+#   T           the literal separator `date +%Y%m%dT%H%M%S` writes
+#   [0-9]{6}    the time of day, local: two-digit hour, minute, second
+#   $           nothing follows the seconds
+# Both ends anchored, these names also sort chronologically as plain
+# strings — the prune compares them with the deadline and the listing
+# sorts them newest first.
+settings_ts_pattern='^[0-9]{8}T[0-9]{6}$'
+
 # ------------------------------------------------------------------
 # Settings set: the live files and their canonical backup names
 # ------------------------------------------------------------------
@@ -206,7 +220,7 @@ prune_settings_entries() {
     while IFS= read -r entry; do
         [[ -z "$entry" ]] && continue
         name="${entry##*/}"
-        [[ "$name" =~ ^[0-9]{8}T[0-9]{6}$ ]] || continue
+        [[ "$name" =~ $settings_ts_pattern ]] || continue
         if [[ "$name" < "$deadline" ]]; then
             if rm -rf -- "$entry"; then
                 removed=$((removed + 1))
@@ -468,7 +482,7 @@ list_settings_backups() {
         [[ -d "$dir" ]] || continue
         while IFS= read -r ts; do
             [[ -z "$ts" ]] && continue
-            [[ "$ts" =~ ^[0-9]{8}T[0-9]{6}$ ]] || continue
+            [[ "$ts" =~ $settings_ts_pattern ]] || continue
             count=$(find "${dir}/${ts}" -mindepth 1 -type f 2>/dev/null | wc -l)
             rows+=("${ts}|${pool}|${count}")
         done < <(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
@@ -613,7 +627,7 @@ run_ts=$(date +%Y%m%dT%H%M%S)
 # Restore
 # ------------------------------------------------------------------
 if [[ -n "$restore_ts" ]]; then
-    if ! [[ "$restore_ts" =~ ^[0-9]{8}T[0-9]{6}$ ]]; then
+    if ! [[ "$restore_ts" =~ $settings_ts_pattern ]]; then
         log_msg "FATAL: Invalid timestamp: ${restore_ts} (expected YYYYmmddTHHMMSS)"
         exit 1
     fi
@@ -661,10 +675,16 @@ while IFS= read -r pool; do
     [[ -z "$pool" ]] && continue
     if [[ "$(write_backup_to_pool "$pool" "$online" "$staging" "$run_ts")" == "1" ]]; then
         pools_written=$((pools_written + 1))
-        local mnt
-        mnt=$(zfs list -H -o mountpoint "${pool}/zfsutilities" 2>/dev/null || true)
-        [[ -n "$mnt" && -d "$mnt" ]] && sweep_pool_staging "$mnt"
-        prune_settings_entries "${mnt}/${SETTINGS_BACKUP_DIRNAME}" "$retention" >/dev/null
+        # Housekeeping on the pool that took the backup: drop any staging
+        # directory a crashed run left, then apply the retention. Without a
+        # usable mountpoint there is nothing to sweep.
+        local mnt=""
+        mnt=$(_settings_existing_mountpoint "$pool") || mnt=""
+        if [[ -n "$mnt" ]]; then
+            sweep_pool_staging "$mnt"
+            prune_settings_entries "${mnt}/${SETTINGS_BACKUP_DIRNAME}" \
+                "$retention" >/dev/null
+        fi
     fi
 done < <(_settings_backup_target_pools)
 rm -rf -- "$staging"

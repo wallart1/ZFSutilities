@@ -39,14 +39,6 @@ delsnap() {
     _mock_delsnap_autoproceed+=("${autoproceed:-unset}")
     return 0
 }
-EOF
-
-cat > "$mock_mydir/zfsdelsnap" <<'EOF'
-delsnap() {
-    _mock_delsnap_calls+=("$1|$2|$3|$4")
-    _mock_delsnap_autoproceed+=("${autoproceed:-unset}")
-    return 0
-}
 # Mirrors snapshot_age_days from bin/zfsdelsnap; the mock zfs() serves
 # creation epochs via mock_zfs_prop <snap> creation <epoch>.
 snapshot_age_days() {
@@ -279,6 +271,47 @@ test_ignore_releaseholds_passed() {
         test_pass
     else
         test_fail "Expected releaseholds arg, got: ${_mock_delsnap_calls[0]}"
+    fi
+}
+
+test_strict_mode_caller_releases_holds_without_tag_list() {
+    echo "=== Ignore mode: strict caller, releaseholds on, no tag list set ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="dailybackup"
+    ignore_retention_policies="Y"
+    releaseholds="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    # The caller shape a strict site copy presents (the j22 full-function
+    # leg, F-054): releaseholds on, no tag list ever assigned. Earlier
+    # tests leave releaseholds_tags set in this shell, so the subshell
+    # unsets it explicitly. Its arrays die with it, so the verdict goes to
+    # a file.
+    local _result="${mock_mydir}/strict_result.txt"
+    (
+        set -u
+        unset releaseholds_tags
+        mass_delete_snapshots pool1 <<< "Y"
+        echo "rc=$? calls=${_mock_delsnap_calls[*]:-none} tags=${releaseholds_tags[*]:-none}" \
+            > "$_result"
+    ) > "${mock_mydir}/strict_output.txt" 2>&1
+    local _verdict
+    _verdict=$(cat "$_result" 2>/dev/null)
+    test_start "Strict-mode caller: the ignore-retention prune runs to completion"
+    if [[ "$_verdict" == *"rc=0"* ]]; then
+        test_pass
+    else
+        local _msg="Expected rc=0 under a strict caller, got: ${_verdict:-no verdict}"
+        test_fail "$_msg $(cat "${mock_mydir}/strict_output.txt")"
+    fi
+    test_start "Strict-mode caller: the unset tag list still defaults to offsite-*"
+    local _call="pool1/fs@dailybackup-2025-03-28T10:00-04:00-d|0|releaseholds|nocheckagainst"
+    if [[ "$_verdict" == *"tags=offsite-*"* && "$_verdict" == *"$_call"* ]]; then
+        test_pass
+    else
+        test_fail "Expected delsnap called with releaseholds and offsite-* tags, got: $_verdict"
     fi
 }
 
@@ -516,6 +549,7 @@ test_ignore_approval_no_cancels
 test_ignore_approval_y_prefix_cancels
 test_ignore_approval_yes_deletes
 test_ignore_releaseholds_passed
+test_strict_mode_caller_releases_holds_without_tag_list
 test_respect_no_matching_snapshots
 test_respect_dryrun_lists_only
 test_respect_parses_candidates

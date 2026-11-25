@@ -151,10 +151,13 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 
 ### [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup)
 
-Runs from cron or the GUI. Phases are gated by the configuration flags (`pull_*`, `backup_*`, `prune`).
+Runs from cron or the GUI. Phases are gated by the configuration flags (`pull_*`, `backup_*`, `prune`). The node configuration lines come from `lib/node-lib.sh`, which the script sources first.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
+| `FATAL: Missing ...` / `FATAL:   Install via: bin/install-single-node or install-two-node` | The node configuration file is not readable (neither `node.conf` nor the legacy conf files), so the storage and compute hosts cannot be resolved | Script aborts (exit 1); install the node configuration with the named installer |
+| `FATAL: .../node.conf: ... is empty or unset` | A two-node configuration lacks one of `STORAGE_HOST`, `COMPUTE_HOST`, `STORAGE_IP`, or `IQN_PREFIX`; the line names the variable | Script aborts (exit 1); complete the node configuration file |
+| `FATAL: .../node.conf: POOL_TARGET associative array is not declared` | A two-node configuration carries no `POOL_TARGET` map | Script aborts (exit 1); repair the node configuration file |
 | `INFO: New snapshot: ...` | The snapshot name the whole run will use | Informational; a press-enter prompt follows (falls through under cron) |
 | `INFO: Dry-run: Would run pre-backup script` | Dry-run: the pre-backup hook is skipped | Informational |
 | `INFO: Running pre-backup script...` | The configured pre-backup hook is executing | Informational; the result follows |
@@ -3031,7 +3034,7 @@ Schedule tab: profile list with Active toggles, Run Now, cron consistency checks
 
 ### [cron_manager](../commands-and-modules/python-modules.md#cron_managerpy)
 
-Writes the `/etc/cron.d` file from the active profiles and converges the cron/logrotate drop-ins to the current format at GUI startup and at the start of every scheduled run.
+Writes the `/etc/cron.d` file from the active profiles and the daily settings-backup line, and converges the cron/logrotate drop-ins to the current format at GUI startup and at the start of every scheduled run.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
@@ -3039,6 +3042,9 @@ Writes the `/etc/cron.d` file from the active profiles and converges the cron/lo
 | `FATAL: Could not write cron file ...: ...` | OSError writing the cron file | Exception re-raised; the caller shows an error dialog (convergence catches it and continues) |
 | `WARN: Could not read drop-in ...: ...` | A persisted drop-in could not be read during convergence | The drop-in is left untouched; convergence skips it |
 | `WARN: Cron drop-in not converged: ...` / `WARN: Logrotate drop-in not converged: ...` | OSError rewriting a drop-in during convergence | Best-effort skip; the run or GUI startup continues |
+| `WARN: settings_backup schedule is not numeric; using default 00:17` | `daily_hour` or `daily_minute` in the config's `settings_backup` section is not a number | Fix the two keys in the config file; until then the nightly backup runs at 00:17 |
+| `WARN: settings_backup schedule ... out of range; using default 00:17` | The configured time is not a valid hour (0–23) and minute (0–59) | Fix the two keys in the config file; until then the nightly backup runs at 00:17 |
+| `WARN: backup-settings not found; daily settings backup line skipped` | The nightly line could not be built because the `backup-settings` script was not resolved on this host | Reinstall or check the deployment layout; the profile lines are unaffected |
 
 ### [logrotate_manager](../commands-and-modules/python-modules.md#logrotate_managerpy)
 

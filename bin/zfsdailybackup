@@ -27,9 +27,6 @@ fi
 bashinit
 unset _local_bashinit
 
-source_helper rootcheck
-rootcheck
-
 # Node configuration (single-node or two-node): node-lib owns the conf
 # precedence (the FHS conf, then the legacy paths, FATAL with the
 # install hint when absent) and resolves the lowercase storage_host /
@@ -39,7 +36,11 @@ rootcheck
 # run-20261124-004523: the strict-mode site-adapted copy died "unbound
 # variable" at the compute pull banner; stock non-strict runs degraded
 # to a failed-pull WARN).
-source_helper node-lib.sh
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+source_helper rootcheck
+rootcheck
 
 source_helper zfssnapbuild
 source_helper zfs-send-receive

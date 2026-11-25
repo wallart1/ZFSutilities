@@ -976,7 +976,8 @@ _survey_world_restage() {
     read -r gbase gvmid _gip gname <<< "$grec"
     rec="$(_survey_world_record)"
     itf_step_start "world restage" \
-        "deterministic rebuild of the lived-in world (variant=$SURVEY_WORLD seed=$SURVEY_WORLD_SEED)"
+        "deterministic rebuild of the lived-in world" \
+        "(variant=$SURVEY_WORLD seed=$SURVEY_WORLD_SEED)"
     # The guest is STOPPED on every restage path (a failed rollback or a
     # failed post-rollback verify both leave it stopped) — bring it back
     # first; staging talks to it over ssh.
@@ -1019,7 +1020,8 @@ _survey_world_restage() {
     _survey_world_checkpoint \
         || { itf_step fail "world restage" "re-checkpoint after restage failed"; return 1; }
     itf_step pass "world restage" \
-        "world rebuilt from (seed=$SURVEY_WORLD_SEED anchor=$SURVEY_WORLD_ANCHOR) and re-checkpointed"
+        "world rebuilt from (seed=$SURVEY_WORLD_SEED anchor=$SURVEY_WORLD_ANCHOR)" \
+        "and re-checkpointed"
     return 0
 }
 
@@ -1224,9 +1226,10 @@ PYEOF
         return 1
     fi
 
-
     itf_step pass "survey site pair staged" \
-        "site zfsdailybackup + rsync-dailybackup from the staged tree's templates (pulls: local${pull_compute:+, compute /etc over the P2P link}; backup: backup-src → receive tree; prune on)"
+        "site zfsdailybackup + rsync-dailybackup from the staged tree's templates" \
+        "(pulls: local${pull_compute:+, compute /etc over the P2P link};" \
+        "backup: backup-src → receive tree; prune on)"
     return 0
 }
 
@@ -1890,7 +1893,9 @@ survey_recipe_zfsdailybackup() {
         > /dev/null 2>&1 || true
     _survey_guest_run "$ip" "\\n" \
         "$log" \
-        ./bin/zfsdailybackup "pull_rocky='N';pull_tweety='N';pull_stewie='N';backup_threeamigos_proxmox='N';backup_NVME1='N';prune='N';sourcefs='$SURVEY_DS';destfs='${SURVEY_DS2}-recv';send-receive"
+        ./bin/zfsdailybackup "pull_rocky='N';pull_tweety='N';pull_stewie='N';\
+backup_threeamigos_proxmox='N';backup_NVME1='N';prune='N';\
+sourcefs='$SURVEY_DS';destfs='${SURVEY_DS2}-recv';send-receive"
     local rc=$?
     itf_artifact "item-$id" "$log"
     if (( rc == 0 )) && grep -qE "New snapshot|zfs send|completed" "$log"; then
@@ -1961,7 +1966,8 @@ survey_recipe_attach_vm_disk() {
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
     _survey_guest_run "$ip" "$feed" \
         "$log" \
-        ./bin/attach-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" "$SURVEY_VMID" "$SURVEY_VDISK"
+        ./bin/attach-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" \
+            "$SURVEY_VMID" "$SURVEY_VDISK"
     local rc=$?
     itf_artifact "item-$id" "$log"
     _survey_vmdisk_converge "$ip"
@@ -2050,7 +2056,8 @@ survey_recipe_rename_vm_disk() {
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
     _survey_guest_run "$ip" "$feed" \
         "$log" \
-        ./bin/rename-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-10"
+        ./bin/rename-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" \
+            "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-10"
     local rc=$?
     itf_artifact "item-$id" "$log"
     _survey_vmdisk_converge "$ip"
@@ -2233,7 +2240,7 @@ _survey_full_function_zfscleanup() {
     local verdict
     if ! verdict="$(python3 - "$ITF_RUN_DIR/survey-world-plan.json" \
             "$state_log" "$SURVEY_DS" <<'PYEOF'
-import json, re, sys
+import json, sys
 
 plan = json.load(open(sys.argv[1]))
 base = sys.argv[3]
@@ -2459,7 +2466,8 @@ itf_survey_run_full_function() {
         for id in cli-zfscleanup cli-zfsdailybackup; do
             grep -q "^$id" "$SURVEY_ITEMS" || continue
             itf_step skip "full-function $id" \
-                "world=$SURVEY_WORLD carries no aged ladder — run ITF_SURVEY_WORLD=lived-in for the full-function legs"
+                "world=$SURVEY_WORLD carries no aged ladder" \
+                "— run ITF_SURVEY_WORLD=lived-in for the full-function legs"
         done
         return 0
     fi

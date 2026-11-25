@@ -921,6 +921,44 @@ test_releaseholds_tags_default() {
     fi
 }
 
+test_strict_mode_caller_survives_unset_scalars() {
+    echo "=== Strict-mode caller: unset scalars and tag list do not abort retain ==="
+    reset_mocks
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    msg_level="FATAL"
+    # The caller context a strict site copy leaves behind on the prune
+    # leg (the j22 full-function leg, F-054): holds are to be released,
+    # no tag list was ever assigned, and none of retain()'s other knobs
+    # were set either. The same-day pair drives the guarded element reads.
+    local _out rc=0
+    _out=$( (
+        set -u
+        unset autoproceed dryrun skipbusy retain_verb originlabel targetlabel
+        unset releaseholds_tags
+        releaseholds="Y"
+        retain "pool/fs" "dailybackup"
+        echo "STRICT-OK deleted=${_mock_delsnap_calls[*]:-none} tags=${_mock_delsnap_tags[*]:-none}"
+    ) 2>&1 ) || rc=$?
+    test_start "Strict-mode caller: retain runs with its caller scalars never set"
+    if [[ $rc -eq 0 && "$_out" == *"STRICT-OK"* && "$_out" != *"unbound variable"* ]]; then
+        test_pass
+    else
+        test_fail "Expected a clean strict-mode run, got rc=$rc output: $_out"
+    fi
+    test_start "Strict-mode caller: the unset tag list still defaults to offsite-*"
+    if [[ "$_out" == *"deleted=pool/fs@dailybackup-2025-03-30T10:00-04:00-d"* \
+            && "$_out" == *"tags=offsite-*"* ]]; then
+        test_pass
+    else
+        test_fail "Expected the older same-day snapshot removed with offsite-* tags, got: $_out"
+    fi
+}
+
 test_verb_messages_enabled() {
     echo "=== VERB messages enabled ==="
     reset_mocks
@@ -1063,6 +1101,7 @@ main() {
     test_retain_returns_on_missing_policy
     test_retain_returns_on_lock_error
     test_releaseholds_tags_default
+    test_strict_mode_caller_survives_unset_scalars
     test_verb_messages_enabled
     test_verb_messages_disabled
     test_manifest_store_swept_under_lock

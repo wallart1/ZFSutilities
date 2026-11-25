@@ -220,13 +220,14 @@ archive.
   the exact run and reports universe drift honestly; `--rerun` reuses
   the previous run's guests and, absent an env pin, its archived list.
 - **World variants.** The guest state a run surveys is a named, seeded
-  **world variant** (`ITF_SURVEY_WORLD`, default `lived-in` — the aged
-  world that carries the full-function legs; `thin` is the explicit
-  cold-start choice — the scratch playground + pinned config, so every
-  feature's cold-start branch stays reachable; `lived-in` adds the aged, product-named snapshot
-  ladder built by the guest clock walk, with selective offsite holds, a
-  clone-bucket snapshot + clone, and two real `zfsdailybackup` runs at
-  ladder points — planned by `survey/world.py`, budgets enforced
+  **world variant** (`ITF_SURVEY_WORLD`). `thin` is the cold-start world:
+  the scratch playground + pinned config, so every feature's cold-start
+  branch stays reachable. `lived-in` (the default) is the aged world that
+  carries the full-function legs. It adds to the same playground an aged,
+  product-named snapshot ladder built by the guest clock walk, with
+  selective offsite holds, a clone-bucket snapshot + clone, and two real
+  `zfsdailybackup` runs at ladder points — planned by `survey/world.py`,
+  budgets enforced
   in-plan, and verified against the plan before items run — and, after
   the walk, the config rows: per-pool retention policies (plus the
   `<offsite>` and `default` keys), an active send/receive step and an
@@ -262,11 +263,12 @@ archive.
   deletion over the ladder, and the site-adapted daily-backup pair —
   rendered from the staged tree's own templates, a local-pull site
   (the compute host's /etc rides the P2P link in two-node labs) —
-  snapshot, pulls, send, prune with pre-fed confirmations). The full-function legs
-  consume the lived-in world, which is checkpointed (`world-staged`, a
-  stopped-guest qm snapshot taken after staging) and reverted after
-  each leg; a failed revert restages the identical world
-  deterministically. Thin worlds disclose the skip per drawn command. Depth is disclosed per item — `deep` (full flow), `argcheck`
+  snapshot, pulls, send, prune with pre-fed confirmations). The
+  full-function legs consume the lived-in world, which is checkpointed
+  (`world-staged`, a stopped-guest qm snapshot taken after staging) and
+  reverted after each leg; a failed revert restages the identical world
+  deterministically. Thin worlds disclose the skip per drawn command.
+  Depth is disclosed per item — `deep` (full flow), `argcheck`
   (argument-validation / graceful-refusal surface), and the wrap-up
   reports the distribution.
 - **Template profiles.** The driver's `--template` knob selects the

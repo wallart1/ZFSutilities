@@ -111,3 +111,36 @@ the chain. Discovered during the campaign-plan documentation check
 (2026-11-24).
 
 ---
+
+## shellcheck gate: two `hostname` test mocks trip SC2120 (warning level)
+
+The documented gate — `shellcheck -S warning` over `bin`, `lib`, and the
+tests (coding-policies.md, "Linting") — exits 1 on two warnings that
+predate this cycle (lines dated 2026-10-15 and 2026-10-22; neither file
+was changed since v0.143.1):
+
+- `tests/test-installer-flows:103` — `hostname() { if [[ "$1" == "-s" ]] ...`
+- `tests/test-unarchive-vm:385` — same shape
+
+Both mocks branch on `$1`, but their only callers are the product scripts
+the suites source, and ShellCheck cannot follow those sources (SC1090 is
+disabled project-wide), so it reports "references arguments, but none are
+ever passed". Reproduce with the whole documented file list in ONE
+invocation — each file lints clean on its own, and an exported copy of
+the lane base (54cd0c0) shows the same two warnings. Fix: a per-line
+`# shellcheck disable=SC2120` with the reason at each mock (the
+coding-policies suppression form), then confirm the gate exits 0.
+Discovered during the 0.144.0 lane wrap-up (2026-11-24).
+
+---
+
+## `ruff format --check .` fails on `tests/integrated/survey/gui_probe.py`
+
+One hunk, three lines: the `f"committed spin edit on first editable cell "`
+/ `f"({current} -> {after})"` return pair in the edit-spin-cell branch is
+split across two lines where ruff 0.16 joins it into one. The file came
+in with 23770ae (published in 0.143.0) and this cycle did not touch it.
+Fix: `ruff format tests/integrated/survey/gui_probe.py`. Discovered during
+the 0.144.0 lane wrap-up (2026-11-24).
+
+---

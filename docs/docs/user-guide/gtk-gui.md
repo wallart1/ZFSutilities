@@ -112,7 +112,14 @@ one dated copy into `<pool>/zfsutilities/settings-backups/` on every
 online pool. Copies are kept for a configurable number of days (35 by
 default), and older ones are pruned automatically. The same backup also
 runs once a night by itself — the scheduler's cron drop-in carries a
-daily line for it — so the copies stay fresh without you.
+daily line for it — so the copies stay fresh without you. The set includes
+the mail credentials file; its root-only permissions are kept on the pool.
+
+The retention and the nightly time are not set in the GUI. They are the
+`retention_days`, `daily`, `daily_hour`, and `daily_minute` keys of the
+`settings_backup` section in the main config file (see the developer guide's
+[settings_backup object](../developer-guide/data-structures.md#settings_backup-object)).
+The nightly run defaults to 00:17.
 
 **Restore Settings...** lists the available backups (timestamp, pool, and
 file count), asks you to choose one, and warns before overwriting
@@ -1046,7 +1053,9 @@ is committed when you click **Save**.
 Each active profile becomes one line in `/etc/cron.d/zfsutilities`, a
 system drop-in file managed exclusively by the ZFS Utilities GUI. The file
 sets `MAILTO=""` so cron does not send email; the GUI and runner write their
-own session logs.
+own session logs. The file also carries the nightly settings-backup line
+while that is on (the default), so it exists even on a host with no active
+profile.
 
 Scheduled jobs automatically
 track whatever active version is installed.

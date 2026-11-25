@@ -1,7 +1,6 @@
 # Glossary
 
 **Items to be added by Zcode:**
-    marker
 
 
 Plain-language definitions of terms as they are actually used in this
@@ -590,6 +589,34 @@ the Pools page. The scope helper `get_managed_pool_names`
 (`feature_config.py`) intersects the saved registry with the imported
 pool names, preserving registry order. See **registered** and
 **online** for the two halves.
+
+## marker
+
+A small signal whose presence carries a meaning: a fixed line of text,
+a variable, or a tiny file that says "this happened", "wait here", or
+"say this only once". Reports use the word for six different things:
+
+- **Cron launch marker.** Every scheduled line starts the runner with
+  `ZFSUTILITIES_FROM_CRON=Y`. When the runner sees it, it stops writing
+  to the cron log once its own session log exists, so that log holds
+  only failures from before the log was created.
+- **Input-hold markers.** The `ZFSU-INPUT-REQ` and `ZFSU-INPUT-ACK`
+  lines a prompt prints, which the GUI's job runner turns into a
+  question dialog (see [input hold](#input-hold)).
+- **Print-once markers.** A tiny file under `/tmp` that a script drops
+  after logging a note, so a message that would repeat for every
+  snapshot is logged once per run. An exit trap removes the file.
+- **Snapshot-name markers.** The reservation files in the
+  [run dir](#run-dir) (`nextsnap_*`) that record the snapshot name an
+  interrupted run can reuse.
+- **Step markers.** In an integrated test, a fixed line in a guest's
+  install or serial transcript that a [journey](#journey) waits for
+  before its next step, or uses as the exact place to inject a fault.
+- **LUN markers.** A known byte pattern written through an iSCSI LUN
+  and read back later, proving the same data is still being served.
+
+A [hold tag](#hold-tag) is not a marker: it protects a snapshot instead
+of signalling something.
 
 ## message-level gate
 

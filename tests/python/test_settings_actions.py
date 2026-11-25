@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import subprocess as real_subprocess
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -73,6 +74,11 @@ def _handler_surface(raw_replies=()):
     ]
     for p in patches:
         p.start()
+    # The handlers' first except clause names subprocess.TimeoutExpired.
+    # On a bare MagicMock that name is not an exception class, so ANY
+    # error raised by run() would turn into a TypeError at the except
+    # line; bind the real class so each clause sees what production sees.
+    gui.subprocess.TimeoutExpired = real_subprocess.TimeoutExpired
     try:
         yield gui, gtk_mock, gui.subprocess, gui.log_msg
     finally:
@@ -130,23 +136,52 @@ class TestBackupSettingsHandler(unittest.TestCase):
         self.assertIn("FATAL: boom", _logged(log_mock))
 
     def test_run_script_timeout_is_reported(self):
-        import subprocess as real_subprocess
-
-        gui = _gui_module()
-        with (
-            patch.object(gui, "log_msg") as log_mock,
-            patch.object(gui, "find_script", return_value="/backup-settings"),
-            patch.object(gui, "subprocess") as subprocess_mock,
-        ):
-            # The handler's except clause reads TimeoutExpired off the
-            # patched module, so bind the real class there and raise a
-            # real instance (a mock instance would not be raised at all).
-            subprocess_mock.TimeoutExpired = real_subprocess.TimeoutExpired
+        with _handler_surface(["OK"]) as (gui, _gtk, subprocess_mock, log_mock):
             subprocess_mock.run.side_effect = real_subprocess.TimeoutExpired(cmd="x", timeout=1)
             window = _make_window(gui)
             result = window._run_settings_script([])
-            self.assertIsNone(result)
-            self.assertIn("did not finish", _logged(log_mock))
+        self.assertIsNone(result)
+        self.assertIn("did not finish", _logged(log_mock))
+
+    def test_run_script_launch_failure_is_reported(self):
+        with _handler_surface(["OK"]) as (gui, _gtk, subprocess_mock, log_mock):
+            subprocess_mock.run.side_effect = OSError("Permission denied")
+            window = _make_window(gui)
+            result = window._run_settings_script([])
+        self.assertIsNone(result)
+        self.assertIn("Could not run backup-settings", _logged(log_mock))
+        self.assertIn("Permission denied", _logged(log_mock))
+
+    def test_run_script_call_contract(self):
+        # Pinned on purpose: text decoding must tolerate bytes that are
+        # not UTF-8 (zfs names can carry them), output is captured, the
+        # exit code is left to the caller, and a hung run is bounded.
+        with _handler_surface(["OK"]) as (gui, _gtk, subprocess_mock, _log):
+            subprocess_mock.run.return_value = MagicMock(
+                returncode=0, stdout="INFO: ok\n", stderr=""
+            )
+            window = _make_window(gui)
+            window._run_settings_script(["--list"])
+        subprocess_mock.run.assert_called_once_with(
+            ["/backup-settings", "--list"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+            timeout=600,
+        )
+
+    def test_run_script_relays_both_streams_without_blank_lines(self):
+        with _handler_surface(["OK"]) as (gui, _gtk, subprocess_mock, log_mock):
+            subprocess_mock.run.return_value = MagicMock(
+                returncode=0,
+                stdout="\nINFO: from stdout\n\n",
+                stderr="WARN: from stderr\n\n",
+            )
+            window = _make_window(gui)
+            window._run_settings_script([])
+        logged = [c.args[0] for c in log_mock.call_args_list]
+        self.assertEqual(logged, ["INFO: from stdout", "WARN: from stderr"])
 
 
 class TestRestoreSettingsHandler(unittest.TestCase):
@@ -207,3 +242,63 @@ class TestRestoreSettingsHandler(unittest.TestCase):
         self.assertEqual(subprocess_mock.run.call_count, 1)
         window.on_refresh.assert_not_called()
         self.assertIn("Settings restore cancelled", _logged(log_mock))
+
+    def test_restore_picker_index_matches_the_chosen_backup(self):
+        # Lines the listing must never print (a stray word, a listing line
+        # missing a field) are dropped BEFORE the picker is built: a line
+        # skipped only at append time would shift the indexes, and the
+        # restore would run against a different backup than the one shown.
+        stdout = "garbage\n" + self.LIST_STDOUT + "20261120T110000|threeamigos\n"
+        with _handler_surface(["OK", "OK"]) as (gui, gtk_mock, subprocess_mock, _log):
+            subprocess_mock.run.side_effect = [
+                MagicMock(returncode=0, stdout=stdout, stderr=""),
+                MagicMock(returncode=0, stdout="INFO: done\n", stderr=""),
+            ]
+            combo = gtk_mock.ComboBoxText.return_value
+            combo.get_active.return_value = 1  # the SECOND picker entry
+            window = _make_window(gui)
+            window.on_restore_settings(None)
+
+        texts = [c.args[0] for c in combo.append_text.call_args_list]
+        self.assertEqual(len(texts), 2)
+        self.assertIn("20261123T110000", texts[1])
+        # The second picker entry is the second well-formed listing line:
+        # the restore ran against exactly the timestamp that entry shows,
+        # and the confirmation named that backup.
+        cmds = [c.args[0] for c in subprocess_mock.run.call_args_list]
+        self.assertEqual(cmds[1], ["/backup-settings", "--restore", "20261123T110000"])
+        self.assertEqual(
+            gtk_mock.MessageDialog.call_args.kwargs["text"],
+            "Restore settings from 20261123T110000 on NVME1?",
+        )
+
+    def test_restore_list_failure_warns(self):
+        with _handler_surface([]) as (gui, gtk_mock, subprocess_mock, log_mock):
+            subprocess_mock.run.return_value = MagicMock(
+                returncode=1, stdout="", stderr="FATAL: Must run as root\n"
+            )
+            window = _make_window(gui)
+            window.on_restore_settings(None)
+
+        self.assertEqual(subprocess_mock.run.call_count, 1)
+        gtk_mock.ComboBoxText.return_value.append_text.assert_not_called()
+        self.assertIn("Could not list settings backups", _logged(log_mock))
+        # The script's own reason is relayed beside the summary.
+        self.assertIn("FATAL: Must run as root", _logged(log_mock))
+
+    def test_restore_script_failure_reports_without_reload(self):
+        with _handler_surface(["OK", "OK"]) as (gui, _gtk, subprocess_mock, log_mock):
+            subprocess_mock.run.side_effect = [
+                MagicMock(returncode=0, stdout=self.LIST_STDOUT, stderr=""),
+                MagicMock(returncode=1, stdout="", stderr="FATAL: Nothing was restored from /x\n"),
+            ]
+            window = _make_window(gui)
+            window.on_restore_settings(None)
+
+        self.assertIn("Settings restore failed (exit 1)", _logged(log_mock))
+        self.assertIn("Nothing was restored", _logged(log_mock))
+        # A failed restore must not reload or refresh: the in-memory config
+        # stays the one the GUI was built on.
+        self.assertEqual(window.config, {"old": True})
+        window.on_refresh.assert_not_called()
+        self.assertNotIn("Settings restored", _logged(log_mock))

@@ -415,7 +415,8 @@ def test_replay_world_conflict_refused(tmp_path):
     """A thin archive replayed under an explicit other variant: rc 2."""
     archive = tmp_path / "c.json"
     assert (
-        _sampler_run("new", "--seed", "s", "--archive", str(archive), "--world", "thin").returncode == 0
+        _sampler_run("new", "--seed", "s", "--archive", str(archive), "--world", "thin").returncode
+        == 0
     )
     refused = _sampler_run("replay", "--archive", str(archive), "--world", "lived-in")
     assert refused.returncode == 2

@@ -163,6 +163,78 @@ class TestGenerateCronLine(unittest.TestCase):
         self.assertIn(r"[ $(date +\%d) -ge 28 ] [ $(date +\%u) -ne 6 ]", line)
 
 
+class TestBuildSettingsBackupLine(unittest.TestCase):
+    """build_settings_backup_line: the daily backup-settings cron line."""
+
+    SCRIPT = "/opt/zfsutilities/bin/backup-settings"
+
+    def _line(self, settings_backup, cron_log=CRON_LOG):
+        """Build the line for the given section; return it with the logs."""
+        with (
+            patch.object(cron_manager, "find_script", return_value=self.SCRIPT) as finder,
+            capture_logs() as logs,
+        ):
+            line = cron_manager.build_settings_backup_line(
+                {"settings_backup": settings_backup}, cron_log
+            )
+        return line, logs, finder
+
+    def test_default_runs_daily_at_0017(self):
+        line, logs, _finder = self._line({})
+        self.assertEqual(logs, [])
+        self.assertTrue(line.startswith("17 0 * * * root "), line)
+        self.assertIn("mkdir -p /var/log/zfsutilities", line)
+        # The script is addressed by its absolute path: the drop-in's PATH
+        # does not include the deployment's bin directory.
+        self.assertIn(f"{self.SCRIPT} 2>&1", line)
+        self.assertTrue(line.endswith(f"{cron_manager._TIMESTAMP_STAMPER} >> {CRON_LOG}"), line)
+
+    def test_configured_time_is_used(self):
+        line, _logs, _finder = self._line({"daily_hour": 6, "daily_minute": 45})
+        self.assertTrue(line.startswith("45 6 * * * root "), line)
+
+    def test_disabled_returns_none(self):
+        line, logs, finder = self._line({"daily": False})
+        self.assertIsNone(line)
+        self.assertEqual(logs, [])
+        finder.assert_not_called()
+
+    def test_non_numeric_time_falls_back_to_the_default(self):
+        for bad in ({"daily_hour": "six"}, {"daily_minute": None}):
+            with self.subTest(bad=bad):
+                line, logs, _finder = self._line(bad)
+                self.assertTrue(line.startswith("17 0 * * * root "), line)
+                self.assertTrue(any("not numeric" in entry for entry in logs), logs)
+
+    def test_out_of_range_time_falls_back_to_the_default(self):
+        for bad in ({"daily_hour": 24}, {"daily_hour": -1}, {"daily_minute": 60}):
+            with self.subTest(bad=bad):
+                line, logs, _finder = self._line(bad)
+                self.assertTrue(line.startswith("17 0 * * * root "), line)
+                self.assertTrue(any("out of range" in entry for entry in logs), logs)
+
+    def test_missing_script_skips_the_line(self):
+        with patch.object(cron_manager, "find_script", return_value=None):
+            with capture_logs() as logs:
+                line = cron_manager.build_settings_backup_line({}, CRON_LOG)
+        self.assertIsNone(line)
+        self.assertTrue(any("backup-settings not found" in entry for entry in logs), logs)
+
+    def test_percent_in_log_path_is_escaped(self):
+        line, _logs, _finder = self._line({}, cron_log="/var/log/zfs%20utilities/cron.log")
+        # Cron ends the command at the first bare % (crontab(5)); the
+        # stampers own % are escaped too, so the whole command is clean.
+        self.assertIn(r"/var/log/zfs\%20utilities", line)
+        self.assertIsNone(_BARE_PERCENT_RE.search(line.split("root ", 1)[1]), line)
+
+    def test_missing_section_is_seeded_by_the_accessor(self):
+        # A config that predates the section still gets the default line.
+        with patch.object(cron_manager, "find_script", return_value=self.SCRIPT):
+            with capture_logs():
+                line = cron_manager.build_settings_backup_line({}, CRON_LOG)
+        self.assertTrue(line.startswith("17 0 * * * root "), line)
+
+
 class TestCronPercentEscaping(unittest.TestCase):
     """Cron stops a job's command at the first unescaped % (crontab(5)).
 

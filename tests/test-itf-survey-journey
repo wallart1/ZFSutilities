@@ -47,10 +47,13 @@ _source_survey() {
         source "$mydir/tests/integrated/journeys/survey-lib.sh"
         # Stub the report + transport surface the library uses.  The
         # step stub records verb:name:detail — several asserts match on
-        # the detail text.
+        # the detail text.  Like the real itf_step, the detail is EVERY
+        # argument after the name joined by spaces (a long detail is
+        # commonly passed as several quoted arguments); recording only
+        # the first would hide the rest from those asserts.
         _steps=""
         itf_step() {
-            _steps+="$1:$2:$3;"
+            _steps+="$1:$2:${*:3};"
             return 0
         }
         itf_step_start() { :; }
@@ -605,7 +608,9 @@ last=$ep" ;;
     assert_contains "$out" "pass:survey config rows staged"
     assert_contains "$out" "pass:survey site pair staged"
     assert_contains "$out" \
-        "puts=survey-env.sh;survey-config.json;survey-world-ladder.tsv;world-stage.sh;survey-env.sh;survey-config.json;root-backup-survey.json;root-offsite-survey.json;root-retention-survey.json;root-scrub-survey.json;zfsdailybackup;rsync-dailybackup;bashinit;"
+        "puts=survey-env.sh;survey-config.json;survey-world-ladder.tsv;world-stage.sh;\
+survey-env.sh;survey-config.json;root-backup-survey.json;root-offsite-survey.json;\
+root-retention-survey.json;root-scrub-survey.json;zfsdailybackup;rsync-dailybackup;bashinit;"
     test_pass
 }
 
@@ -1505,6 +1510,15 @@ STATE
 test_guest_ip_skips_p2p_pair() {
     test_start "guest IP discovery: the P2P pair never wins the pick"
     local out
+    # qm network-get-interfaces payloads, exactly as the agent prints them:
+    # eth1 carries the site's static P2P address, eth0 the DHCP management
+    # address. Assembled in pieces to stay inside the column limit.
+    local p2p_first p2p_only
+    p2p_first='[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", '
+    p2p_first+='"ip-address": "192.168.101.1"}]}, {"name": "eth0", "ip-addresses": '
+    p2p_first+='[{"ip-address-type": "ipv4", "ip-address": "192.168.1.55"}]}]'
+    p2p_only='[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", '
+    p2p_only+='"ip-address": "192.168.101.1"}]}]'
     # The P2P interface listed FIRST still loses: the management
     # address is the pick whenever the pair is loaded.
     out="$(
@@ -1512,7 +1526,7 @@ test_guest_ip_skips_p2p_pair() {
             # shellcheck disable=SC1090
             source "$mydir/tests/integrated/lib/guest-lib.sh"
             itf_qm() {
-                printf '[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.101.1"}]}, {"name": "eth0", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.1.55"}]}]\n'
+                printf '%s\n' "$p2p_first"
             }
             sleep() { :; }
             ITF_ISCSI_STORAGE_IP=192.168.101.1 ITF_ISCSI_COMPUTE_IP=192.168.101.2 \
@@ -1528,7 +1542,7 @@ test_guest_ip_skips_p2p_pair() {
             # shellcheck disable=SC1090
             source "$mydir/tests/integrated/lib/guest-lib.sh"
             itf_qm() {
-                printf '[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.101.1"}]}]\n'
+                printf '%s\n' "$p2p_only"
             }
             sleep() { :; }
             ITF_ISCSI_STORAGE_IP=192.168.101.1 \
@@ -1543,7 +1557,7 @@ test_guest_ip_skips_p2p_pair() {
             # shellcheck disable=SC1090
             source "$mydir/tests/integrated/lib/guest-lib.sh"
             itf_qm() {
-                printf '[{"name": "eth1", "ip-addresses": [{"ip-address-type": "ipv4", "ip-address": "192.168.101.1"}]}]\n'
+                printf '%s\n' "$p2p_only"
             }
             sleep() { :; }
             itf_guest_ip base.invalid 8003 30
