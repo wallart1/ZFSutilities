@@ -12,5 +12,9 @@ The GUI is still reachable on stewie via the home-directory
 `ZFSutilities GUI` link. The repo does not install or manage
 `.desktop` files, so this is site state, not a repo bug. Discovered
 during the desktop-notification resolution fix (2026-11-17).
+Re-verified unchanged 2026-11-24 (0.144.0 wrap-up): the launcher
+path is still absent and the entry still names it; fixing it needs
+root on stewie (edit the root-owned `.desktop` to
+`Exec=/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui`).
 
 ---

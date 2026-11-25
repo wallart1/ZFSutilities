@@ -195,7 +195,8 @@ PYEOF
             "${digest_args[@]}" 2>/dev/null || true)"
         if [[ "$digest_now" != "$digest_arch" ]]; then
             itf_step fail "survey world digest" \
-                "archived $digest_arch != planner's $digest_now — planner drift; stage a new run instead of replaying this archive"
+                "archived $digest_arch != planner's $digest_now — planner drift; \
+stage a new run instead of replaying this archive"
             return 1
         fi
         itf_step pass "survey world digest" \
@@ -425,7 +426,8 @@ EOF
     cfgver="$(_survey_config_version)" || true
     if [[ ! "$cfgver" =~ ^[0-9]+$ ]]; then
         itf_step fail "survey config version" \
-            "could not pin the tree's CONFIG_VERSION (select must run first; the enum tree needs python/config_migrations.py)"
+            "could not pin the tree's CONFIG_VERSION (select must run first; \
+the enum tree needs python/config_migrations.py)"
         return 1
     fi
     cfg="$ITF_RUN_DIR/survey-config.json"
@@ -477,7 +479,8 @@ PYEOF
     fi
     if [[ -z "$SURVEY_WORLD_SEED" || -z "$SURVEY_WORLD_ANCHOR" ]]; then
         itf_step fail "survey world plan" \
-            "world seed/anchor unknown - select must run first (seed='${SURVEY_WORLD_SEED:-}' anchor='${SURVEY_WORLD_ANCHOR:-}')"
+            "world seed/anchor unknown - select must run first \
+(seed='${SURVEY_WORLD_SEED:-}' anchor='${SURVEY_WORLD_ANCHOR:-}')"
         return 1
     fi
     # busy stages this same ladder (its background operation is runtime
@@ -544,7 +547,8 @@ PYEOF
     # the one unrecoverable staging failure.
     if ! itf_guest_time_restore "${walk_ips[@]}"; then
         itf_step fail "survey clock restore" \
-            "guest clock may be left walked on $(printf '%s ' "${walk_ips[@]}") - manual restore needed"
+            "guest clock may be left walked on $(printf '%s ' "${walk_ips[@]}") \
+- manual restore needed"
         walk_rc=1
     fi
     (( walk_rc )) && return 1
@@ -649,7 +653,8 @@ itf_survey_stage_config_rows() {
     cfgver="$(_survey_config_version)" || true
     if [[ ! "$cfgver" =~ ^[0-9]+$ ]]; then
         itf_step fail "survey config version" \
-            "could not pin the tree's CONFIG_VERSION (select must run first; the enum tree needs python/config_migrations.py)"
+            "could not pin the tree's CONFIG_VERSION (select must run first; \
+the enum tree needs python/config_migrations.py)"
         return 1
     fi
 
@@ -824,7 +829,8 @@ PYEOF
         fi
     done
     itf_step pass "survey config rows staged" \
-        "retention default+2 pools+<offsite>, send/receive+pull steps, offsite step, 4 inactive schedule profiles (schema v$cfgver, $(( SECONDS - start ))s)"
+        "retention default+2 pools+<offsite>, send/receive+pull steps, offsite step, \
+4 inactive schedule profiles (schema v$cfgver, $(( SECONDS - start ))s)"
     return 0
 }
 
@@ -994,7 +1000,10 @@ EOF
     itf_guest_put "$guest_ip" "$ITF_RUN_DIR/survey-env.sh" \
         /root/survey-env.sh > /dev/null 2>&1
 
-    local overrides="pull_rocky='N';pull_tweety='N';pull_stewie='N';backup_threeamigos_proxmox='N';backup_NVME1='N';prune='N';sourcefs='$SURVEY_DS/backup-src';destfs='$busy_dest';transfer_rate_limit='$rate';send-receive"
+    local overrides="pull_rocky='N';pull_tweety='N';pull_stewie='N';"
+    overrides+="backup_threeamigos_proxmox='N';backup_NVME1='N';prune='N';"
+    overrides+="sourcefs='$SURVEY_DS/backup-src';destfs='$busy_dest';"
+    overrides+="transfer_rate_limit='$rate';send-receive"
     local launcher="$ITF_RUN_DIR/survey-busy-start.sh"
     cat > "$launcher" <<EOF
 #!/bin/bash
@@ -1643,7 +1652,8 @@ survey_recipe_zfsdelallsnaps() {
     fi
     if _survey_busy_lock_refusal "$log"; then
         itf_step pass "item $id" \
-            "[bespoke/$profile] zfsdelallsnaps — [busy-refused] lock holder named (see items/$id.log)"
+            "[bespoke/$profile] zfsdelallsnaps — [busy-refused] lock holder \
+named (see items/$id.log)"
         return 0
     fi
     itf_step fail "item $id" "[bespoke/$profile] see items/$id.log"
@@ -1674,7 +1684,8 @@ _survey_vmdisk_ensure_vm() {
     local ip="$1" vmid="$2"
     # shellcheck disable=SC2016  # SURVEY_RID expands on dev
     itf_guest_exec "$ip" \
-        "qm status $vmid >/dev/null 2>&1 || qm create $vmid --name survey-$SURVEY_RID --memory 64 > /root/survey-vmd-vm-$vmid.log 2>&1" \
+        "qm status $vmid >/dev/null 2>&1 || qm create $vmid --name survey-$SURVEY_RID \
+--memory 64 > /root/survey-vmd-vm-$vmid.log 2>&1" \
         > /dev/null 2>&1
 }
 
@@ -1707,7 +1718,8 @@ survey_recipe_attach_vm_disk() {
     [[ "$profile" == "cancel" ]] && feed="\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
     _survey_guest_run "$ip" "$feed" \
-        './bin/attach-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" "$SURVEY_VMID" "$SURVEY_VDISK"' \
+        './bin/attach-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" '\
+'"$SURVEY_VMID" "$SURVEY_VDISK"' \
         "$log"
     local rc=$?
     itf_artifact "item-$id" "$log"
@@ -1796,7 +1808,8 @@ survey_recipe_rename_vm_disk() {
     [[ "$profile" == "cancel" ]] && feed="\\n"
     [[ "$profile" == "invalid" ]] && feed="zzz\\nn\\n"
     _survey_guest_run "$ip" "$feed" \
-        './bin/rename-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-10"' \
+        './bin/rename-vm-disk "$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-$SURVEY_VDISK" '\
+'"$SURVEY_POOL/proxmox/vm-$SURVEY_VMID-disk-10"' \
         "$log"
     local rc=$?
     itf_artifact "item-$id" "$log"

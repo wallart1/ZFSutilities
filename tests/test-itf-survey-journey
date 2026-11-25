@@ -386,9 +386,12 @@ test_wrap_resource_summary() {
     printf 'gui-b-backup-Run Backup\tgui-button\tRun Backup\tbackup\tdecline\n' \
         >> "$run/survey-items.tsv"
     {
-        printf '%s\n' '{"id": "gui-b-backup-Run Backup", "verdict": "pass", "detail": "ok", "duration": 1.5}'
-        printf '%s\n' '{"event": "resources", "phase": "start", "ops_done": 0, "vmrss_kb": 100000, "fds": 20}'
-        printf '%s\n' '{"event": "resources", "phase": "end", "ops_done": 40, "vmrss_kb": 110000, "fds": 17}'
+        printf '%s\n' '{"id": "gui-b-backup-Run Backup", "verdict": "pass", '\
+'"detail": "ok", "duration": 1.5}'
+        printf '%s\n' '{"event": "resources", "phase": "start", "ops_done": 0, '\
+'"vmrss_kb": 100000, "fds": 20}'
+        printf '%s\n' '{"event": "resources", "phase": "end", "ops_done": 40, '\
+'"vmrss_kb": 110000, "fds": 17}'
     } > "$run/survey-gui-results.jsonl"
     local out
     out="$(_source_survey "$root" "$run" '
@@ -413,7 +416,8 @@ test_wrap_resource_summary() {
 
     # Old runs (no resources records) and CLI-only selections: the step
     # reports none recorded and never changes the wrap verdict.
-    printf '%s\n' '{"id": "gui-b-backup-Run Backup", "verdict": "pass", "detail": "ok", "duration": 1.5}' \
+    printf '%s\n' '{"id": "gui-b-backup-Run Backup", "verdict": "pass", '\
+'"detail": "ok", "duration": 1.5}' \
         > "$run/survey-gui-results.jsonl"
     out="$(_source_survey "$root" "$run" '
         itf_guest_exec() {
@@ -712,7 +716,9 @@ last=$ep" ;;
     # pinned config overwrite plus the four schedule profiles.
     assert_contains "$out" "pass:survey config rows staged"
     assert_contains "$out" \
-        "puts=survey-env.sh;survey-config.json;survey-world-ladder.tsv;world-stage.sh;survey-env.sh;survey-config.json;root-backup-survey.json;root-offsite-survey.json;root-retention-survey.json;root-scrub-survey.json;"
+        "puts=survey-env.sh;survey-config.json;survey-world-ladder.tsv;world-stage.sh;\
+survey-env.sh;survey-config.json;root-backup-survey.json;root-offsite-survey.json;\
+root-retention-survey.json;root-scrub-survey.json;"
     test_pass
 }
 
@@ -1048,7 +1054,8 @@ test_config_rows_seeded() {
     assert_contains "$out" "rc=0"
     assert_contains "$out" "pass:survey config rows staged"
     assert_contains "$out" \
-        "puts=survey-config.json;root-backup-survey.json;root-offsite-survey.json;root-retention-survey.json;root-scrub-survey.json;"
+        "puts=survey-config.json;root-backup-survey.json;root-offsite-survey.json;\
+root-retention-survey.json;root-scrub-survey.json;"
     python3 - "$run" "$repo_ver" <<'PYEOF' \
         || { test_fail "config/profile JSON assertions failed"; return; }
 import json
@@ -1242,12 +1249,14 @@ test_table_overrides_invokes() {
         SURVEY_POOL=zfstest1 SURVEY_DS=zfstest1/survey-ov SURVEY_DS2=zfstest2/survey-ov
         CAP=""
         itf_guest_exec_feed() { CAP="$3"; echo "INFO: canned"; return 0; }
-        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert < "'"$run"'/db.row"
+        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert \
+            < "'"$run"'/db.row"
         itf_survey_run_cli_item 10.0.0.1 cli-zfsdailybackup "$_cmd" "$depth" \
             "$invoke" "$profiles" "$rcs" "$feeds" "$assert" accept storage
         echo "cap-db=$CAP"
         CAP=""
-        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert < "'"$run"'/cl.row"
+        IFS=$'"'"'\t'"'"' read -r _id _cmd _lab _node depth invoke profiles rcs feeds assert \
+            < "'"$run"'/cl.row"
         itf_survey_run_cli_item 10.0.0.1 cli-zfscleanup "$_cmd" "$depth" \
             "$invoke" "$profiles" "$rcs" "$feeds" "$assert" accept storage
         echo "cap-cl=$CAP"
@@ -1298,7 +1307,8 @@ test_wrap_depth_distribution() {
         echo "rc=$?"
         echo "steps=$_steps"
         echo "vmd=$VMD"
-        echo "teardown-recv=$(printf "%s" "$TEARDOWN" | grep -cF "zfs destroy -r \"\${SURVEY_DS2}-recv\"")"
+        echo "teardown-recv=$(printf "%s" "$TEARDOWN" | grep -cF "zfs destroy -r \
+\"\${SURVEY_DS2}-recv\"")"
         echo "teardown-state=$(printf "%s" "$TEARDOWN" | grep -c "rm -rf /root/survey-state")"
         echo "residue-vm=$(printf "%s" "$RESIDUE" | grep -c "9101")"
     ')"
